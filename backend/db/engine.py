@@ -1,14 +1,11 @@
-from models import SQLModel
 from sqlmodel import create_engine
 
-sqlite_file_name = "ask.db"
-sqlite_url = f"sqlite:///{sqlite_file_name}"
 
-engine = create_engine(sqlite_url, echo=True)
+class DbEngine:
+    def __init__(self):
+        self.sqlite_file_name = "D:/Projects/HLViewer/HLViewer/backend/db/ask.db"
+        self.sqlite_url = f"sqlite:///{self.sqlite_file_name}"
 
-
-def create_db_and_tables():
-    SQLModel.metadata.create_all(engine)
-
-if __name__ == "__main__":
-    create_db_and_tables()
+    def create_db_engine(self):
+        engine = create_engine(self.sqlite_url, echo=True)
+        return engine
