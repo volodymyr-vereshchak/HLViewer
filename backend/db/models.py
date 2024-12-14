@@ -1,7 +1,7 @@
-from datetime import datetime
+from datetime import datetime, date
 from decimal import Decimal
 
-from sqlmodel import Field, SQLModel, Relationship, UniqueConstraint, create_engine
+from sqlmodel import Field, SQLModel, Relationship, UniqueConstraint
 
 
 class Lumg(SQLModel, table=True):
@@ -36,6 +36,7 @@ class GasVolumeCalc(SQLModel, table=True):
     c_time: int
 
     daily_archives: list["DailyArchive"] = Relationship(back_populates="gas_volume_calc", cascade_delete=True)
+    hourly_archives: list["HourlyArchive"] = Relationship(back_populates="gas_volume_calc", cascade_delete=True)
 
 class DailyArchive(SQLModel, table=True):
     __tablename__ = "daily_archive"
@@ -45,7 +46,22 @@ class DailyArchive(SQLModel, table=True):
     gas_vol_calc_id: int | None = Field(default=None, foreign_key="gas_volume_calc.id", ondelete="CASCADE")
     gas_volume_calc: GasVolumeCalc = Relationship(back_populates="daily_archives")
     line: int
-    period: datetime
+    period: date = Field(index=True)
+    volume: Decimal = Field(max_digits=20, decimal_places=3)
+    w_volume_dp: Decimal = Field(max_digits=20, decimal_places=3)
+    pressure: Decimal = Field(max_digits=10, decimal_places=3)
+    temperature: Decimal = Field(max_digits=10, decimal_places=3)
+    density: Decimal = Field(max_digits=4, decimal_places=3)
+
+class HourlyArchive(SQLModel, table=True):
+    __tablename__ = "hourly_archive"
+    __table_args__ = (UniqueConstraint("gas_vol_calc_id", "line", name="calc_id_line_constraint"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    gas_vol_calc_id: int | None = Field(default=None, foreign_key="gas_volume_calc.id", ondelete="CASCADE")
+    gas_volume_calc: GasVolumeCalc = Relationship(back_populates="hourly_archives")
+    line: int
+    period: datetime = Field(index=True)
     volume: Decimal = Field(max_digits=20, decimal_places=3)
     w_volume_dp: Decimal = Field(max_digits=20, decimal_places=3)
     pressure: Decimal = Field(max_digits=10, decimal_places=3)
