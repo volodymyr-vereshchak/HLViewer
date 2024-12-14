@@ -14,7 +14,12 @@ class Hostlib:
             'DayStruct',
             "month day year volume unknown work_volume_dp pressure temperature density",
         )
+        self.HourStruct = namedtuple(
+            "HourStruct",
+            "month day year hour minutes volume unknown work_volume_dp pressure temperature density"
+        )
         self.day_struct = "=bbbffffff"
+        self.hour_struct = "=bbbbbffffff"
         self.at = at
 
     @staticmethod
@@ -30,7 +35,7 @@ class Hostlib:
         line = int(filename[5:6])
         return {"address": address, "line": line}
 
-    def read_day_archive(self, path: str):
+    def read_daily_archive(self, path: str):
         files = self.find_files_by_mask(path, self.day_mask)
         day_df = pd.DataFrame()
         for file in files:
@@ -49,7 +54,26 @@ class Hostlib:
                     day_df = pd.concat([day_df, day_data])
         return day_df
 
+    def read_hourly_archive(self, path: str):
+        files = self.find_files_by_mask(path, self.hour_mask)
+        hour_df = pd.DataFrame()
+        for file in files:
+            flow_params = self.get_params_from_file_name(file)
+            with open(file, "rb") as hour_file:
+                while True:
+                    data = hour_file.read(calcsize(self.hour_struct))
+                    if not data:
+                        break
+                    hour_data = self.HourStruct(*unpack(self.hour_struct, data))
+                    datetime_period = datetime(hour_data.year + 2000, hour_data.month, hour_data.day, hour_data.hour, hour_data.minutes)
+                    hour_data = pd.DataFrame(hour_data._asdict(), index=[datetime_period])
+                    hour_data['tech'] = flow_params['address']
+                    hour_data['line'] = flow_params['line']
+                    hour_data = hour_data.drop(columns=["month", "day", "year", "hour", "minutes", "unknown"])
+                    hour_df = pd.concat([hour_df, hour_data])
+        return hour_df
+
 
 if __name__ == "__main__":
-    path = "D:/Projects/HLViewer/HLViewer/develop_data/11Листопад/Zaporizgaz_2024_11_29_8/Zaporizgaz/56ZOPZAP4003301T"
-    print(Hostlib().read_day_archive(path))
+    path_dir = "D:/Projects/HLViewer/HLViewer/develop_data/11Листопад/Zaporizgaz_2024_11_29_8/Zaporizgaz/56ZOPZAP4003301T"
+    print(Hostlib().read_hourly_archive(path_dir))
