@@ -1,4 +1,4 @@
-from sqlmodel import create_engine
+from sqlmodel import create_engine, Session
 
 
 class DbEngine:
@@ -7,5 +7,9 @@ class DbEngine:
         self.sqlite_url = f"sqlite:///{self.sqlite_file_name}"
 
     def create_db_engine(self):
-        engine = create_engine(self.sqlite_url, echo=True)
+        connect_args = {"check_same_thread": False}
+        engine = create_engine(self.sqlite_url, connect_args=connect_args)
         return engine
+
+    def get_session(self):
+        return Session(self.create_db_engine())

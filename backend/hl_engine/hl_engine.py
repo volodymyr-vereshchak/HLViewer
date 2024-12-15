@@ -1,21 +1,19 @@
 import os
 import glob
+from decimal import Decimal, ROUND_HALF_UP
+
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, date
 from struct import calcsize, unpack
 from collections import namedtuple
 
-from backend.db.engine import create_db_engine
-from sqlmodel import Session
-
-from backend.db.models import DailyArchive, HourlyArchive
+from backend.db.models import DailyArchiveCreate, HourlyArchiveCreate
+from backend.utils.math_utils import round_decimal
 
 
 class Hostlib:
     def __init__(self, at: int = 0, path: str = "./") -> None:
         self.path = path
-        self.db_engine = create_db_engine()
-        self.session = Session(self.db_engine)
         self.day_mask = "S*R*D.*"
         self.hour_mask = "S*R*R.*"
         self.DayStruct = namedtuple(
@@ -43,9 +41,9 @@ class Hostlib:
         line = int(filename[5:6])
         return {"address": address, "line": line}
 
-    def read_daily_archive(self):
+    def read_daily_archive(self) -> list:
         files = self.find_files_by_mask(self.path, self.day_mask)
-        day_df = pd.DataFrame()
+        daily_archive_list = []
         for file in files:
             flow_params = self.get_params_from_file_name(file)
             with open(file, "rb") as day_file:
@@ -54,20 +52,20 @@ class Hostlib:
                     if not data:
                         break
                     day_data = self.DayStruct(*unpack(self.day_struct, data))
-                    date_period = datetime(day_data.year + 2000, day_data.month, day_data.day).date()
-                    day_data = pd.DataFrame([day_data._asdict()])
-                    day_data["period"] = date_period
-                    day_data["tech"] = flow_params["address"]
-                    day_data["line"] = flow_params["line"]
-                    day_data = day_data.drop(columns=['month', 'day', 'year', 'unknown'])
-                    day_df = pd.concat([day_df, day_data])
-        self.session.bulk_insert_mappings(DailyArchive, day_df.to_dict(orient="records"))
-        self.session.commit()
-        return day_df
+                    date_period = date(day_data.year + 2000, day_data.month, day_data.day)
+                    day_dict = day_data._asdict()
+                    day_dict = round_decimal(day_dict)
+                    day_dict["period"] = date_period
+                    day_dict["tech"] = flow_params["address"]
+                    day_dict["line"] = flow_params["line"]
+                    day_dict["gas_vol_calc_id"] = 1 #TODO fix it with real data
+                    daily_archive = DailyArchiveCreate(**day_dict)
+                    daily_archive_list.append(daily_archive)
+        return daily_archive_list
 
-    def read_hourly_archive(self):
+    def read_hourly_archive(self) -> list:
         files = self.find_files_by_mask(self.path, self.hour_mask)
-        hour_df = pd.DataFrame()
+        hourly_archive_list = []
         for file in files:
             flow_params = self.get_params_from_file_name(file)
             with open(file, "rb") as hour_file:
@@ -77,15 +75,15 @@ class Hostlib:
                         break
                     hour_data = self.HourStruct(*unpack(self.hour_struct, data))
                     datetime_period = datetime(hour_data.year + 2000, hour_data.month, hour_data.day, hour_data.hour, hour_data.minutes)
-                    hour_data = pd.DataFrame(hour_data._asdict())
-                    hour_data["period"] = datetime_period
-                    hour_data['tech'] = flow_params['address']
-                    hour_data['line'] = flow_params['line']
-                    hour_data = hour_data.drop(columns=["month", "day", "year", "hour", "minutes", "unknown"])
-                    hour_df = pd.concat([hour_df, hour_data])
-        self.session.bulk_insert_mappings(HourlyArchive, hour_df.to_dict(orient="records"))
-        self.session.commit()
-        return hour_df
+                    hour_dict = hour_data._asdict()
+                    hour_dict = round_decimal(hour_dict)
+                    hour_dict["period"] = datetime_period
+                    hour_dict['tech'] = flow_params['address']
+                    hour_dict['line'] = flow_params['line']
+                    hour_dict["gas_vol_calc_id"] = 1 #TODO fix it with real data
+                    hourly_archive = HourlyArchiveCreate(**hour_dict)
+                    hourly_archive_list.append(hourly_archive)
+        return hourly_archive_list
 
 
 if __name__ == "__main__":

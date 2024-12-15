@@ -1,7 +1,9 @@
 from datetime import datetime, date
 from decimal import Decimal
 
-from sqlmodel import Field, SQLModel, Relationship, UniqueConstraint
+from pydantic.v1 import validator
+from sqlmodel import SQLModel
+from sqlmodel import Field, Relationship, UniqueConstraint
 
 
 class Lumg(SQLModel, table=True):
@@ -38,32 +40,62 @@ class GasVolumeCalc(SQLModel, table=True):
     daily_archives: list["DailyArchive"] = Relationship(back_populates="gas_volume_calc", cascade_delete=True)
     hourly_archives: list["HourlyArchive"] = Relationship(back_populates="gas_volume_calc", cascade_delete=True)
 
-class DailyArchive(SQLModel, table=True):
-    __tablename__ = "daily_archive"
-    __table_args__ = (UniqueConstraint("gas_vol_calc_id", "line", name="calc_id_line_constraint"), )
-
-    id: int | None = Field(default=None, primary_key=True)
-    gas_vol_calc_id: int | None = Field(default=None, foreign_key="gas_volume_calc.id", ondelete="CASCADE")
-    gas_volume_calc: GasVolumeCalc = Relationship(back_populates="daily_archives")
+class DailyArchiveBase(SQLModel):
     line: int
     period: date = Field(index=True)
     volume: Decimal = Field(max_digits=20, decimal_places=3)
     w_volume_dp: Decimal = Field(max_digits=20, decimal_places=3)
-    pressure: Decimal = Field(max_digits=10, decimal_places=3)
-    temperature: Decimal = Field(max_digits=10, decimal_places=3)
-    density: Decimal = Field(max_digits=4, decimal_places=3)
+    pressure: Decimal = Field(max_digits=20, decimal_places=3)
+    temperature: Decimal = Field(max_digits=20, decimal_places=3)
+    density: Decimal = Field(max_digits=20, decimal_places=3)
 
-class HourlyArchive(SQLModel, table=True):
-    __tablename__ = "hourly_archive"
-    __table_args__ = (UniqueConstraint("gas_vol_calc_id", "line", name="calc_id_line_constraint"),)
+    @validator("density")
+    def validate_density(cls, value: Decimal):
+        if value > 1 or value < 0.5:
+            value = 0
+        return value
 
+DAILY_ARCHIVE_CONSTRAINT = ["gas_vol_calc_id", "line", "period"]
+class DailyArchive(DailyArchiveBase, table=True):
+    __tablename__ = "daily_archive"
+    __table_args__ = (UniqueConstraint(*DAILY_ARCHIVE_CONSTRAINT, name="calc_id_line_period_constraint"),)
     id: int | None = Field(default=None, primary_key=True)
     gas_vol_calc_id: int | None = Field(default=None, foreign_key="gas_volume_calc.id", ondelete="CASCADE")
-    gas_volume_calc: GasVolumeCalc = Relationship(back_populates="hourly_archives")
+    gas_volume_calc: GasVolumeCalc = Relationship(back_populates="daily_archives")
+
+class DailyArchiveList(DailyArchiveBase):
+    id: int
+    gas_vol_calc_id: int
+
+class DailyArchiveCreate(DailyArchiveBase):
+    gas_vol_calc_id: int
+
+class HourlyArchiveBase(SQLModel):
     line: int
     period: datetime = Field(index=True)
     volume: Decimal = Field(max_digits=20, decimal_places=3)
     w_volume_dp: Decimal = Field(max_digits=20, decimal_places=3)
-    pressure: Decimal = Field(max_digits=10, decimal_places=3)
-    temperature: Decimal = Field(max_digits=10, decimal_places=3)
-    density: Decimal = Field(max_digits=4, decimal_places=3)
+    pressure: Decimal = Field(max_digits=20, decimal_places=3)
+    temperature: Decimal = Field(max_digits=20, decimal_places=3)
+    density: Decimal = Field(max_digits=40, decimal_places=3)
+
+    @validator("density")
+    def validate_density(cls, value: Decimal):
+        if value > 1 or value < 0.5:
+            value = 0
+        return value
+
+HOURLY_ARCHIVE_CONSTRAINT = ["gas_vol_calc_id", "line", "period"]
+class HourlyArchive(HourlyArchiveBase, table=True):
+    __tablename__ = "hourly_archive"
+    __table_args__ = (UniqueConstraint(*HOURLY_ARCHIVE_CONSTRAINT, name="calc_id_line_period_constraint"),)
+    id: int | None = Field(default=None, primary_key=True)
+    gas_vol_calc_id: int | None = Field(default=None, foreign_key="gas_volume_calc.id", ondelete="CASCADE")
+    gas_volume_calc: GasVolumeCalc = Relationship(back_populates="hourly_archives")
+
+class HourlyArchiveList(HourlyArchiveBase):
+    id: int
+    gas_vol_calc_id: int
+
+class HourlyArchiveCreate(HourlyArchiveBase):
+    gas_vol_calc_id: int
