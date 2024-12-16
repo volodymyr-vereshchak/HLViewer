@@ -21,7 +21,14 @@ class GasVolumeCalcType(SQLModel, table=True):
     type_name: str = Field(max_length=255)
     gas_volume_calcs: list["GasVolumeCalc"] = Relationship(back_populates="type", cascade_delete=True)
 
-class GasVolumeCalc(SQLModel, table=True):
+class GasVolumeCalcBase(SQLModel):
+    address: int
+    meter: bool
+    name: str = Field(max_length=255)
+    c_time: int
+
+
+class GasVolumeCalc(GasVolumeCalcBase, table=True):
     __tablename__ = "gas_volume_calc"
     __table_args__ = (
         UniqueConstraint("lumg_id", "address", name="lumg_adress_constraint"),
@@ -30,15 +37,11 @@ class GasVolumeCalc(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     lumg_id: int | None = Field(default=None, foreign_key="lumg.id", ondelete="CASCADE")
     lumg: Lumg = Relationship(back_populates="gas_volume_calcs")
-    address: int
-    meter: bool
     type_id: int | None = Field(default=None, foreign_key="gas_vol_calc_type.id")
     type: GasVolumeCalcType = Relationship(back_populates="gas_volume_calcs")
-    name: str = Field(max_length=255)
-    c_time: int
-
     daily_archives: list["DailyArchive"] = Relationship(back_populates="gas_volume_calc", cascade_delete=True)
     hourly_archives: list["HourlyArchive"] = Relationship(back_populates="gas_volume_calc", cascade_delete=True)
+
 
 class DailyArchiveBase(SQLModel):
     line: int
