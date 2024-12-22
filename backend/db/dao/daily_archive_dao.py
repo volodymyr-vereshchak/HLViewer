@@ -6,3 +6,8 @@ class DailyArchiveDao(BasicDao):
     def __init__(self):
         super().__init__()
         self.model = DailyArchive
+
+
+if __name__ == "__main__":
+    archives = DailyArchiveDao().get_all()
+    pass

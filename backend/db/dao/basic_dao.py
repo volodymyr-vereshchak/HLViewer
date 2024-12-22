@@ -1,4 +1,6 @@
 from sqlalchemy.dialects.sqlite import insert
+from sqlmodel import select
+
 from backend.db.engine import DbEngine
 
 
@@ -16,3 +18,15 @@ class BasicDao:
         with self.session as session:
             session.exec(stmt)
             session.commit()
+
+    def get_all(self):
+        with self.session as session:
+            return session.exec(select(self.model)).all()
+
+    def create_item(self, item):
+        db_item = self.model.model_validate(item)
+        with self.session as session:
+            session.add(db_item)
+            session.commit()
+            session.refresh(db_item)
+        return db_item
