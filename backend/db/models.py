@@ -7,7 +7,7 @@ from sqlmodel import Field, Relationship, UniqueConstraint
 
 #################LUMG#################
 class LumgBase(SQLModel):
-    name: str = Field(max_length=255)
+    name: str = Field(max_length=255, unique=True)
 
 
 class Lumg(LumgBase, table=True):
@@ -27,7 +27,7 @@ class LumgCreate(LumgBase):
 #################GasVolumeCalcType#################
 class GasVolumeCalcTypeBase(SQLModel):
     type_id: int
-    type_name: str = Field(max_length=255)
+    type_name: str = Field(max_length=255, unique=True)
 
 
 class GasVolumeCalcType(GasVolumeCalcTypeBase, table=True):
@@ -48,7 +48,7 @@ class GasVolumeCalcTypeCreate(GasVolumeCalcTypeBase):
 class GasVolumeCalcBase(SQLModel):
     address: int
     meter: bool
-    name: str = Field(max_length=255)
+    name: str = Field(max_length=255, unique=True)
     c_time: int
 
 
