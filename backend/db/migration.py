@@ -1,5 +1,12 @@
-from backend.db.models import SQLModel
+from backend.db.models import (
+    Lumg, LumgCreate, LumgList,
+    GasVolumeCalc, GasVolumeCalcCreate, GasVolumeCalcList,
+    GasVolumeCalcType, GasVolumeCalcTypeCreate, GasVolumeCalcTypeList,
+    DailyArchive, DailyArchiveCreate, DailyArchiveList,
+    HourlyArchive, HourlyArchiveCreate, HourlyArchiveList
+)
 from backend.db.engine import DbEngine
+from sqlmodel import SQLModel
 
 
 def create_db_and_tables():

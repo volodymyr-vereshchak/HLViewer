@@ -1,0 +1,29 @@
+from sqlmodel import SQLModel
+from sqlmodel import Field, Relationship
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .gas_volume_calc_model import GasVolumeCalc
+
+class LumgBase(SQLModel):
+    name: str = Field(max_length=255, unique=True)
+
+
+class Lumg(LumgBase, table=True):
+    __tablename__ = "lumg"
+
+    id: int | None = Field(default=None, primary_key=True)
+    gas_volume_calcs: list["GasVolumeCalc"] = Relationship(back_populates="lumg", cascade_delete=True)
+
+
+class LumgList(LumgBase):
+    id: int
+
+
+class LumgCreate(LumgBase):
+    pass
+
+
+class LumgUpdate(LumgBase):
+    name: str | None = None

@@ -23,6 +23,21 @@ class BasicDao:
         with self.session as session:
             return session.exec(select(self.model)).all()
 
+    def get_by_id(self, item_id: int):
+        with self.session as session:
+            return session.get(self.model, item_id)
+
+    def update_by_id(self, item_id: int, item):
+        item_db = self.get_by_id(item_id)
+        if item_db:
+            item_data = item.model_dump(exclude_unset=True)
+            item_db.sqlmodel_update(item_data)
+            with self.session as session:
+                session.add(item_db)
+                session.commit()
+                session.refresh(item_db)
+        return item_db
+
     def create_item(self, item):
         db_item = self.model.model_validate(item)
         with self.session as session:
