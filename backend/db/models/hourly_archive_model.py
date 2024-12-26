@@ -14,7 +14,7 @@ class HourlyArchiveBase(SQLModel):
     w_volume_dp: Decimal = Field(max_digits=20, decimal_places=3)
     pressure: Decimal = Field(max_digits=20, decimal_places=3)
     temperature: Decimal = Field(max_digits=20, decimal_places=3)
-    density: Decimal = Field(max_digits=20, decimal_places=3)
+    density: Decimal = Field(decimal_places=3)
 
     @validator("density")
     def validate_density(cls, value: Decimal):
