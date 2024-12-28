@@ -9,7 +9,7 @@ class RootRouter:
         self.router.add_api_route(
             "/update_data/",
             update_hostlibs,
-            methods=["GET"],
+            methods=["POST"],
             status_code=status.HTTP_200_OK
         )
 
