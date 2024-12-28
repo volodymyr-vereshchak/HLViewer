@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from sqlalchemy.dialects.sqlite import insert
 from sqlmodel import select
 from sqlalchemy.exc import IntegrityError
@@ -26,6 +28,11 @@ class BasicDao:
     def get_all(self):
         with self.session as session:
             return session.exec(select(self.model)).all()
+
+    def get_range(self, from_date: datetime, to_date: datetime):
+        statement = select(self.model).where(self.model.period >= from_date).where(self.model.period <= to_date)
+        with self.session as session:
+            return session.exec(statement).all()
 
     def get_by_id(self, item_id: int):
         with self.session as session:

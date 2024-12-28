@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import APIRouter, status
 
 from backend.db.dao.daily_archive_dao import DailyArchiveDao
@@ -16,8 +18,12 @@ class DailyArchiveRouter:
             status_code=status.HTTP_200_OK
         )
 
-    async def get_day_archive(self):
-        daily_archives = DailyArchiveDao().get_all()
+    async def get_day_archive(self, from_date: datetime=None, to_date: datetime=None):
+        daily_archives_dao = DailyArchiveDao()
+        if from_date and to_date:
+            daily_archives = daily_archives_dao.get_range(from_date, to_date)
+        else:
+            daily_archives = daily_archives_dao.get_all()
         return daily_archives
 
 daily_router = DailyArchiveRouter().router
