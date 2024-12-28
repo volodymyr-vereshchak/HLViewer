@@ -6,10 +6,18 @@ tags_metadata = [
         "name": "lumg",
         "description": "Operations with lumgs.",
     },
+    {
+        "name": "root",
+        "description": "Operations with all archives.",
+    },
+    {
+        "name": "daily",
+        "description": "Operations with all daily archives.",
+    },
 ]
 
 app = FastAPI(openapi_tags=tags_metadata)
 
-app.include_router(day_archive_ep.router)
+app.include_router(day_archive_ep.daily_router)
 app.include_router(lumg_ep.lumg_router)
 app.include_router(root_ep.root_router)
