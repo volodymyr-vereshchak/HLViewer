@@ -1,13 +1,17 @@
 from sqlalchemy.dialects.sqlite import insert
 from sqlmodel import select
+from sqlalchemy.exc import IntegrityError
 
 from backend.db.engine import DbEngine
+from utils.logger import logger_setup
+from backend.db.dao.custom_exceptions import DatabaseIntegrityError
 
 
 class BasicDao:
     def __init__(self):
         self.model = None
         self.session = DbEngine().get_session()
+        self.logger = logger_setup("backend")
 
     def bulk_upsert(self, list_of_instance: list, list_of_constraints: list[str]):
         stmt = insert(self.model).values([instance.model_dump() for instance in list_of_instance])
@@ -40,8 +44,22 @@ class BasicDao:
 
     def create_item(self, item):
         db_item = self.model.model_validate(item)
-        with self.session as session:
-            session.add(db_item)
-            session.commit()
-            session.refresh(db_item)
+        try:
+            with self.session as session:
+                session.add(db_item)
+                session.commit()
+                session.refresh(db_item)
+        except IntegrityError as e:
+            self.logger.exception(e)
+            session.rollback()
+            raise DatabaseIntegrityError("Create item integrity error!")
         return db_item
+
+    def delete_item(self, item_id: int):
+        db_item = self.get_by_id(item_id)
+        if db_item:
+            with self.session as session:
+                session.delete(db_item)
+                session.commit()
+            return True
+        return False

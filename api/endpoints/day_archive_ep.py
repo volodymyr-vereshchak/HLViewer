@@ -10,7 +10,3 @@ router = APIRouter()
 async def get_day_archive():
     daily_archives = DailyArchiveDao().get_all()
     return daily_archives
-
-@router.patch("/day_archive/", status_code=status.HTTP_201_CREATED)
-async def update_day_archive(path: str):
-    update_hostlibs(path)
