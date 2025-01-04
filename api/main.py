@@ -1,5 +1,13 @@
 from fastapi import FastAPI
-from api.endpoints import day_archive_ep, lumg_ep, root_ep, hour_archive_ep
+from api.endpoints import (
+    day_archive_ep,
+    lumg_ep,
+    root_ep,
+    hour_archive_ep,
+    gas_volume_calc_type_ep,
+    gas_volume_calc_ep
+)
+from api.endpoints.gas_volume_calc_ep import gas_volume_calc_router
 
 tags_metadata = [
     {
@@ -26,3 +34,5 @@ app.include_router(day_archive_ep.daily_router)
 app.include_router(hour_archive_ep.hourly_router)
 app.include_router(lumg_ep.lumg_router)
 app.include_router(root_ep.root_router)
+app.include_router(gas_volume_calc_type_ep.gvct_router)
+app.include_router(gas_volume_calc_ep.gas_volume_calc_router)

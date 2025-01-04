@@ -19,3 +19,7 @@ class GasVolumeCalcTypeList(GasVolumeCalcTypeBase):
 
 class GasVolumeCalcTypeCreate(GasVolumeCalcTypeBase):
     pass
+
+class GasVolumeCalcTypeUpdate(GasVolumeCalcTypeBase):
+    type_id: int | None = None
+    type_name: str | None = None

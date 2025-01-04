@@ -37,3 +37,11 @@ class GasVolumeCalcList(GasVolumeCalcBase):
 class GasVolumeCalcCreate(GasVolumeCalcBase):
     lumg_id: int
     type_id: int
+
+class GasVolumeCalcUpdate(GasVolumeCalcBase):
+    lumg_id: int | None = None
+    type_id: int | None = None
+    name: str | None = None
+    c_time: int | None = None
+    address: int | None = None
+    meter: bool | None = None

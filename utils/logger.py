@@ -1,8 +1,9 @@
 import logging
 import os
+from logging.handlers import RotatingFileHandler
 
 
-def logger_setup(log_name: str):
+def logger_setup(log_name: str, max_file_size: int = 100 * 1024 * 1024, backup_count: int = 3):
     filename = f"./logs/{log_name}.log"
     logger = logging.getLogger(log_name)
 
@@ -17,7 +18,7 @@ def logger_setup(log_name: str):
         os.makedirs(os.path.dirname(filename), exist_ok=True)
 
         # File Handler
-        file_handler = logging.FileHandler(filename)
+        file_handler = RotatingFileHandler(filename, maxBytes=max_file_size, backupCount=backup_count)
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
 
