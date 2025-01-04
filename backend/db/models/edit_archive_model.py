@@ -1,0 +1,25 @@
+from sqlmodel import SQLModel, Field, Relationship, UniqueConstraint
+from datetime import datetime
+from decimal import Decimal
+from pydantic.v1 import validator
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .edit_type_model import EditType
+    from .gas_volume_calc_model import GasVolumeCalc
+
+
+class EditArchiveBase(SQLModel):
+    period: datetime = Field(index=True)
+    old_value: int
+    new_value: int
+
+
+class EditArchive(EditArchiveBase, table=True):
+    __tablename__ = "edit_archive"
+    __table_args__ = (UniqueConstraint("edit_id", "period", name="edit_id_period_constraint"),)
+    id: int | None = Field(default=None, primary_key=True)
+    edit_id: int | None = Field(default=None, foreign_key="edit_type.id", ondelete="CASCADE")
+    edit: "EditType" = Relationship(back_populates="edit_archives")
+    gas_vol_calc_id: int | None = Field(default=None, foreign_key="gas_volume_calc.id", ondelete="CASCADE")
+    gas_volume_calc: "GasVolumeCalc" = Relationship(back_populates="edit_archives")

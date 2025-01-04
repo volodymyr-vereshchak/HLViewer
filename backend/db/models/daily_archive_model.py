@@ -29,7 +29,7 @@ class DailyArchive(DailyArchiveBase, table=True):
     __table_args__ = (UniqueConstraint(*DAILY_ARCHIVE_CONSTRAINT, name="calc_id_line_period_constraint"),)
     id: int | None = Field(default=None, primary_key=True)
     gas_vol_calc_id: int | None = Field(default=None, foreign_key="gas_volume_calc.id", ondelete="CASCADE")
-    gas_volume_calc: "GasVolumeCalc" = Relationship(back_populates="daily_archives")
+    gas_volume_calc: "GasVolumeCalc" = Relationship(back_populates="daily_archives", cascade_delete=True)
 
 class DailyArchiveList(DailyArchiveBase):
     id: int

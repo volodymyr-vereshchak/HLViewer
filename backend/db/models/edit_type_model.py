@@ -1,0 +1,36 @@
+from sqlmodel import SQLModel, Field, Relationship, UniqueConstraint
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .gas_volume_calc_type_model import GasVolumeCalcType
+
+
+class EditTypeBase(SQLModel):
+    edit_type_id: int
+    edit_name: str = Field(max_length=255)
+
+EDIT_TYPE_CONSTRAINT = ["edit_type_id", "gas_volume_calc_type_id"]
+
+
+class EditType(EditTypeBase, table=True):
+    __tablename__ = "edit_type"
+    __table_args__ = (UniqueConstraint(*EDIT_TYPE_CONSTRAINT, name="edit_type_id_constraint"),)
+    id: int | None = Field(default=None, primary_key=True)
+    gas_volume_calc_type_id: int | None = Field(default=None, foreign_key="gas_vol_calc_type.id")
+    gas_volume_calc_type: "GasVolumeCalcType" = Relationship(back_populates="edit_types")
+
+
+class EditTypeList(EditTypeBase):
+    id: int
+    edit_type_id: int
+    gas_volume_calc_type_id: int
+
+
+class EditTypeCreate(EditTypeBase):
+    edit_type_id: int
+    gas_volume_calc_type_id: int
+    edit_name: str
+
+
+class EditTypeUpdate(EditTypeBase):
+    edit_name: str | None = None
