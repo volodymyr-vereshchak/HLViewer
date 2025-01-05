@@ -18,6 +18,8 @@ class Hostlib:
         self.path = path
         self.day_mask = "S*R*D.*"
         self.hour_mask = "S*R*R.*"
+        self.edit_mask = "S*R*U.*"
+        self.sys_mask = "S*R*A.*"
         self.DayStruct = namedtuple(
             'DayStruct',
             "month day year volume unknown w_volume_dp pressure temperature density",
@@ -26,8 +28,18 @@ class Hostlib:
             "HourStruct",
             "month day year hour minutes volume unknown w_volume_dp pressure temperature density"
         )
+        self.EditStruct = namedtuple(
+            "EditStruct",
+            "month day year hour minutes seconds type_edit line old_value new_value"
+        )
+        self.SysStruct = namedtuple(
+            "SysStruct",
+            "month day year hour minutes seconds type_sys line volume"
+        )
         self.day_struct = "=bbbffffff"
         self.hour_struct = "=bbbbbffffff"
+        self.edit_struct = "=bbbbbbbbii"
+        self.sys_struct = "=bbbbbbhf"
         self.at = at
 
     @staticmethod
@@ -43,58 +55,105 @@ class Hostlib:
         line = int(filename[5:6])
         return {"address": address, "line": line}
 
-    def read_daily_archive(self) -> list:
-        files = self.find_files_by_mask(self.path, self.day_mask)
-        daily_archive_list = []
+    def read_archive(self, mask, file_struct, struct_tuple, create_class):
+        files = self.find_files_by_mask(self.path, mask)
+        archive_list = []
         for file in files:
             flow_params = self.get_params_from_file_name(file)
-            with open(file, "rb") as day_file:
+            with open(file, "rb") as archive_file:
                 while True:
                     try:
-                        data = day_file.read(calcsize(self.day_struct))
+                        data = archive_file.read(calcsize(file_struct))
                         if not data:
                             break
-                        day_data = self.DayStruct(*unpack(self.day_struct, data))
-                        date_period = date(day_data.year + 2000, day_data.month, day_data.day)
-                        day_dict = day_data._asdict()
-                        day_dict = round_decimal(day_dict)
-                        day_dict["period"] = date_period
-                        day_dict["tech"] = flow_params["address"]
-                        day_dict["line"] = flow_params["line"]
+                        file_data = struct_tuple(*unpack(file_struct, data))
+                        if "seconds" in struct_tuple._fields:
+                            datetime_period = datetime(
+                                file_data.year + 2000,
+                                file_data.month,
+                                file_data.day,
+                                file_data.hour,
+                                file_data.minutes,
+                                file_data.seconds,
+                            )
+                        elif "minutes" in struct_tuple._fields:
+                            datetime_period = datetime(
+                                file_data.year + 2000,
+                                file_data.month,
+                                file_data.day,
+                                file_data.hour,
+                                file_data.minutes,
+                            )
+                        else:
+                            datetime_period = date(file_data.year + 2000, file_data.month, file_data.day)
+                        file_dict = file_data._asdict()
+                        file_dict = round_decimal(file_dict)
+                        file_dict["period"] = datetime_period
+                        file_dict['tech'] = flow_params['address']
+                        file_dict['line'] = flow_params['line']
                         gas_volume_calc_id = GasVolumeCalcDao().get_id_by_address(flow_params['address'])
-                        day_dict["gas_vol_calc_id"] = gas_volume_calc_id
-                        daily_archive = DailyArchiveCreate(**day_dict)
-                        daily_archive_list.append(daily_archive)
+                        file_dict["gas_vol_calc_id"] = gas_volume_calc_id
+                        archive = create_class(**file_dict)
+                        archive_list.append(archive)
                     except DatabaseNoDataError as e:
                         self.logger.debug(e)
                         continue
+        return archive_list
+
+    def read_daily_archive(self) -> list:
+        daily_archive_list = self.read_archive(self.day_mask, self.day_struct, self.DayStruct, DailyArchiveCreate)
+        # files = self.find_files_by_mask(self.path, self.day_mask)
+        # daily_archive_list = []
+        # for file in files:
+        #     flow_params = self.get_params_from_file_name(file)
+        #     with open(file, "rb") as day_file:
+        #         while True:
+        #             try:
+        #                 data = day_file.read(calcsize(self.day_struct))
+        #                 if not data:
+        #                     break
+        #                 day_data = self.DayStruct(*unpack(self.day_struct, data))
+        #                 date_period = date(day_data.year + 2000, day_data.month, day_data.day)
+        #                 day_dict = day_data._asdict()
+        #                 day_dict = round_decimal(day_dict)
+        #                 day_dict["period"] = date_period
+        #                 day_dict["tech"] = flow_params["address"]
+        #                 day_dict["line"] = flow_params["line"]
+        #                 gas_volume_calc_id = GasVolumeCalcDao().get_id_by_address(flow_params['address'])
+        #                 day_dict["gas_vol_calc_id"] = gas_volume_calc_id
+        #                 daily_archive = DailyArchiveCreate(**day_dict)
+        #                 daily_archive_list.append(daily_archive)
+        #             except DatabaseNoDataError as e:
+        #                 self.logger.debug(e)
+        #                 continue
         return daily_archive_list
 
     def read_hourly_archive(self) -> list:
-        files = self.find_files_by_mask(self.path, self.hour_mask)
-        hourly_archive_list = []
-        for file in files:
-            flow_params = self.get_params_from_file_name(file)
-            with open(file, "rb") as hour_file:
-                while True:
-                    try:
-                        data = hour_file.read(calcsize(self.hour_struct))
-                        if not data:
-                            break
-                        hour_data = self.HourStruct(*unpack(self.hour_struct, data))
-                        datetime_period = datetime(hour_data.year + 2000, hour_data.month, hour_data.day, hour_data.hour, hour_data.minutes)
-                        hour_dict = hour_data._asdict()
-                        hour_dict = round_decimal(hour_dict)
-                        hour_dict["period"] = datetime_period
-                        hour_dict['tech'] = flow_params['address']
-                        hour_dict['line'] = flow_params['line']
-                        gas_volume_calc_id = GasVolumeCalcDao().get_id_by_address(flow_params['address'])
-                        hour_dict["gas_vol_calc_id"] = gas_volume_calc_id
-                        hourly_archive = HourlyArchiveCreate(**hour_dict)
-                        hourly_archive_list.append(hourly_archive)
-                    except DatabaseNoDataError as e:
-                        self.logger.debug(e)
-                        continue
+        hourly_archive_list = self.read_archive(self.hour_mask, self.hour_struct, self.HourStruct, HourlyArchiveCreate)
+        # files = self.find_files_by_mask(self.path, self.hour_mask)
+        # hourly_archive_list = []
+        # for file in files:
+        #     flow_params = self.get_params_from_file_name(file)
+        #     with open(file, "rb") as hour_file:
+        #         while True:
+        #             try:
+        #                 data = hour_file.read(calcsize(self.hour_struct))
+        #                 if not data:
+        #                     break
+        #                 hour_data = self.HourStruct(*unpack(self.hour_struct, data))
+        #                 datetime_period = datetime(hour_data.year + 2000, hour_data.month, hour_data.day, hour_data.hour, hour_data.minutes)
+        #                 hour_dict = hour_data._asdict()
+        #                 hour_dict = round_decimal(hour_dict)
+        #                 hour_dict["period"] = datetime_period
+        #                 hour_dict['tech'] = flow_params['address']
+        #                 hour_dict['line'] = flow_params['line']
+        #                 gas_volume_calc_id = GasVolumeCalcDao().get_id_by_address(flow_params['address'])
+        #                 hour_dict["gas_vol_calc_id"] = gas_volume_calc_id
+        #                 hourly_archive = HourlyArchiveCreate(**hour_dict)
+        #                 hourly_archive_list.append(hourly_archive)
+        #             except DatabaseNoDataError as e:
+        #                 self.logger.debug(e)
+        #                 continue
         return hourly_archive_list
 
 

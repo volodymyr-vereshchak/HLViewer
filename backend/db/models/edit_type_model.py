@@ -17,8 +17,8 @@ class EditType(EditTypeBase, table=True):
     __tablename__ = "edit_type"
     __table_args__ = (UniqueConstraint(*EDIT_TYPE_CONSTRAINT, name="edit_type_id_constraint"),)
     id: int | None = Field(default=None, primary_key=True)
-    gas_volume_calc_type_id: int | None = Field(default=None, foreign_key="gas_vol_calc_type.id")
-    gas_volume_calc_type: "GasVolumeCalcType" = Relationship(back_populates="edit_types", cascade_delete=True)
+    gas_volume_calc_type_id: int | None = Field(default=None, foreign_key="gas_vol_calc_type.id", ondelete="CASCADE")
+    gas_volume_calc_type: "GasVolumeCalcType" = Relationship(back_populates="edit_types")
 
     edit_archives: list["EditArchive"] = Relationship(back_populates="edit", cascade_delete=True)
 
