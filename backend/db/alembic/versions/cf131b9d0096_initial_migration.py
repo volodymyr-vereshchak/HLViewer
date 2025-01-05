@@ -1,8 +1,8 @@
 """Initial migration
 
-Revision ID: 41e15a2b268e
+Revision ID: cf131b9d0096
 Revises: 
-Create Date: 2025-01-05 19:58:17.443940
+Create Date: 2025-01-05 20:06:45.882868
 
 """
 from alembic import op
@@ -11,7 +11,7 @@ import sqlmodel             # NEW
 
 
 # revision identifiers, used by Alembic.
-revision = '41e15a2b268e'
+revision = 'cf131b9d0096'
 down_revision = None
 branch_labels = None
 depends_on = None
@@ -53,7 +53,7 @@ def upgrade():
     sa.ForeignKeyConstraint(['lumg_id'], ['lumg.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['type_id'], ['gas_vol_calc_type.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('lumg_id', 'address', name='lumg_adress_constraint'),
+    sa.UniqueConstraint('lumg_id', 'address', 'line', name='lumg_adress_constraint'),
     sa.UniqueConstraint('name')
     )
     op.create_table('sys_type',

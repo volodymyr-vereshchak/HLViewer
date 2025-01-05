@@ -1,7 +1,7 @@
 from sqlmodel import SQLModel, Field, Relationship, UniqueConstraint
 from datetime import date
 from decimal import Decimal
-from pydantic.v1 import validator
+from pydantic import field_validator
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -16,7 +16,7 @@ class DailyArchiveBase(SQLModel):
     temperature: Decimal = Field(decimal_places=3)
     density: Decimal = Field(decimal_places=3)
 
-    @validator("density")
+    @field_validator("density")
     def validate_density(cls, value: Decimal):
         if value > 1 or value < 0.5:
             value = 0
@@ -37,3 +37,17 @@ class DailyArchiveList(DailyArchiveBase):
 
 class DailyArchiveCreate(DailyArchiveBase):
     gas_vol_calc_id: int
+
+
+if __name__ == "__main__":
+    d_a = DailyArchiveCreate(
+        line=1,
+        period=date(2024,1,1),
+        volume=0,
+        w_volume_dp=0,
+        pressure=0,
+        temperature=0,
+        density=2,
+        gas_vol_calc_id=1,
+    )
+    pass
