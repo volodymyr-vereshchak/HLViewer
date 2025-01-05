@@ -10,11 +10,11 @@ if TYPE_CHECKING:
 class DailyArchiveBase(SQLModel):
     line: int
     period: date = Field(index=True)
-    volume: Decimal = Field(max_digits=20, decimal_places=3)
-    w_volume_dp: Decimal = Field(max_digits=20, decimal_places=3)
-    pressure: Decimal = Field(max_digits=20, decimal_places=3)
-    temperature: Decimal = Field(max_digits=20, decimal_places=3)
-    density: Decimal = Field(max_digits=20, decimal_places=3)
+    volume: Decimal = Field(decimal_places=3)
+    w_volume_dp: Decimal = Field(decimal_places=3)
+    pressure: Decimal = Field(decimal_places=3)
+    temperature: Decimal = Field(decimal_places=3)
+    density: Decimal = Field(decimal_places=3)
 
     @validator("density")
     def validate_density(cls, value: Decimal):

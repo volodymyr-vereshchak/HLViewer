@@ -15,15 +15,17 @@ class BasicDao:
         self.session = DbEngine().get_session()
         self.logger = logger_setup("backend")
 
-    def bulk_upsert(self, list_of_instance: list, list_of_constraints: list[str]):
-        stmt = insert(self.model).values([instance.model_dump() for instance in list_of_instance])
-        stmt = stmt.on_conflict_do_update(
-            index_elements=list_of_constraints,
-            set_={col: getattr(stmt.excluded, col) for col in self.model.model_fields if col != "id"}
-        )
-        with self.session as session:
-            session.exec(stmt)
-            session.commit()
+    def bulk_upsert(self, list_of_instance: list, list_of_constraints: list[str], chunk_size: int = 900):
+        chunks = [list_of_instance[i:i + chunk_size] for i in range(0, len(list_of_instance), chunk_size)]
+        with self.session.begin():
+            for chunk in chunks:
+                stmt = insert(self.model).values([instance.model_dump() for instance in chunk])
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=list_of_constraints,
+                    set_={col: getattr(stmt.excluded, col) for col in self.model.model_fields if col != "id"}
+                )
+                self.session.execute(stmt)
+            self.session.commit()
 
     def get_all(self):
         with self.session as session:

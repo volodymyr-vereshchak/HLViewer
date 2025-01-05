@@ -9,8 +9,8 @@ class GasVolumeCalcDao(BasicDao):
         super().__init__()
         self.model = GasVolumeCalc
 
-    def get_id_by_address(self, address: int):
-        statement = select(self.model).where(self.model.address == address)
+    def get_id_by_address_and_line(self, address: int, line: int):
+        statement = select(self.model).where((self.model.address == address) and (self.model.line == line))
         with self.session as session:
             result = session.exec(statement).first()
         if result:

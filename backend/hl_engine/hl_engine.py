@@ -43,8 +43,8 @@ class Hostlib:
 
     @staticmethod
     def find_files_by_mask(path: str, mask: str) -> list[str]:
-        file_path = os.path.join(path, mask)
-        files = glob.glob(file_path)
+        file_path = os.path.join(path, "**", mask)
+        files = glob.glob(file_path, recursive=True)
         return files
 
     @staticmethod
@@ -60,9 +60,9 @@ class Hostlib:
         gas_volume_dao = GasVolumeCalcDao()
         for file in files:
             flow_params = self.get_params_from_file_name(file)
-            gas_volume_calc_id = gas_volume_dao.get_id_by_address(flow_params['address'])
+            gas_volume_calc_id = gas_volume_dao.get_id_by_address_and_line(flow_params['address'], flow_params['line'])
             if not gas_volume_calc_id:
-                self.logger.debug(f"No gas volume calc with this address: {flow_params['address']}! Created new!")
+                self.logger.debug(f"No gas volume calc with this address: {flow_params['address']} line: {flow_params['line']}! Created new!")
                 gvc = GasVolumeCalcCreate(
                     address=flow_params['address'],
                     line=flow_params['line'],
