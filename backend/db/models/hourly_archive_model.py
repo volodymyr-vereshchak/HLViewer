@@ -1,7 +1,7 @@
 from sqlmodel import SQLModel, Field, Relationship, UniqueConstraint
 from datetime import datetime
 from decimal import Decimal
-from pydantic.v1 import validator
+from pydantic import field_validator
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -16,7 +16,7 @@ class HourlyArchiveBase(SQLModel):
     temperature: Decimal = Field(decimal_places=3)
     density: Decimal = Field(decimal_places=3)
 
-    @validator("density")
+    @field_validator("density")
     def validate_density(cls, value: Decimal):
         if value > 1 or value < 0.5:
             value = 0
