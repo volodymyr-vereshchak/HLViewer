@@ -2,3 +2,4 @@
 .idea
 /backend/db/ask.db
 /develop_data/
+/backend/db/alembic/versions/*

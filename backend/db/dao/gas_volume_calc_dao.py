@@ -1,7 +1,6 @@
 from sqlmodel import select
 
 from backend.db.dao.basic_dao import BasicDao
-from backend.db.dao.custom_exceptions import DatabaseNoDataError
 from backend.db.models import GasVolumeCalc
 
 
@@ -16,4 +15,4 @@ class GasVolumeCalcDao(BasicDao):
             result = session.exec(statement).first()
         if result:
             return result.id
-        raise DatabaseNoDataError(f"There is no gas volume calculator with the specified address ({address}) in the database!")
+        return None

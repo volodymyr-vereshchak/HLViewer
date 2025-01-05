@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
 class GasVolumeCalcBase(SQLModel):
     address: int
+    line: int
     meter: bool
     name: str = Field(max_length=255, unique=True)
     c_time: int
@@ -43,8 +44,6 @@ class GasVolumeCalcCreate(GasVolumeCalcBase):
     type_id: int
 
 class GasVolumeCalcUpdate(GasVolumeCalcBase):
-    lumg_id: int | None = None
-    type_id: int | None = None
     name: str | None = None
     c_time: int | None = None
     address: int | None = None

@@ -47,9 +47,9 @@ class GasVolumeCalcRouter:
         gas_volume_calc = GasVolumeCalcDao().get_all()
         return gas_volume_calc
 
-    async def create_gas_volume_calc(self, gvct: GasVolumeCalcCreate):
+    async def create_gas_volume_calc(self, gvc: GasVolumeCalcCreate):
         try:
-            gas_volume_calc = GasVolumeCalcDao().create_item(gvct)
+            gas_volume_calc = GasVolumeCalcDao().create_item(gvc)
         except DatabaseIntegrityError as e:
             raise HTTPException(status_code=409, detail=str(e))
         return gas_volume_calc
