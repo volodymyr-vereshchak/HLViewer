@@ -1,8 +1,8 @@
 """Initial migration
 
-Revision ID: a81fcdaa4f9d
+Revision ID: 41e15a2b268e
 Revises: 
-Create Date: 2025-01-05 18:05:30.043162
+Create Date: 2025-01-05 19:58:17.443940
 
 """
 from alembic import op
@@ -11,7 +11,7 @@ import sqlmodel             # NEW
 
 
 # revision identifiers, used by Alembic.
-revision = 'a81fcdaa4f9d'
+revision = '41e15a2b268e'
 down_revision = None
 branch_labels = None
 depends_on = None
@@ -68,11 +68,11 @@ def upgrade():
     op.create_table('daily_archive',
     sa.Column('line', sa.Integer(), nullable=False),
     sa.Column('period', sa.Date(), nullable=False),
-    sa.Column('volume', sa.Numeric(precision=20, scale=3), nullable=False),
-    sa.Column('w_volume_dp', sa.Numeric(precision=20, scale=3), nullable=False),
-    sa.Column('pressure', sa.Numeric(precision=20, scale=3), nullable=False),
-    sa.Column('temperature', sa.Numeric(precision=20, scale=3), nullable=False),
-    sa.Column('density', sa.Numeric(precision=20, scale=3), nullable=False),
+    sa.Column('volume', sa.Numeric(scale=3), nullable=False),
+    sa.Column('w_volume_dp', sa.Numeric(scale=3), nullable=False),
+    sa.Column('pressure', sa.Numeric(scale=3), nullable=False),
+    sa.Column('temperature', sa.Numeric(scale=3), nullable=False),
+    sa.Column('density', sa.Numeric(scale=3), nullable=False),
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('gas_vol_calc_id', sa.Integer(), nullable=True),
     sa.ForeignKeyConstraint(['gas_vol_calc_id'], ['gas_volume_calc.id'], ondelete='CASCADE'),
@@ -97,10 +97,10 @@ def upgrade():
     op.create_table('hourly_archive',
     sa.Column('line', sa.Integer(), nullable=False),
     sa.Column('period', sa.DateTime(), nullable=False),
-    sa.Column('volume', sa.Numeric(precision=20, scale=3), nullable=False),
-    sa.Column('w_volume_dp', sa.Numeric(precision=20, scale=3), nullable=False),
-    sa.Column('pressure', sa.Numeric(precision=20, scale=3), nullable=False),
-    sa.Column('temperature', sa.Numeric(precision=20, scale=3), nullable=False),
+    sa.Column('volume', sa.Numeric(scale=3), nullable=False),
+    sa.Column('w_volume_dp', sa.Numeric(scale=3), nullable=False),
+    sa.Column('pressure', sa.Numeric(scale=3), nullable=False),
+    sa.Column('temperature', sa.Numeric(scale=3), nullable=False),
     sa.Column('density', sa.Numeric(scale=3), nullable=False),
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('gas_vol_calc_id', sa.Integer(), nullable=True),
