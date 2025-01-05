@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .gas_volume_calc_type_model import GasVolumeCalcType
+    from .edit_archive_model import EditArchive
 
 
 class EditTypeBase(SQLModel):
@@ -17,12 +18,13 @@ class EditType(EditTypeBase, table=True):
     __table_args__ = (UniqueConstraint(*EDIT_TYPE_CONSTRAINT, name="edit_type_id_constraint"),)
     id: int | None = Field(default=None, primary_key=True)
     gas_volume_calc_type_id: int | None = Field(default=None, foreign_key="gas_vol_calc_type.id")
-    gas_volume_calc_type: "GasVolumeCalcType" = Relationship(back_populates="edit_types")
+    gas_volume_calc_type: "GasVolumeCalcType" = Relationship(back_populates="edit_types", cascade_delete=True)
+
+    edit_archives: list["EditArchive"] = Relationship(back_populates="edit", cascade_delete=True)
 
 
 class EditTypeList(EditTypeBase):
     id: int
-    edit_type_id: int
     gas_volume_calc_type_id: int
 
 

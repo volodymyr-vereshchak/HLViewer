@@ -7,6 +7,7 @@ if TYPE_CHECKING:
     from .daily_archive_model import DailyArchive
     from .hourly_archive_model import HourlyArchive
     from .edit_archive_model import EditArchive
+    from .sys_archive_model import SysArchive
 
 class GasVolumeCalcBase(SQLModel):
     address: int
@@ -30,6 +31,7 @@ class GasVolumeCalc(GasVolumeCalcBase, table=True):
     daily_archives: list["DailyArchive"] = Relationship(back_populates="gas_volume_calc", cascade_delete=True)
     hourly_archives: list["HourlyArchive"] = Relationship(back_populates="gas_volume_calc", cascade_delete=True)
     edit_archives: list["EditArchive"] = Relationship(back_populates="gas_volume_calc", cascade_delete=True)
+    sys_archives: list["SysArchive"] = Relationship(back_populates="gas_volume_calc", cascade_delete=True)
 
 class GasVolumeCalcList(GasVolumeCalcBase):
     id: int

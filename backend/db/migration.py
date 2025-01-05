@@ -3,7 +3,11 @@ from backend.db.models import (
     GasVolumeCalc, GasVolumeCalcCreate, GasVolumeCalcList,
     GasVolumeCalcType, GasVolumeCalcTypeCreate, GasVolumeCalcTypeList,
     DailyArchive, DailyArchiveCreate, DailyArchiveList,
-    HourlyArchive, HourlyArchiveCreate, HourlyArchiveList
+    HourlyArchive, HourlyArchiveCreate, HourlyArchiveList,
+    EditType, EditTypeList, EditTypeCreate, EditTypeUpdate,
+    EditArchive, EditArchiveList, EditArchiveCreate,
+    SysType, SysTypeList, SysTypeCreate, SysTypeUpdate,
+    SysArchive, SysArchiveList, SysArchiveCreate
 )
 from backend.db.engine import DbEngine
 from sqlmodel import SQLModel
