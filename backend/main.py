@@ -2,9 +2,12 @@ from backend.db.dao.daily_archive_dao import DailyArchiveDao
 from backend.db.dao.edit_archive_dao import EditArchiveDao
 from backend.db.dao.hourly_archive_dao import HourlyArchiveDao
 from backend.db.dao.sys_archive_dao import SysArchiveDao
-from backend.db.models import DAILY_ARCHIVE_CONSTRAINT, HOURLY_ARCHIVE_CONSTRAINT
-from backend.db.models.edit_archive_model import EDIT_ARCHIVE_CONSTRAINT
-from backend.db.models.sys_archive_model import SYS_ARCHIVE_CONSTRAINT
+from backend.db.models import (
+    DAILY_ARCHIVE_CONSTRAINT,
+    HOURLY_ARCHIVE_CONSTRAINT,
+    EDIT_ARCHIVE_CONSTRAINT,
+    SYS_ARCHIVE_CONSTRAINT,
+)
 from backend.hl_engine.hl_engine import Hostlib
 from utils.files_utils import UnzipUtils
 

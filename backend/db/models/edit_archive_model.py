@@ -19,11 +19,17 @@ EDIT_ARCHIVE_CONSTRAINT = ["period", "edit_id", "gas_vol_calc_id"]
 
 class EditArchive(EditArchiveBase, table=True):
     __tablename__ = "edit_archive"
-    __table_args__ = (UniqueConstraint(*EDIT_ARCHIVE_CONSTRAINT, name="edit_id_period_constraint"),)
+    __table_args__ = (
+        UniqueConstraint(*EDIT_ARCHIVE_CONSTRAINT, name="edit_id_period_constraint"),
+    )
     id: int | None = Field(default=None, primary_key=True)
-    edit_id: int | None = Field(default=None, foreign_key="edit_type.id", ondelete="CASCADE")
+    edit_id: int | None = Field(
+        default=None, foreign_key="edit_type.id", ondelete="CASCADE"
+    )
     edit: "EditType" = Relationship(back_populates="edit_archives")
-    gas_vol_calc_id: int | None = Field(default=None, foreign_key="gas_volume_calc.id", ondelete="CASCADE")
+    gas_vol_calc_id: int | None = Field(
+        default=None, foreign_key="gas_volume_calc.id", ondelete="CASCADE"
+    )
     gas_volume_calc: "GasVolumeCalc" = Relationship(back_populates="edit_archives")
 
 

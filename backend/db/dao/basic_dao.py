@@ -15,14 +15,28 @@ class BasicDao:
         self.session = DbEngine().get_session()
         self.logger = logger_setup("backend")
 
-    def bulk_upsert(self, list_of_instance: list, list_of_constraints: list[str], chunk_size: int = 900):
-        chunks = [list_of_instance[i:i + chunk_size] for i in range(0, len(list_of_instance), chunk_size)]
+    def bulk_upsert(
+        self,
+        list_of_instance: list,
+        list_of_constraints: list[str],
+        chunk_size: int = 900,
+    ):
+        chunks = [
+            list_of_instance[i : i + chunk_size]
+            for i in range(0, len(list_of_instance), chunk_size)
+        ]
         with self.session.begin():
             for chunk in chunks:
-                stmt = insert(self.model).values([instance.model_dump() for instance in chunk])
+                stmt = insert(self.model).values(
+                    [instance.model_dump() for instance in chunk]
+                )
                 stmt = stmt.on_conflict_do_update(
                     index_elements=list_of_constraints,
-                    set_={col: getattr(stmt.excluded, col) for col in self.model.model_fields if col != "id"}
+                    set_={
+                        col: getattr(stmt.excluded, col)
+                        for col in self.model.model_fields
+                        if col != "id"
+                    },
                 )
                 self.session.execute(stmt)
             self.session.commit()
@@ -32,7 +46,11 @@ class BasicDao:
             return session.exec(select(self.model)).all()
 
     def get_range(self, from_date: datetime, to_date: datetime):
-        statement = select(self.model).where(self.model.period >= from_date).where(self.model.period <= to_date)
+        statement = (
+            select(self.model)
+            .where(self.model.period >= from_date)
+            .where(self.model.period <= to_date)
+        )
         with self.session as session:
             return session.exec(statement).all()
 

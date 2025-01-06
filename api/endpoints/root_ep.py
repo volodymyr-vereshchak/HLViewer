@@ -11,7 +11,8 @@ class RootRouter:
             endpoint=update_hostlibs,
             tags=["root"],
             methods=["POST"],
-            status_code=status.HTTP_201_CREATED
+            status_code=status.HTTP_201_CREATED,
         )
+
 
 root_router = RootRouter().router

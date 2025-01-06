@@ -25,7 +25,7 @@ class UnzipUtils:
             for file in files:
                 if file.endswith(".zip"):
                     zip_path = os.path.join(root, file)
-                    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                    with zipfile.ZipFile(zip_path, "r") as zip_ref:
                         zip_ref.extractall(self.temp_path)
 
     def delete_unzip_folder(self):

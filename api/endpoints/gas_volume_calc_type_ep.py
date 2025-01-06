@@ -56,13 +56,18 @@ class GasVolumeCalcTypeRouter:
     async def update_gvct(self, gvct_id: int, gvct: GasVolumeCalcTypeUpdate):
         gvct_db = GasVolumeCalcTypeDao().update_by_id(gvct_id, gvct)
         if not gvct_db:
-            raise HTTPException(status_code=404, detail="Type of gas volume calc not found")
+            raise HTTPException(
+                status_code=404, detail="Type of gas volume calc not found"
+            )
         return gvct_db
 
     async def delete_gvct(self, gvct_id: int):
         delete_gvct = GasVolumeCalcTypeDao().delete_item(gvct_id)
         if not delete_gvct:
-            raise HTTPException(status_code=404, detail="Type of gas volume calc not found")
+            raise HTTPException(
+                status_code=404, detail="Type of gas volume calc not found"
+            )
         return {"ok": True}
+
 
 gvct_router = GasVolumeCalcTypeRouter().router

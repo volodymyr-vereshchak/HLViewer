@@ -20,11 +20,15 @@ SYS_ARCHIVE_CONSTRAINT = ["period", "sys_type_id", "gas_vol_calc_id"]
 
 class SysArchive(SysArchiveBase, table=True):
     __tablename__ = "sys_archive"
-    __table_args__ = (UniqueConstraint(*SYS_ARCHIVE_CONSTRAINT, name="line_period_constraint"),)
+    __table_args__ = (
+        UniqueConstraint(*SYS_ARCHIVE_CONSTRAINT, name="line_period_constraint"),
+    )
     id: int | None = Field(default=None, primary_key=True)
     sys_type_id: int = Field(foreign_key="sys_type.id", ondelete="CASCADE")
     sys_type: "SysType" = Relationship(back_populates="sys_archives")
-    gas_vol_calc_id: int | None = Field(default=None, foreign_key="gas_volume_calc.id", ondelete="CASCADE")
+    gas_vol_calc_id: int | None = Field(
+        default=None, foreign_key="gas_volume_calc.id", ondelete="CASCADE"
+    )
     gas_volume_calc: "GasVolumeCalc" = Relationship(back_populates="sys_archives")
 
 

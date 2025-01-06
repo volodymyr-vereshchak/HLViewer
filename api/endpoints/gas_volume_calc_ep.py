@@ -54,8 +54,12 @@ class GasVolumeCalcRouter:
             raise HTTPException(status_code=409, detail=str(e))
         return gas_volume_calc
 
-    async def update_gas_volume_calc(self, gas_volume_calc_id: int, gas_volume_calc: GasVolumeCalcUpdate):
-        gas_volume_calc_db = GasVolumeCalcDao().update_by_id(gas_volume_calc_id, gas_volume_calc)
+    async def update_gas_volume_calc(
+        self, gas_volume_calc_id: int, gas_volume_calc: GasVolumeCalcUpdate
+    ):
+        gas_volume_calc_db = GasVolumeCalcDao().update_by_id(
+            gas_volume_calc_id, gas_volume_calc
+        )
         if not gas_volume_calc_db:
             raise HTTPException(status_code=404, detail="Gas volume calc not found")
         return gas_volume_calc_db
@@ -65,5 +69,6 @@ class GasVolumeCalcRouter:
         if not delete_gas_volume_calc:
             raise HTTPException(status_code=404, detail="Gas volume calc not found")
         return {"ok": True}
+
 
 gas_volume_calc_router = GasVolumeCalcRouter().router

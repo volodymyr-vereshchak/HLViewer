@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .gas_volume_calc_model import GasVolumeCalc
 
+
 class HourlyArchiveBase(SQLModel):
     line: int
     period: datetime = Field(index=True)
@@ -25,16 +26,25 @@ class HourlyArchiveBase(SQLModel):
 
 HOURLY_ARCHIVE_CONSTRAINT = ["gas_vol_calc_id", "line", "period"]
 
+
 class HourlyArchive(HourlyArchiveBase, table=True):
     __tablename__ = "hourly_archive"
-    __table_args__ = (UniqueConstraint(*HOURLY_ARCHIVE_CONSTRAINT, name="calc_id_line_period_constraint"),)
+    __table_args__ = (
+        UniqueConstraint(
+            *HOURLY_ARCHIVE_CONSTRAINT, name="calc_id_line_period_constraint"
+        ),
+    )
     id: int | None = Field(default=None, primary_key=True)
-    gas_vol_calc_id: int | None = Field(default=None, foreign_key="gas_volume_calc.id", ondelete="CASCADE")
+    gas_vol_calc_id: int | None = Field(
+        default=None, foreign_key="gas_volume_calc.id", ondelete="CASCADE"
+    )
     gas_volume_calc: "GasVolumeCalc" = Relationship(back_populates="hourly_archives")
+
 
 class HourlyArchiveList(HourlyArchiveBase):
     id: int
     gas_vol_calc_id: int
+
 
 class HourlyArchiveCreate(HourlyArchiveBase):
     gas_vol_calc_id: int

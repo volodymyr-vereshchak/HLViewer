@@ -9,6 +9,7 @@ if TYPE_CHECKING:
     from .edit_archive_model import EditArchive
     from .sys_archive_model import SysArchive
 
+
 class GasVolumeCalcBase(SQLModel):
     address: int
     line: int
@@ -16,7 +17,9 @@ class GasVolumeCalcBase(SQLModel):
     name: str = Field(max_length=255, unique=True)
     c_time: int
 
+
 GAS_VOLUME_CALC_CONSTRAINT = ["lumg_id", "address", "line"]
+
 
 class GasVolumeCalc(GasVolumeCalcBase, table=True):
     __tablename__ = "gas_volume_calc"
@@ -27,21 +30,34 @@ class GasVolumeCalc(GasVolumeCalcBase, table=True):
     id: int | None = Field(default=None, primary_key=True)
     lumg_id: int | None = Field(default=None, foreign_key="lumg.id", ondelete="CASCADE")
     lumg: "Lumg" = Relationship(back_populates="gas_volume_calcs")
-    type_id: int | None = Field(default=None, foreign_key="gas_vol_calc_type.id", ondelete="CASCADE")
+    type_id: int | None = Field(
+        default=None, foreign_key="gas_vol_calc_type.id", ondelete="CASCADE"
+    )
     type: "GasVolumeCalcType" = Relationship(back_populates="gas_volume_calcs")
-    daily_archives: list["DailyArchive"] = Relationship(back_populates="gas_volume_calc", cascade_delete=True)
-    hourly_archives: list["HourlyArchive"] = Relationship(back_populates="gas_volume_calc", cascade_delete=True)
-    edit_archives: list["EditArchive"] = Relationship(back_populates="gas_volume_calc", cascade_delete=True)
-    sys_archives: list["SysArchive"] = Relationship(back_populates="gas_volume_calc", cascade_delete=True)
+    daily_archives: list["DailyArchive"] = Relationship(
+        back_populates="gas_volume_calc", cascade_delete=True
+    )
+    hourly_archives: list["HourlyArchive"] = Relationship(
+        back_populates="gas_volume_calc", cascade_delete=True
+    )
+    edit_archives: list["EditArchive"] = Relationship(
+        back_populates="gas_volume_calc", cascade_delete=True
+    )
+    sys_archives: list["SysArchive"] = Relationship(
+        back_populates="gas_volume_calc", cascade_delete=True
+    )
+
 
 class GasVolumeCalcList(GasVolumeCalcBase):
     id: int
     lumg_id: int
     type_id: int
 
+
 class GasVolumeCalcCreate(GasVolumeCalcBase):
     lumg_id: int
     type_id: int
+
 
 class GasVolumeCalcUpdate(GasVolumeCalcBase):
     name: str | None = None

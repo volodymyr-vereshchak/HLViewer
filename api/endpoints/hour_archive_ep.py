@@ -16,15 +16,18 @@ class HourlyArchiveRouter:
             response_model=list[HourlyArchiveList],
             tags=["hourly"],
             methods=["GET"],
-            status_code=status.HTTP_200_OK
+            status_code=status.HTTP_200_OK,
         )
 
-    async def get_hour_archive(self, from_date: datetime=None, to_date: datetime=None):
+    async def get_hour_archive(
+        self, from_date: datetime = None, to_date: datetime = None
+    ):
         hourly_archives_dao = HourlyArchiveDao()
         if from_date and to_date:
             hourly_archives = hourly_archives_dao.get_range(from_date, to_date)
         else:
             hourly_archives = hourly_archives_dao.get_all()
         return hourly_archives
+
 
 hourly_router = HourlyArchiveRouter().router

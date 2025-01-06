@@ -65,4 +65,5 @@ class LumgRouter:
             raise HTTPException(status_code=404, detail="Lumg not found")
         return {"ok": True}
 
+
 lumg_router = LumgRouter().router
