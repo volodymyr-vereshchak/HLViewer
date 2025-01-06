@@ -19,8 +19,9 @@ class DailyArchiveBase(SQLModel):
     @field_validator("density")
     def validate_density(cls, value: Decimal):
         if value > 1 or value < 0.5:
-            value = 0
+            value = Decimal(0)
         return value
+
 
 DAILY_ARCHIVE_CONSTRAINT = ["gas_vol_calc_id", "line", "period"]
 

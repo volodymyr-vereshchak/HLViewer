@@ -13,5 +13,5 @@ def update_hostlibs(path: str):
     HourlyArchiveDao().bulk_upsert(hourly_archives_list, HOURLY_ARCHIVE_CONSTRAINT)
 
 if __name__ == "__main__":
-    path_dir = "D:/Projects/HLViewer/HLViewer/develop_data/11Листопад/Zaporizgaz_2024_11_29_8/Zaporizgaz/"
+    path_dir = "D:/Projects/HLViewer/HLViewer/develop_data/11Листопад/"
     update_hostlibs(path_dir)

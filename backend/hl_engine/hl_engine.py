@@ -1,5 +1,7 @@
 import os
 import glob
+import shutil
+import zipfile
 
 from datetime import datetime, date
 from struct import calcsize, unpack
@@ -41,11 +43,39 @@ class Hostlib:
         self.sys_struct = "=bbbbbbhf"
         self.at = at
 
-    @staticmethod
-    def find_files_by_mask(path: str, mask: str) -> list[str]:
-        file_path = os.path.join(path, "**", mask)
-        files = glob.glob(file_path, recursive=True)
-        return files
+    def find_files_by_mask(self, path: str, mask: str) -> list[str]:
+        """
+        Finds all files matching the given mask in a directory, including in ZIP files.
+
+        Args:
+            path (str): The root directory to search.
+            mask (str): The file mask to search for (e.g., "*.txt").
+
+        Returns:
+            List[str]: A list of paths to the matching files.
+        """
+        self.temp_dir = os.path.join(path, "__temp_unpacked__")
+        os.makedirs(self.temp_dir, exist_ok=True)
+
+        # Step 1: Unpack all ZIP files in the directory
+        for root, _, files in os.walk(path):
+            for file in files:
+                if file.endswith(".zip"):
+                    zip_path = os.path.join(root, file)
+                    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                        zip_ref.extractall(self.temp_dir)
+
+        # Step 2: Search for files matching the mask
+        file_path = os.path.join(self.temp_dir, "**", mask)
+        unpacked_files = glob.glob(file_path, recursive=True)
+
+        # Combine results from unpacked and original files
+        all_files = unpacked_files
+        return all_files
+
+    def delete_temp_files(self):
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
 
     @staticmethod
     def get_params_from_file_name(path_to_file: str) -> dict:
@@ -107,6 +137,7 @@ class Hostlib:
                     file_dict["gas_vol_calc_id"] = gas_volume_calc_id
                     archive = create_class(**file_dict)
                     archive_list.append(archive)
+        self.delete_temp_files()
         return archive_list
 
     def read_daily_archive(self) -> list:
