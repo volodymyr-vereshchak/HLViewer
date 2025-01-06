@@ -8,7 +8,8 @@ from struct import calcsize, unpack
 from collections import namedtuple
 
 from backend.db.dao.gas_volume_calc_dao import GasVolumeCalcDao
-from backend.db.models import DailyArchiveCreate, HourlyArchiveCreate, GasVolumeCalcCreate
+from backend.db.models import DailyArchiveCreate, HourlyArchiveCreate, GasVolumeCalcCreate, EditArchiveCreate, \
+    SysArchiveCreate
 from utils.files_utils import find_files_by_mask
 from utils.logger import logger_setup
 from utils.math_utils import round_decimal
@@ -32,16 +33,16 @@ class Hostlib:
         )
         self.EditStruct = namedtuple(
             "EditStruct",
-            "month day year hour minutes seconds type_edit line old_value new_value"
+            "month day year hour minutes seconds edit_id line old_value new_value"
         )
         self.SysStruct = namedtuple(
             "SysStruct",
-            "month day year hour minutes seconds type_sys line volume"
+            "month day year hour minutes seconds sys_type_id line standard_volume"
         )
         self.day_struct = "=bbbffffff"
         self.hour_struct = "=bbbbbffffff"
         self.edit_struct = "=bbbbbbbbii"
-        self.sys_struct = "=bbbbbbhf"
+        self.sys_struct = "=bbbbbbhbf"
         self.at = at
 
     @staticmethod
@@ -113,6 +114,14 @@ class Hostlib:
     def read_hourly_archive(self) -> list:
         hourly_archive_list = self.read_archive(self.hour_mask, self.hour_struct, self.HourStruct, HourlyArchiveCreate)
         return hourly_archive_list
+
+    def read_edit_archive(self) -> list:
+        edit_archive_list = self.read_archive(self.edit_mask, self.edit_struct, self.EditStruct, EditArchiveCreate)
+        return edit_archive_list
+
+    def read_sys_archive(self) -> list:
+        sys_archive_list = self.read_archive(self.sys_mask, self.sys_struct, self.SysStruct, SysArchiveCreate)
+        return sys_archive_list
 
 
 if __name__ == "__main__":
