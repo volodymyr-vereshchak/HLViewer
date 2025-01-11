@@ -29,5 +29,5 @@ def update_hostlibs(path: str):
 
 
 if __name__ == "__main__":
-    path_dir = "D:/Projects/HLViewer/HLViewer/develop_data/11Листопад/"
+    path_dir = "D:/Projects/HLViewer/HLViewer/develop_data/ASK/hostlib"
     update_hostlibs(path_dir)

@@ -8,7 +8,7 @@ if TYPE_CHECKING:
 
 class SysTypeBase(SQLModel):
     sys_type_id: int
-    sys_name: str = Field(max_length=255)
+    sys_name: str
 
 
 SYS_TYPE_CONSTRAINT = ["sys_type_id", "gas_volume_calc_type_id"]

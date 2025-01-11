@@ -1,4 +1,4 @@
-from sqlmodel import SQLModel, Field, Relationship
+from sqlmodel import SQLModel, Field, Relationship, UniqueConstraint
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -10,6 +10,9 @@ if TYPE_CHECKING:
 class GasVolumeCalcTypeBase(SQLModel):
     type_id: int
     type_name: str = Field(max_length=255, unique=True)
+
+
+GAS_VOLUME_CALC_TYPE_CONSTRAINT = ["type_name"]
 
 
 class GasVolumeCalcType(GasVolumeCalcTypeBase, table=True):
