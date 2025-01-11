@@ -84,39 +84,42 @@ class Hostlib:
                 gas_volume_calc_id = gas_volume_calc.id
             with open(file, "rb") as archive_file:
                 while True:
-                    data = archive_file.read(calcsize(file_struct))
-                    if not data:
-                        break
-                    file_data = struct_tuple(*unpack(file_struct, data))
-                    if "seconds" in struct_tuple._fields:
-                        datetime_period = datetime(
-                            file_data.year + 2000,
-                            file_data.month,
-                            file_data.day,
-                            file_data.hour,
-                            file_data.minutes,
-                            file_data.seconds,
-                        )
-                    elif "minutes" in struct_tuple._fields:
-                        datetime_period = datetime(
-                            file_data.year + 2000,
-                            file_data.month,
-                            file_data.day,
-                            file_data.hour,
-                            file_data.minutes,
-                        )
-                    else:
-                        datetime_period = date(
-                            file_data.year + 2000, file_data.month, file_data.day
-                        )
-                    file_dict = file_data._asdict()
-                    file_dict = round_decimal(file_dict)
-                    file_dict["period"] = datetime_period
-                    file_dict["tech"] = flow_params["address"]
-                    file_dict["line"] = flow_params["line"]
-                    file_dict["gas_vol_calc_id"] = gas_volume_calc_id
-                    archive = create_class(**file_dict)
-                    archive_list.append(archive)
+                    try:
+                        data = archive_file.read(calcsize(file_struct))
+                        if not data:
+                            break
+                        file_data = struct_tuple(*unpack(file_struct, data))
+                        if "seconds" in struct_tuple._fields:
+                            datetime_period = datetime(
+                                file_data.year + 2000,
+                                file_data.month,
+                                file_data.day,
+                                file_data.hour,
+                                file_data.minutes,
+                                file_data.seconds,
+                            )
+                        elif "minutes" in struct_tuple._fields:
+                            datetime_period = datetime(
+                                file_data.year + 2000,
+                                file_data.month,
+                                file_data.day,
+                                file_data.hour,
+                                file_data.minutes,
+                            )
+                        else:
+                            datetime_period = date(
+                                file_data.year + 2000, file_data.month, file_data.day
+                            )
+                        file_dict = file_data._asdict()
+                        file_dict = round_decimal(file_dict)
+                        file_dict["period"] = datetime_period
+                        file_dict["tech"] = flow_params["address"]
+                        file_dict["line"] = flow_params["line"]
+                        file_dict["gas_vol_calc_id"] = gas_volume_calc_id
+                        archive = create_class(**file_dict)
+                        archive_list.append(archive)
+                    except ValueError as e:
+                        self.logger.debug(e)
         return archive_list
 
     def read_daily_archive(self) -> list:
