@@ -7,13 +7,17 @@ from datetime import datetime, date
 from struct import calcsize, unpack
 from collections import namedtuple
 
+from backend.db.dao.edit_type_dao import EditTypeDao
 from backend.db.dao.gas_volume_calc_dao import GasVolumeCalcDao
+from backend.db.dao.sys_type_dao import SysTypeDao
 from backend.db.models import (
     DailyArchiveCreate,
     HourlyArchiveCreate,
     GasVolumeCalcCreate,
     EditArchiveCreate,
     SysArchiveCreate,
+    EditTypeCreate,
+    SysTypeCreate,
 )
 from utils.files_utils import find_files_by_mask
 from utils.logger import logger_setup
@@ -38,17 +42,17 @@ class Hostlib:
         )
         self.EditStruct = namedtuple(
             "EditStruct",
-            "month day year hour minutes seconds edit_id line old_value new_value",
+            "month day year hour minutes seconds edit_type_id line old_value new_value",
         )
         self.SysStruct = namedtuple(
             "SysStruct",
             "month day year hour minutes seconds sys_type_id line standard_volume",
         )
 
-        self.day_struct = "=bbbffffff"
-        self.hour_struct = "=bbbbbffffff"
-        self.edit_struct = "=bbbbbbbbii"
-        self.sys_struct = "=bbbbbbhbf"
+        self.day_struct = "=BBBffffff"
+        self.hour_struct = "=BBBBBffffff"
+        self.edit_struct = "=BBBBBBBBii"
+        self.sys_struct = "=BBBBBBHBf"
         self.at = at
 
     @staticmethod
@@ -62,10 +66,16 @@ class Hostlib:
         files = find_files_by_mask(self.path, mask)
         archive_list = []
         gas_volume_dao = GasVolumeCalcDao()
+        edit_type_dao = EditTypeDao()
+        sys_type_dao = SysTypeDao()
         for file in files:
             flow_params = self.get_params_from_file_name(file)
-            gas_volume_calc_id = gas_volume_dao.get_id_by_address_and_line(
+            gas_volume_calc = gas_volume_dao.get_flow_calc_by_address_and_line(
                 flow_params["address"], flow_params["line"]
+            )
+            gas_volume_calc_id = gas_volume_calc.id if gas_volume_calc else None
+            gas_volume_calc_type_id = (
+                gas_volume_calc.type_id if gas_volume_calc else None
             )
             if not gas_volume_calc_id:
                 self.logger.debug(
@@ -78,10 +88,17 @@ class Hostlib:
                     name=f"a{flow_params['address']}_l{flow_params['line']}",
                     c_time=7,
                     lumg_id=1,
-                    type_id=1,
+                    type_id=4,
                 )
                 gas_volume_calc = gas_volume_dao.create_item(gvc)
                 gas_volume_calc_id = gas_volume_calc.id
+                gas_volume_calc_type_id = gas_volume_calc.type_id
+
+            edit_list = edit_type_dao.get_by_gas_volume_type_id(gas_volume_calc_type_id)
+            edit_dict = {instance.edit_type_id: instance.id for instance in edit_list}
+
+            sys_list = sys_type_dao.get_by_gas_volume_type_id(gas_volume_calc_type_id)
+            sys_dict = {instance.sys_type_id: instance.id for instance in sys_list}
             with open(file, "rb") as archive_file:
                 while True:
                     try:
@@ -89,6 +106,7 @@ class Hostlib:
                         if not data:
                             break
                         file_data = struct_tuple(*unpack(file_struct, data))
+
                         if "seconds" in struct_tuple._fields:
                             datetime_period = datetime(
                                 file_data.year + 2000,
@@ -112,6 +130,41 @@ class Hostlib:
                             )
                         file_dict = file_data._asdict()
                         file_dict = round_decimal(file_dict)
+                        file_dict_keys = file_dict.keys()
+                        if file_dict.get("edit_type_id") is not None:
+                            try:
+                                file_dict["edit_id"] = edit_dict[
+                                    file_dict["edit_type_id"]
+                                ]
+                            except KeyError:
+                                new_edit = EditTypeCreate(
+                                    edit_type_id=file_dict["edit_type_id"],
+                                    gas_volume_calc_type_id=gas_volume_calc_type_id,
+                                    edit_name=f"Неизвестный код {file_dict["edit_type_id"]}",
+                                )
+                                new_item = edit_type_dao.create_item(new_edit)
+                                file_dict["edit_id"] = new_item.id
+                                edit_dict[file_dict["edit_type_id"]] = new_item.id
+                                self.logger.debug(
+                                    f"No edit type with this id: {file_dict['edit_type_id']}! Created new!"
+                                )
+                        if "sys_type_id" in file_dict_keys:
+                            try:
+                                file_dict["sys_type_id"] = sys_dict[
+                                    file_dict["sys_type_id"]
+                                ]
+                            except KeyError:
+                                new_sys = SysTypeCreate(
+                                    sys_type_id=file_dict["sys_type_id"],
+                                    gas_volume_calc_type_id=gas_volume_calc_type_id,
+                                    sys_name=f"Неизвестный код {file_dict["sys_type_id"]}",
+                                )
+                                new_item = sys_type_dao.create_item(new_sys)
+                                file_dict["sys_type_id"] = new_item.id
+                                sys_dict[file_dict["sys_type_id"]] = new_item.id
+                                self.logger.debug(
+                                    f"No sys type with this id: {file_dict['sys_type_id']}! Created new!"
+                                )
                         file_dict["period"] = datetime_period
                         file_dict["tech"] = flow_params["address"]
                         file_dict["line"] = flow_params["line"]

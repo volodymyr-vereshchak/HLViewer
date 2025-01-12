@@ -31,7 +31,7 @@ class DailyArchive(DailyArchiveBase, table=True):
     __tablename__ = "daily_archive"
     __table_args__ = (
         UniqueConstraint(
-            *DAILY_ARCHIVE_CONSTRAINT, name="calc_id_line_period_constraint"
+            *DAILY_ARCHIVE_CONSTRAINT, name="day_calc_id_line_period_constraint"
         ),
     )
     id: int | None = Field(default=None, primary_key=True)

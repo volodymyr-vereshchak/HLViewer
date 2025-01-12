@@ -31,7 +31,7 @@ class HourlyArchive(HourlyArchiveBase, table=True):
     __tablename__ = "hourly_archive"
     __table_args__ = (
         UniqueConstraint(
-            *HOURLY_ARCHIVE_CONSTRAINT, name="calc_id_line_period_constraint"
+            *HOURLY_ARCHIVE_CONSTRAINT, name="hour_calc_id_line_period_constraint"
         ),
     )
     id: int | None = Field(default=None, primary_key=True)
