@@ -2,6 +2,7 @@ import json
 
 from backend.db.dao.edit_type_dao import EditTypeDao
 from backend.db.dao.gas_volume_calc_type_dao import GasVolumeCalcTypeDao
+from backend.db.dao.lumg_dao import LumgDao
 from backend.db.dao.sys_type_dao import SysTypeDao
 from backend.db.models import (
     GasVolumeCalcTypeCreate,
@@ -9,10 +10,13 @@ from backend.db.models import (
     EDIT_TYPE_CONSTRAINT,
     SysTypeCreate,
     SYS_TYPE_CONSTRAINT,
+    LumgCreate,
 )
 from backend.db.models.gas_volume_calc_type_model import GAS_VOLUME_CALC_TYPE_CONSTRAINT
 
 if __name__ == "__main__":
+    new_lumg = LumgCreate(name="ЗЛВУМГ")
+    LumgDao().create_item(new_lumg)
     path = "FLOWTYPE.json"
     with open(path, "r", encoding="utf8") as file:
         flow_type = json.load(file)["FLOWTYPE"]
