@@ -18,23 +18,41 @@ from utils.files_utils import UnzipUtils
 load_dotenv()
 
 
+def update_archive(archive_gen, dao, constraint_list: list, chunk_size: int):
+    while True:
+        try:
+            archives_list = next(archive_gen)
+            dao().bulk_upsert(archives_list, constraint_list, chunk_size=chunk_size)
+        except StopIteration:
+            break
+
+
 def update_hostlibs():
     path = os.getenv("HOSTLIBS_PATH")
+    chunk_size = int(os.getenv("CHUNK_SIZE"))
     with UnzipUtils(path) as unzip_utils:
-        hostlib = Hostlib(path=unzip_utils.temp_path)
-        daily_archives_list = hostlib.read_daily_archive()
-        DailyArchiveDao().bulk_upsert(daily_archives_list, DAILY_ARCHIVE_CONSTRAINT)
+        hostlib = Hostlib(path=unzip_utils.temp_path, chunk_size=chunk_size)
+        daily_archives_gen = hostlib.read_daily_archive()
+        update_archive(
+            daily_archives_gen, DailyArchiveDao, DAILY_ARCHIVE_CONSTRAINT, chunk_size
+        )
 
-        hourly_archives_list = hostlib.read_hourly_archive()
-        HourlyArchiveDao().bulk_upsert(hourly_archives_list, HOURLY_ARCHIVE_CONSTRAINT)
+        hourly_archives_gen = hostlib.read_hourly_archive()
+        update_archive(
+            hourly_archives_gen, HourlyArchiveDao, HOURLY_ARCHIVE_CONSTRAINT, chunk_size
+        )
 
-        edit_archives_list = hostlib.read_edit_archive()
-        EditArchiveDao().bulk_upsert(edit_archives_list, EDIT_ARCHIVE_CONSTRAINT)
+        edit_archives_gen = hostlib.read_edit_archive()
+        update_archive(
+            edit_archives_gen, EditArchiveDao, EDIT_ARCHIVE_CONSTRAINT, chunk_size
+        )
 
-        sys_archives_list = hostlib.read_sys_archive()
-        SysArchiveDao().bulk_upsert(sys_archives_list, SYS_ARCHIVE_CONSTRAINT)
+        sys_archives_gen = hostlib.read_sys_archive()
+        update_archive(
+            sys_archives_gen, SysArchiveDao, SYS_ARCHIVE_CONSTRAINT, chunk_size
+        )
 
 
 if __name__ == "__main__":
-    path_dir = "D:/Projects/HLViewer/HLViewer/develop_data/ASK/hostlib"
+    # path_dir = "D:/Projects/HLViewer/HLViewer/develop_data/ASK/hostlib"
     update_hostlibs()

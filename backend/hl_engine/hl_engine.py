@@ -25,9 +25,10 @@ from utils.math_utils import round_decimal
 
 
 class Hostlib:
-    def __init__(self, at: int = 0, path: str = "./") -> None:
+    def __init__(self, at: int = 0, path: str = "./", chunk_size: int = 900) -> None:
         self.logger = logger_setup("backend")
         self.path = path
+        self.chunk_size = chunk_size
         self.day_mask = "S*R*D.*"
         self.hour_mask = "S*R*R.*"
         self.edit_mask = "S*R*U.*"
@@ -171,29 +172,33 @@ class Hostlib:
                         file_dict["gas_vol_calc_id"] = gas_volume_calc_id
                         archive = create_class(**file_dict)
                         archive_list.append(archive)
+                        if len(archive_list) == self.chunk_size:
+                            yield archive_list
+                            archive_list = []
                     except ValueError as e:
                         self.logger.debug(e)
-        return archive_list
+        if archive_list:
+            yield archive_list
 
-    def read_daily_archive(self) -> list:
+    def read_daily_archive(self):
         daily_archive_list = self.read_archive(
             self.day_mask, self.day_struct, self.DayStruct, DailyArchiveCreate
         )
         return daily_archive_list
 
-    def read_hourly_archive(self) -> list:
+    def read_hourly_archive(self):
         hourly_archive_list = self.read_archive(
             self.hour_mask, self.hour_struct, self.HourStruct, HourlyArchiveCreate
         )
         return hourly_archive_list
 
-    def read_edit_archive(self) -> list:
+    def read_edit_archive(self):
         edit_archive_list = self.read_archive(
             self.edit_mask, self.edit_struct, self.EditStruct, EditArchiveCreate
         )
         return edit_archive_list
 
-    def read_sys_archive(self) -> list:
+    def read_sys_archive(self):
         sys_archive_list = self.read_archive(
             self.sys_mask, self.sys_struct, self.SysStruct, SysArchiveCreate
         )

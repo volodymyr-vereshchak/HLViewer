@@ -1,7 +1,7 @@
 from contextlib import contextmanager
 from datetime import datetime
 
-from sqlalchemy.dialects.sqlite import insert
+from sqlalchemy.dialects.postgresql import insert
 from sqlmodel import select
 from sqlalchemy.exc import IntegrityError
 
