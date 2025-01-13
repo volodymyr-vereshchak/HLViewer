@@ -1,7 +1,4 @@
 import os
-import glob
-import shutil
-import zipfile
 
 from datetime import datetime, date
 from struct import calcsize, unpack
