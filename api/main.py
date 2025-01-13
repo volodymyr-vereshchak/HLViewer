@@ -7,7 +7,7 @@ from api.endpoints import (
     gas_volume_calc_type_ep,
     gas_volume_calc_ep,
 )
-from api.endpoints.gas_volume_calc_ep import gas_volume_calc_router
+
 
 tags_metadata = [
     {

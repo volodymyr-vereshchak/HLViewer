@@ -1,3 +1,7 @@
+import os
+
+from dotenv import load_dotenv
+
 from backend.db.dao.daily_archive_dao import DailyArchiveDao
 from backend.db.dao.edit_archive_dao import EditArchiveDao
 from backend.db.dao.hourly_archive_dao import HourlyArchiveDao
@@ -11,8 +15,11 @@ from backend.db.models import (
 from backend.hl_engine.hl_engine import Hostlib
 from utils.files_utils import UnzipUtils
 
+load_dotenv()
 
-def update_hostlibs(path: str):
+
+def update_hostlibs():
+    path = os.getenv("HOSTLIBS_PATH")
     with UnzipUtils(path) as unzip_utils:
         hostlib = Hostlib(path=unzip_utils.temp_path)
         daily_archives_list = hostlib.read_daily_archive()
@@ -30,4 +37,4 @@ def update_hostlibs(path: str):
 
 if __name__ == "__main__":
     path_dir = "D:/Projects/HLViewer/HLViewer/develop_data/ASK/hostlib"
-    update_hostlibs(path_dir)
+    update_hostlibs()

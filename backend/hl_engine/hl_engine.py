@@ -140,7 +140,7 @@ class Hostlib:
                                 new_edit = EditTypeCreate(
                                     edit_type_id=file_dict["edit_type_id"],
                                     gas_volume_calc_type_id=gas_volume_calc_type_id,
-                                    edit_name=f"Неизвестный код {file_dict["edit_type_id"]}",
+                                    edit_name=f"Неизвестный код {file_dict['edit_type_id']}",
                                 )
                                 new_item = edit_type_dao.create_item(new_edit)
                                 file_dict["edit_id"] = new_item.id
@@ -157,7 +157,7 @@ class Hostlib:
                                 new_sys = SysTypeCreate(
                                     sys_type_id=file_dict["sys_type_id"],
                                     gas_volume_calc_type_id=gas_volume_calc_type_id,
-                                    sys_name=f"Неизвестный код {file_dict["sys_type_id"]}",
+                                    sys_name=f"Неизвестный код {file_dict['sys_type_id']}",
                                 )
                                 new_item = sys_type_dao.create_item(new_sys)
                                 file_dict["sys_type_id"] = new_item.id
