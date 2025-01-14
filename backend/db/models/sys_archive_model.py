@@ -15,7 +15,7 @@ class SysArchiveBase(SQLModel):
     standard_volume: Decimal = Field(max_digits=20, decimal_places=3)
 
 
-SYS_ARCHIVE_CONSTRAINT = ["period", "sys_type_id", "gas_vol_calc_id"]
+SYS_ARCHIVE_CONSTRAINT = ["period", "sys_type_id", "gas_vol_calc_id", "line"]
 
 
 class SysArchive(SysArchiveBase, table=True):

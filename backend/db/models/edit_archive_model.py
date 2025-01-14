@@ -14,7 +14,7 @@ class EditArchiveBase(SQLModel):
     new_value: int
 
 
-EDIT_ARCHIVE_CONSTRAINT = ["period", "edit_id", "gas_vol_calc_id"]
+EDIT_ARCHIVE_CONSTRAINT = ["period", "edit_id", "gas_vol_calc_id", "line"]
 
 
 class EditArchive(EditArchiveBase, table=True):
