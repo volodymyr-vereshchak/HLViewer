@@ -62,7 +62,7 @@ class Hostlib:
 
     def read_archive(self, mask, file_struct, struct_tuple, create_class):
         files = find_files_by_mask(self.path, mask)
-        archive_dict_list = []
+        archive_list = []
         gas_volume_dao = GasVolumeCalcDao()
         edit_type_dao = EditTypeDao()
         sys_type_dao = SysTypeDao()
@@ -168,15 +168,14 @@ class Hostlib:
                         file_dict["period"] = datetime_period
                         file_dict["line"] = flow_params["line"]
                         file_dict["gas_vol_calc_id"] = gas_volume_calc_id
-                        archive_dict = {key: value for key, value in file_dict.items() if key in create_class.model_fields}
-                        archive_dict_list.append(archive_dict)
-                        if len(archive_dict_list) == self.chunk_size:
-                            yield archive_dict_list
-                            archive_dict_list = []
+                        archive_list.append(create_class(**file_dict))
+                        if len(archive_list) == self.chunk_size:
+                            yield archive_list
+                            archive_list = []
                     except ValueError as e:
                         self.logger.debug(e)
-        if archive_dict_list:
-            yield archive_dict_list
+        if archive_list:
+            yield archive_list
 
     def read_daily_archive(self):
         daily_archive_list = self.read_archive(

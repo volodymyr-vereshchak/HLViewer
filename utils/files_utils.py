@@ -25,8 +25,21 @@ class UnzipUtils:
             for file in files:
                 if file.endswith(".zip"):
                     zip_path = os.path.join(root, file)
-                    with zipfile.ZipFile(zip_path, "r") as zip_ref:
-                        zip_ref.extractall(self.temp_path)
+                    with zipfile.ZipFile(zip_path, 'r') as zip_file:
+                        for file_info in zip_file.infolist():
+                            extracted_path = os.path.join(self.temp_path, file_info.filename)
+
+                            # Check if the file already exists
+                            if os.path.exists(extracted_path):
+                                # Compare sizes
+                                existing_size = os.path.getsize(extracted_path)
+                                new_size = file_info.file_size
+
+                                if new_size > existing_size:
+                                    zip_file.extract(file_info, self.temp_path)
+                            else:
+                                # File doesn't exist; extract it
+                                zip_file.extract(file_info, self.temp_path)
 
     def delete_unzip_folder(self):
         if os.path.exists(self.temp_path):

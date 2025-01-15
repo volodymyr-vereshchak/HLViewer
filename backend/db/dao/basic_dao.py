@@ -29,10 +29,11 @@ class BasicDao:
 
     def bulk_upsert(
         self,
-        list_of_dict_data: list,
+        list_of_instance: list,
         list_of_constraints: list[str],
         chunk_size: int = 900,
     ):
+        list_of_dict_data = [instance.model_dump() for instance in list_of_instance ]
 
         chunks = [
             list_of_dict_data[i: i + chunk_size]
