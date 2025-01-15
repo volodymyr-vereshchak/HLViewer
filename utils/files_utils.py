@@ -2,6 +2,9 @@ import glob
 import os
 import shutil
 import zipfile
+from struct import calcsize, unpack
+
+from utils.math_utils import round_decimal
 
 
 class UnzipUtils:
@@ -25,9 +28,11 @@ class UnzipUtils:
             for file in files:
                 if file.endswith(".zip"):
                     zip_path = os.path.join(root, file)
-                    with zipfile.ZipFile(zip_path, 'r') as zip_file:
+                    with zipfile.ZipFile(zip_path, "r") as zip_file:
                         for file_info in zip_file.infolist():
-                            extracted_path = os.path.join(self.temp_path, file_info.filename)
+                            extracted_path = os.path.join(
+                                self.temp_path, file_info.filename
+                            )
 
                             # Check if the file already exists
                             if os.path.exists(extracted_path):
@@ -51,3 +56,15 @@ def find_files_by_mask(path: str, mask: str) -> list[str]:
     unpacked_files = glob.glob(file_path, recursive=True)
 
     return unpacked_files
+
+
+def read_archive_file(file, file_struct, struct_tuple):
+    with open(file, "rb") as archive_file:
+        while True:
+            data = archive_file.read(calcsize(file_struct))
+            if not data:
+                break
+            file_data = struct_tuple(*unpack(file_struct, data))
+            file_dict = file_data._asdict()
+            file_dict = round_decimal(file_dict)
+            yield file_dict

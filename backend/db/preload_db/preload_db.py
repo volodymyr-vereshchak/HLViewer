@@ -22,9 +22,7 @@ if __name__ == "__main__":
         flow_type = json.load(file)["FLOWTYPE"]
     unique_type_id_calc = set([flow_dict["ID_TYPE"] for flow_dict in flow_type])
     instance_list = [
-        GasVolumeCalcTypeCreate(
-            type_id=flow_dict["ID_TYPE"], type_name=flow_dict["TYPENAME"].strip()
-        )
+        {"type_id": flow_dict["ID_TYPE"], "type_name": flow_dict["TYPENAME"].strip()}
         for flow_dict in flow_type
     ]
     GasVolumeCalcTypeDao().bulk_upsert(instance_list, GAS_VOLUME_CALC_TYPE_CONSTRAINT)
@@ -38,11 +36,11 @@ if __name__ == "__main__":
         flow_type = json.load(file)["EDITNAME"]
     unique_type_id = set([flow_dict["ID_TYPE"] for flow_dict in flow_type])
     instance_list = [
-        EditTypeCreate(
-            edit_type_id=flow_dict["EDIT_ID"],
-            gas_volume_calc_type_id=type_id_dict[flow_dict["ID_TYPE"]],
-            edit_name=flow_dict["EDITNAME"].strip(),
-        )
+        {
+            "edit_type_id": flow_dict["EDIT_ID"],
+            "gas_volume_calc_type_id": type_id_dict[flow_dict["ID_TYPE"]],
+            "edit_name": flow_dict["EDITNAME"].strip(),
+        }
         for flow_dict in flow_type
     ]
     EditTypeDao().bulk_upsert(instance_list, EDIT_TYPE_CONSTRAINT)
@@ -51,11 +49,11 @@ if __name__ == "__main__":
     with open(path, "r", encoding="utf8") as file:
         flow_type = json.load(file)["SYSNAME"]
     instance_list = [
-        SysTypeCreate(
-            sys_type_id=flow_dict["SYS_ID"],
-            gas_volume_calc_type_id=type_id_dict[flow_dict["ID_TYPE"]],
-            sys_name=flow_dict["SYSNAME"].strip(),
-        )
+        {
+            "sys_type_id": flow_dict["SYS_ID"],
+            "gas_volume_calc_type_id": type_id_dict[flow_dict["ID_TYPE"]],
+            "sys_name": flow_dict["SYSNAME"].strip(),
+        }
         for flow_dict in flow_type
     ]
     SysTypeDao().bulk_upsert(instance_list, SYS_TYPE_CONSTRAINT)
