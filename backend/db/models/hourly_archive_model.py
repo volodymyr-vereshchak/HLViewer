@@ -17,12 +17,6 @@ class HourlyArchiveBase(SQLModel):
     temperature: Decimal = Field(decimal_places=3)
     density: Decimal = Field(decimal_places=3)
 
-    @field_validator("density")
-    def validate_density(cls, value: Decimal):
-        if value > 1 or value < 0.5:
-            value = Decimal(0)
-        return value
-
 
 HOURLY_ARCHIVE_CONSTRAINT = ["gas_vol_calc_id", "line", "period", "volume"]
 
@@ -44,6 +38,12 @@ class HourlyArchive(HourlyArchiveBase, table=True):
 class HourlyArchiveList(HourlyArchiveBase):
     id: int
     gas_vol_calc_id: int
+
+    @field_validator("density")
+    def validate_density(cls, value: Decimal):
+        if value > 1 or value < 0.5:
+            value = Decimal(0)
+        return value
 
 
 class HourlyArchiveCreate(HourlyArchiveBase):

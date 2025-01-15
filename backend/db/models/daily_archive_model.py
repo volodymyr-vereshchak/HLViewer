@@ -17,12 +17,6 @@ class DailyArchiveBase(SQLModel):
     temperature: Decimal = Field(decimal_places=3)
     density: Decimal = Field(decimal_places=3)
 
-    @field_validator("density")
-    def validate_density(cls, value: Decimal):
-        if value > 1 or value < 0.5:
-            value = Decimal(0)
-        return value
-
 
 DAILY_ARCHIVE_CONSTRAINT = ["gas_vol_calc_id", "line", "period", "volume"]
 
@@ -41,9 +35,15 @@ class DailyArchive(DailyArchiveBase, table=True):
     gas_volume_calc: "GasVolumeCalc" = Relationship(back_populates="daily_archives")
 
 
-class DailyArchiveList(DailyArchiveBase):  # TODO validator in models for view not in create
+class DailyArchiveList(DailyArchiveBase):
     id: int
     gas_vol_calc_id: int
+
+    @field_validator("density")
+    def validate_density(cls, value: Decimal):
+        if value > 1 or value < 0.5:
+            value = Decimal(0)
+        return value
 
 
 class DailyArchiveCreate(DailyArchiveBase):

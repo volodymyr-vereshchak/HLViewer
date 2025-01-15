@@ -40,7 +40,7 @@ class Hostlib:
         )
         self.EditStruct = namedtuple(
             "EditStruct",
-            "month day year hour minutes seconds edit_type_id unknown old_value new_value", # TODO check struct of edit archive unknown
+            "month day year hour minutes seconds edit_type_id unknown old_value new_value",  # TODO check struct of edit archive unknown
         )
         self.SysStruct = namedtuple(
             "SysStruct",
@@ -166,6 +166,7 @@ class Hostlib:
                                 )
 
                         file_dict["period"] = datetime_period
+                        file_dict["address"] = flow_params["address"]
                         file_dict["line"] = flow_params["line"]
                         file_dict["gas_vol_calc_id"] = gas_volume_calc_id
                         archive_list.append(create_class(**file_dict))
