@@ -14,13 +14,13 @@ class EditArchiveBase(SQLModel):
     new_value: int
 
 
-EDIT_ARCHIVE_CONSTRAINT = ["period", "edit_id", "gas_vol_calc_id", "line"]
+EDIT_ARCHIVE_CONSTRAINT = ["period", "edit_id", "gas_vol_calc_id", "line", "new_value", "old_value"]
 
 
 class EditArchive(EditArchiveBase, table=True):
     __tablename__ = "edit_archive"
     __table_args__ = (
-        UniqueConstraint(*EDIT_ARCHIVE_CONSTRAINT, name="edit_id_period_constraint"),
+        UniqueConstraint(*EDIT_ARCHIVE_CONSTRAINT, name="edit_all_constraint"),
     )
     id: int | None = Field(default=None, primary_key=True)
     edit_id: int | None = Field(

@@ -62,7 +62,7 @@ class Hostlib:
 
     def read_archive(self, mask, file_struct, struct_tuple, create_class):
         files = find_files_by_mask(self.path, mask)
-        archive_list = []
+        archive_dict_list = []
         gas_volume_dao = GasVolumeCalcDao()
         edit_type_dao = EditTypeDao()
         sys_type_dao = SysTypeDao()
@@ -146,6 +146,7 @@ class Hostlib:
                                 self.logger.debug(
                                     f"No edit type with this id: {file_dict['edit_type_id']}! Created new!"
                                 )
+
                         if "sys_type_id" in file_dict_keys:
                             try:
                                 file_dict["sys_type_id"] = sys_dict[
@@ -163,19 +164,19 @@ class Hostlib:
                                 self.logger.debug(
                                     f"No sys type with this id: {file_dict['sys_type_id']}! Created new!"
                                 )
+
                         file_dict["period"] = datetime_period
-                        file_dict["tech"] = flow_params["address"]
                         file_dict["line"] = flow_params["line"]
                         file_dict["gas_vol_calc_id"] = gas_volume_calc_id
-                        archive = create_class(**file_dict)
-                        archive_list.append(archive)
-                        if len(archive_list) == self.chunk_size:
-                            yield archive_list
-                            archive_list = []
+                        archive_dict = {key: value for key, value in file_dict.items() if key in create_class.model_fields}
+                        archive_dict_list.append(archive_dict)
+                        if len(archive_dict_list) == self.chunk_size:
+                            yield archive_dict_list
+                            archive_dict_list = []
                     except ValueError as e:
                         self.logger.debug(e)
-        if archive_list:
-            yield archive_list
+        if archive_dict_list:
+            yield archive_dict_list
 
     def read_daily_archive(self):
         daily_archive_list = self.read_archive(

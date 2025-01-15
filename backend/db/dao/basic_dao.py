@@ -29,33 +29,23 @@ class BasicDao:
 
     def bulk_upsert(
         self,
-        list_of_instance: list,
+        list_of_dict_data: list,
         list_of_constraints: list[str],
         chunk_size: int = 900,
     ):
-        unique_instances = {
-            tuple(getattr(inst, key) for key in list_of_constraints): inst
-            for inst in list_of_instance
-        }
-        filtered_instances = list(unique_instances.values())
 
         chunks = [
-            filtered_instances[i : i + chunk_size]
-            for i in range(0, len(filtered_instances), chunk_size)
+            list_of_dict_data[i: i + chunk_size]
+            for i in range(0, len(list_of_dict_data), chunk_size)
         ]
         with self.get_session() as session:
             try:
                 for chunk in chunks:
                     stmt = insert(self.model).values(
-                        [instance.model_dump() for instance in chunk]
+                        [instance for instance in chunk]
                     )
-                    stmt = stmt.on_conflict_do_update(
+                    stmt = stmt.on_conflict_do_nothing(
                         index_elements=list_of_constraints,
-                        set_={
-                            col: getattr(stmt.excluded, col)
-                            for col in self.model.model_fields
-                            if col != "id"
-                        },
                     )
                     session.execute(stmt)
                 session.commit()

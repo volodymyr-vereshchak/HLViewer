@@ -15,13 +15,13 @@ class SysArchiveBase(SQLModel):
     standard_volume: Decimal = Field(max_digits=20, decimal_places=3)
 
 
-SYS_ARCHIVE_CONSTRAINT = ["period", "sys_type_id", "gas_vol_calc_id", "line"]
+SYS_ARCHIVE_CONSTRAINT = ["period", "sys_type_id", "gas_vol_calc_id", "line", "standard_volume"]
 
 
 class SysArchive(SysArchiveBase, table=True):
     __tablename__ = "sys_archive"
     __table_args__ = (
-        UniqueConstraint(*SYS_ARCHIVE_CONSTRAINT, name="line_period_constraint"),
+        UniqueConstraint(*SYS_ARCHIVE_CONSTRAINT, name="sys_all_constraint"),
     )
     id: int | None = Field(default=None, primary_key=True)
     sys_type_id: int = Field(foreign_key="sys_type.id", ondelete="CASCADE")

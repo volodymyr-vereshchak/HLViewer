@@ -24,7 +24,7 @@ class HourlyArchiveBase(SQLModel):
         return value
 
 
-HOURLY_ARCHIVE_CONSTRAINT = ["gas_vol_calc_id", "line", "period"]
+HOURLY_ARCHIVE_CONSTRAINT = ["gas_vol_calc_id", "line", "period", "volume"]
 
 
 class HourlyArchive(HourlyArchiveBase, table=True):
