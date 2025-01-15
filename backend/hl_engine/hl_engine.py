@@ -40,11 +40,11 @@ class Hostlib:
         )
         self.EditStruct = namedtuple(
             "EditStruct",
-            "month day year hour minutes seconds edit_type_id line old_value new_value",
+            "month day year hour minutes seconds edit_type_id unknown old_value new_value", # TODO check struct of edit archive unknown
         )
         self.SysStruct = namedtuple(
             "SysStruct",
-            "month day year hour minutes seconds sys_type_id line standard_volume",
+            "month day year hour minutes seconds sys_type_id unknown standard_volume",  # TODO check struct of sys archive unknown
         )
 
         self.day_struct = "=BBBffffff"
