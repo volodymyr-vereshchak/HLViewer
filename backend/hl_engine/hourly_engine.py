@@ -46,7 +46,6 @@ class HourlyEngine(Hostlib):
                         file_dict["minutes"],
                     )
                     file_dict["period"] = datetime_period
-                    file_dict["line"] = flow_params["line"]
                     file_dict["gas_vol_calc_id"] = gas_volume_calc_id
                     archive_dict = {
                         key: value

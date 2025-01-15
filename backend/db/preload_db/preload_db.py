@@ -5,10 +5,7 @@ from backend.db.dao.gas_volume_calc_type_dao import GasVolumeCalcTypeDao
 from backend.db.dao.lumg_dao import LumgDao
 from backend.db.dao.sys_type_dao import SysTypeDao
 from backend.db.models import (
-    GasVolumeCalcTypeCreate,
-    EditTypeCreate,
     EDIT_TYPE_CONSTRAINT,
-    SysTypeCreate,
     SYS_TYPE_CONSTRAINT,
     LumgCreate,
 )

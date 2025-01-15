@@ -11,11 +11,10 @@ if TYPE_CHECKING:
 
 class SysArchiveBase(SQLModel):
     period: datetime = Field(index=True)
-    line: int
     standard_volume: Decimal = Field(max_digits=20, decimal_places=3)
 
 
-SYS_ARCHIVE_CONSTRAINT = ["period", "sys_type_id", "gas_vol_calc_id", "line", "standard_volume"]
+SYS_ARCHIVE_CONSTRAINT = ["period", "sys_type_id", "gas_vol_calc_id", "standard_volume"]
 
 
 class SysArchive(SysArchiveBase, table=True):

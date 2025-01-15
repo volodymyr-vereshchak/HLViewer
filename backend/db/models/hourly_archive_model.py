@@ -9,7 +9,6 @@ if TYPE_CHECKING:
 
 
 class HourlyArchiveBase(SQLModel):
-    line: int
     period: datetime = Field(index=True)
     volume: Decimal = Field(decimal_places=3)
     w_volume_dp: Decimal = Field(decimal_places=3)
@@ -18,7 +17,7 @@ class HourlyArchiveBase(SQLModel):
     density: Decimal = Field(decimal_places=3)
 
 
-HOURLY_ARCHIVE_CONSTRAINT = ["gas_vol_calc_id", "line", "period", "volume"]
+HOURLY_ARCHIVE_CONSTRAINT = ["gas_vol_calc_id", "period", "volume"]
 
 
 class HourlyArchive(HourlyArchiveBase, table=True):

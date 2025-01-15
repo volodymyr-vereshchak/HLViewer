@@ -9,7 +9,6 @@ if TYPE_CHECKING:
 
 
 class DailyArchiveBase(SQLModel):
-    line: int
     period: date = Field(index=True)
     volume: Decimal = Field(decimal_places=3)
     w_volume_dp: Decimal = Field(decimal_places=3)
@@ -18,7 +17,7 @@ class DailyArchiveBase(SQLModel):
     density: Decimal = Field(decimal_places=3)
 
 
-DAILY_ARCHIVE_CONSTRAINT = ["gas_vol_calc_id", "line", "period", "volume"]
+DAILY_ARCHIVE_CONSTRAINT = ["gas_vol_calc_id", "period", "volume"]
 
 
 class DailyArchive(DailyArchiveBase, table=True):

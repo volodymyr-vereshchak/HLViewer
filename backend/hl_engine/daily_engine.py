@@ -42,7 +42,6 @@ class DailyEngine(Hostlib):
                         file_dict["year"] + 2000, file_dict["month"], file_dict["day"]
                     )
                     file_dict["period"] = datetime_period
-                    file_dict["line"] = flow_params["line"]
                     file_dict["gas_vol_calc_id"] = gas_volume_calc_id
                     archive_dict = {
                         key: value

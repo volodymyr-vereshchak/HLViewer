@@ -9,12 +9,17 @@ if TYPE_CHECKING:
 
 class EditArchiveBase(SQLModel):
     period: datetime = Field(index=True)
-    line: int
     old_value: int
     new_value: int
 
 
-EDIT_ARCHIVE_CONSTRAINT = ["period", "edit_id", "gas_vol_calc_id", "line", "new_value", "old_value"]
+EDIT_ARCHIVE_CONSTRAINT = [
+    "period",
+    "edit_id",
+    "gas_vol_calc_id",
+    "new_value",
+    "old_value",
+]
 
 
 class EditArchive(EditArchiveBase, table=True):
