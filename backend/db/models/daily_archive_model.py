@@ -41,7 +41,7 @@ class DailyArchive(DailyArchiveBase, table=True):
     gas_volume_calc: "GasVolumeCalc" = Relationship(back_populates="daily_archives")
 
 
-class DailyArchiveList(DailyArchiveBase):
+class DailyArchiveList(DailyArchiveBase):  # TODO validator in models for view not in create
     id: int
     gas_vol_calc_id: int
 
