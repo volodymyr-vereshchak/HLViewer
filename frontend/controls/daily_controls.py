@@ -1,7 +1,7 @@
 import flet as ft
 
 
-def get_daily_archive_tab(icon_size: dict) -> ft.Tab:
+def get_daily_archive_tab(icon_size: int) -> ft.Tab:
     daily_table = ft.DataTable(
         columns=[
             ft.DataColumn(ft.Text("First name")),
@@ -73,10 +73,10 @@ def get_daily_archive_tab(icon_size: dict) -> ft.Tab:
     daily_archive = ft.Tab(
         text="",
         content=daily_content,
-        icon=ft.Image(
-            src="D:/Projects/HLViewer/HLViewer/frontend/src/assets/calendar-svgrepo-com.svg",
-            width=icon_size["width"],
-            height=icon_size["height"],
+        icon=ft.Icon(
+            name=ft.Icons.TODAY,
+            color=ft.Colors.WHITE,
+            size=icon_size,
             tooltip="Daily archive",
         ),
     )

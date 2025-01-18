@@ -19,13 +19,16 @@ class DailyArchiveRouter:
         )
 
     async def get_day_archive(
-        self, from_date: datetime = None, to_date: datetime = None
+        self,
+        from_date: datetime = None,
+        to_date: datetime = None,
+        gas_volume_calc_id: int = None,
     ):
         daily_archives_dao = DailyArchiveDao()
-        if from_date and to_date:
-            daily_archives = daily_archives_dao.get_range(from_date, to_date)
-        else:
-            daily_archives = daily_archives_dao.get_all()
+        daily_archives = daily_archives_dao.get_range(
+            from_date, to_date, gas_volume_calc_id
+        )
+
         return daily_archives
 
 

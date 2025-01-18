@@ -57,12 +57,22 @@ class BasicDao:
         with self.get_session() as session:
             return session.exec(select(self.model)).all()
 
-    def get_range(self, from_date: datetime, to_date: datetime):
-        statement = (
-            select(self.model)
-            .where(self.model.period >= from_date)
-            .where(self.model.period <= to_date)
-        )
+    def get_range(
+        self,
+        from_date: datetime = None,
+        to_date: datetime = None,
+        gas_volume_calc_id: int = None,
+    ):
+        statement = select(self.model)
+        if from_date:
+            statement = statement.where(self.model.period >= from_date)
+        if to_date:
+            statement = statement.where(self.model.period <= to_date)
+        if gas_volume_calc_id:
+            statement = statement.where(
+                self.model.gas_vol_calc_id == gas_volume_calc_id
+            )
+
         with self.get_session() as session:
             return session.exec(statement).all()
 
