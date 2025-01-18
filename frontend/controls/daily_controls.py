@@ -72,8 +72,8 @@ def get_daily_archive_tab(page, icon_size: int) -> ft.Tab:
         vertical_alignment=ft.CrossAxisAlignment.STRETCH,
     )
 
-    def change_start_date(e):
-        start_date_picker.text = f"{e.control.value.strftime('%d-%m-%Y')}"
+    def change_start_date(e, button):
+        button.text = f"{e.control.value.strftime('%d-%m-%Y')}"
         page.update()
 
     start_date_picker = ft.ElevatedButton(
@@ -88,7 +88,24 @@ def get_daily_archive_tab(page, icon_size: int) -> ft.Tab:
                     1,
                 ),
                 last_date=datetime(2050, 1, 1),
-                on_change=change_start_date,
+                on_change=lambda e: change_start_date(e, start_date_picker),
+            )
+        ),
+    )
+
+    end_date_picker = ft.ElevatedButton(
+        datetime.today().strftime("%d-%m-%Y"),
+        icon=ft.Icons.CALENDAR_MONTH,
+        on_click=lambda e: page.open(
+            ft.DatePicker(
+                current_date=datetime.today(),
+                first_date=datetime(
+                    2020,
+                    1,
+                    1,
+                ),
+                last_date=datetime(2050, 1, 1),
+                on_change=lambda e: change_start_date(e, end_date_picker),
             )
         ),
     )
@@ -106,21 +123,8 @@ def get_daily_archive_tab(page, icon_size: int) -> ft.Tab:
                 icon_size=icon_size,
             ),
             start_date_picker,
-            ft.ElevatedButton(
-                "Pick end date",
-                icon=ft.Icons.CALENDAR_MONTH,
-                on_click=lambda e: page.open(
-                    ft.DatePicker(
-                        current_date=datetime.today(),
-                        first_date=datetime(
-                            2020,
-                            1,
-                            1,
-                        ),
-                        last_date=datetime(2050, 1, 1),
-                    )
-                ),
-            ),
+            end_date_picker,
+            ft.Checkbox(value=False),
         ],
         alignment=ft.MainAxisAlignment.CENTER,
         vertical_alignment=ft.CrossAxisAlignment.CENTER,
