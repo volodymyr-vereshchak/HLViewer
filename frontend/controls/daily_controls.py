@@ -1,7 +1,9 @@
+from datetime import datetime
+
 import flet as ft
 
 
-def get_daily_archive_tab(icon_size: int) -> ft.Tab:
+def get_daily_archive_tab(page, icon_size: int) -> ft.Tab:
     daily_table = ft.DataTable(
         columns=[
             ft.DataColumn(ft.Text("First name")),
@@ -70,9 +72,68 @@ def get_daily_archive_tab(icon_size: int) -> ft.Tab:
         vertical_alignment=ft.CrossAxisAlignment.STRETCH,
     )
 
+    def change_start_date(e):
+        start_date_picker.text = f"{e.control.value.strftime('%d-%m-%Y')}"
+        page.update()
+
+    start_date_picker = ft.ElevatedButton(
+        datetime.today().strftime("%d-%m-%Y"),
+        icon=ft.Icons.CALENDAR_MONTH,
+        on_click=lambda e: page.open(
+            ft.DatePicker(
+                current_date=datetime.today(),
+                first_date=datetime(
+                    2020,
+                    1,
+                    1,
+                ),
+                last_date=datetime(2050, 1, 1),
+                on_change=change_start_date,
+            )
+        ),
+    )
+
+    menu_day_row = ft.Row(
+        controls=[
+            ft.IconButton(
+                icon=ft.Icons.LOCAL_PRINT_SHOP_OUTLINED,
+                icon_color=ft.Colors.WHITE,
+                icon_size=icon_size,
+            ),
+            ft.IconButton(
+                icon=ft.Icons.TABLE_CHART,
+                icon_color=ft.Colors.WHITE,
+                icon_size=icon_size,
+            ),
+            start_date_picker,
+            ft.ElevatedButton(
+                "Pick end date",
+                icon=ft.Icons.CALENDAR_MONTH,
+                on_click=lambda e: page.open(
+                    ft.DatePicker(
+                        current_date=datetime.today(),
+                        first_date=datetime(
+                            2020,
+                            1,
+                            1,
+                        ),
+                        last_date=datetime(2050, 1, 1),
+                    )
+                ),
+            ),
+        ],
+        alignment=ft.MainAxisAlignment.CENTER,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    )
+
+    daily_column = ft.Column(
+        controls=[menu_day_row, daily_content],
+        expand=True,
+    )
+
     daily_archive = ft.Tab(
         text="",
-        content=daily_content,
+        content=daily_column,
         icon=ft.Icon(
             name=ft.Icons.TODAY,
             color=ft.Colors.WHITE,

@@ -27,7 +27,7 @@ def main(page: ft.Page):
         icon=ft.Icon(name=ft.Icons.EDIT_NOTE, color=ft.Colors.WHITE, size=icon_size),
     )
 
-    daily_archive = get_daily_archive_tab(icon_size)
+    daily_archive = get_daily_archive_tab(page, icon_size)
 
     main_tabs = ft.Tabs(
         [settings, daily_archive, hourly_archive, edit_archive],
