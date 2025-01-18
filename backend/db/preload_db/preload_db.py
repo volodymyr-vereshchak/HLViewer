@@ -15,7 +15,7 @@ from backend.db.models.gas_volume_calc_type_model import GAS_VOLUME_CALC_TYPE_CO
 def preload_db():
     new_lumg = LumgCreate(name="ЗЛВУМГ")
     LumgDao().create_item(new_lumg)
-    path = "FLOWTYPE.json"
+    path = "backend/db/preload_db/FLOWTYPE.json"
     with open(path, "r", encoding="utf8") as file:
         flow_type = json.load(file)["FLOWTYPE"]
     unique_type_id_calc = set([flow_dict["ID_TYPE"] for flow_dict in flow_type])
@@ -29,7 +29,7 @@ def preload_db():
         for type_id in unique_type_id_calc
     }
 
-    path = "EDITNAME.json"
+    path = "backend/db/preload_db/EDITNAME.json"
     with open(path, "r", encoding="utf8") as file:
         flow_type = json.load(file)["EDITNAME"]
     unique_type_id = set([flow_dict["ID_TYPE"] for flow_dict in flow_type])
@@ -43,7 +43,7 @@ def preload_db():
     ]
     EditTypeDao().bulk_upsert(instance_list, EDIT_TYPE_CONSTRAINT)
 
-    path = "SYSNAME.json"
+    path = "backend/db/preload_db/SYSNAME.json"
     with open(path, "r", encoding="utf8") as file:
         flow_type = json.load(file)["SYSNAME"]
     instance_list = [
