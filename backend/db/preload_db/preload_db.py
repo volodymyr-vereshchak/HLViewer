@@ -11,7 +11,8 @@ from backend.db.models import (
 )
 from backend.db.models.gas_volume_calc_type_model import GAS_VOLUME_CALC_TYPE_CONSTRAINT
 
-if __name__ == "__main__":
+
+def preload_db():
     new_lumg = LumgCreate(name="ЗЛВУМГ")
     LumgDao().create_item(new_lumg)
     path = "FLOWTYPE.json"
@@ -54,3 +55,7 @@ if __name__ == "__main__":
         for flow_dict in flow_type
     ]
     SysTypeDao().bulk_upsert(instance_list, SYS_TYPE_CONSTRAINT)
+
+
+if __name__ == "__main__":
+    preload_db()

@@ -1,70 +1,54 @@
 import flet as ft
 
+from controls.daily_controls import get_daily_archive_tab
+
 
 def main(page: ft.Page):
-    page.title = "Split screen with independent tabs"
-    page.window.width = 800
-    page.window.height = 600
-    page.horizontal_alignment = "center"
-    page.vertical_alignment = "center"
+    page.title = "HostlibViewer"
+    icon_size = {"width": 56, "height": 56}
+    settings = ft.Tab(
+        text="",
+        content=ft.Text("Settings"),
+        icon=ft.Image(
+            src="D:/Projects/HLViewer/HLViewer/frontend/src/assets/settings-svgrepo-com.svg",
+            width=icon_size["width"],
+            height=icon_size["height"],
+            tooltip="Settings",
+        ),
+    )
 
-    # Tabs for the first section
-    tabs1 = ft.Tabs(
-        tabs=[
-            ft.Tab(text="Tab 1-1", content=ft.Text("Content of Tab 1-1")),
-            ft.Tab(text="Tab 1-2", content=ft.Text("Content of Tab 1-2")),
-        ],
+    hourly_archive = ft.Tab(
+        text="",
+        content=ft.Text("Hourly archive"),
+        icon=ft.Image(
+            src="D:/Projects/HLViewer/HLViewer/frontend/src/assets/clocks-svgrepo-com.svg",
+            width=icon_size["width"],
+            height=icon_size["height"],
+            tooltip="Hourly archive",
+        ),
+    )
+
+    edit_archive = ft.Tab(
+        text="",
+        content=ft.Text("Edit archive"),
+        icon=ft.Image(
+            src="D:/Projects/HLViewer/HLViewer/frontend/src/assets/clipboard-svgrepo-com.svg",
+            width=icon_size["width"],
+            height=icon_size["height"],
+            tooltip="Edit archive",
+        ),
+    )
+
+    daily_archive = get_daily_archive_tab(icon_size)
+
+    main_tabs = ft.Tabs(
+        [settings, daily_archive, hourly_archive, edit_archive],
         selected_index=0,
         expand=True,
+        label_padding=10,
     )
 
-    # Tabs for the second section
-    tabs2 = ft.Tabs(
-        tabs=[
-            ft.Tab(text="Tab 2-1", content=ft.Text("Content of Tab 2-1")),
-            ft.Tab(text="Tab 2-2", content=ft.Text("Content of Tab 2-2")),
-        ],
-        selected_index=0,
-        expand=True,
-    )
-
-    # Two vertical sections in a Row
-    tab_content = ft.Row(
-        controls=[
-            ft.Container(
-                content=tabs1,
-                padding=10,
-                bgcolor=ft.Colors.LIGHT_BLUE_50,
-                expand=1,
-            ),
-            ft.Container(
-                content=tabs2,
-                padding=10,
-                bgcolor=ft.Colors.LIGHT_GREEN_50,
-                expand=2,
-            ),
-        ],
-        expand=True,
-    )
-
-    main_tab = ft.Tabs(
-        tabs=[
-            ft.Tab(
-                text="Settings",
-                content=tab_content,
-                icon=ft.Image(
-                    src="D:/Projects/HLViewer/HLViewer/frontend/src/assets/settings-svgrepo-com.svg",
-                    width=32,
-                    height=32,
-                ),
-            ),
-            ft.Tab(text="Tab 0-2", content=ft.Text("Content of Tab 0-2")),
-        ],
-        selected_index=0,
-        expand=True,
-    )
-
-    page.add(main_tab)
+    page.add(main_tabs)
 
 
 ft.app(target=main)

@@ -1,0 +1,25 @@
+version: "3.12"
+services:
+  db:
+    image: postgres:15
+    container_name: postgres_db
+    environment:
+      POSTGRES_USER: diakonx
+      POSTGRES_PASSWORD: assemblerwog359
+      POSTGRES_DB: hostlib_db
+    ports:
+      - "5432:5432"
+
+  fastapi:
+    build:
+      context: .
+    container_name: fastapi_app
+    volumes:
+      - .:/app
+    working_dir: /app
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db

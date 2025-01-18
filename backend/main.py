@@ -31,7 +31,8 @@ def update_archive(archive_gen, dao, constraint_list: list, chunk_size: int):
 
 
 def update_hostlibs():
-    path = os.getenv("HOSTLIBS_PATH")
+    current_directory = os.getcwd()
+    path = os.path.join(current_directory, os.getenv("HOSTLIBS_PATH"))
     chunk_size = int(os.getenv("CHUNK_SIZE"))
     with UnzipUtils(path) as unzip_utils:
         daily_engine = DailyEngine(path=unzip_utils.temp_path, chunk_size=chunk_size)
