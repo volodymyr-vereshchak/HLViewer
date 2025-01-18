@@ -32,7 +32,6 @@ def preload_db():
     path = "backend/db/preload_db/EDITNAME.json"
     with open(path, "r", encoding="utf8") as file:
         flow_type = json.load(file)["EDITNAME"]
-    unique_type_id = set([flow_dict["ID_TYPE"] for flow_dict in flow_type])
     instance_list = [
         {
             "edit_type_id": flow_dict["EDIT_ID"],
