@@ -1,7 +1,6 @@
 import flet as ft
-from blib2to3.pgen2.tokenize import colon
 
-from controls.daily_controls import get_daily_archive_tab
+from controls.daily_controls import DayArchiveTab
 
 
 def main(page: ft.Page):
@@ -27,16 +26,21 @@ def main(page: ft.Page):
         icon=ft.Icon(name=ft.Icons.EDIT_NOTE, color=ft.Colors.WHITE, size=icon_size),
     )
 
-    daily_archive = get_daily_archive_tab(page, icon_size)
+    daily_archive = DayArchiveTab(icon_size=icon_size)
+
+    def main_tab_click(e):
+        if int(e.data) == 1:
+            daily_archive.gas_vol_container.update_list_of_gas_calc()
 
     main_tabs = ft.Tabs(
         [settings, daily_archive, hourly_archive, edit_archive],
         selected_index=0,
         expand=True,
         label_padding=10,
+        on_change=main_tab_click,
     )
 
     page.add(main_tabs)
 
 
-ft.app(target=main, assets_dir="src/assets")
+ft.app(target=main)

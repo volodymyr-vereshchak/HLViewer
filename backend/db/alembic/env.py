@@ -5,7 +5,7 @@ from sqlalchemy import pool
 
 from alembic import context
 from sqlmodel import SQLModel
-from models import (
+from db.models import (
     Lumg,
     LumgCreate,
     LumgList,
@@ -37,13 +37,13 @@ from models import (
     SysArchiveCreate,
 )
 
-from backend.settings import backend_settings
+from settings import backend_settings
 
-db_username = backend_settings.get("DB_USERNAME", "default_user")
-db_password = backend_settings.get("DB_PASSWORD", "default_password")
+db_username = backend_settings.get("POSTGRES_USER", "default_user")
+db_password = backend_settings.get("POSTGRES_PASSWORD", "default_password")
 db_host = backend_settings.get("DB_HOST", "localhost")
 db_port = backend_settings.get("DB_PORT", "5432")
-db_name = backend_settings.get("DB_NAME", "default_db")
+db_name = backend_settings.get("POSTGRES_DB", "default_db")
 
 sqlalchemy_url = (
     f"postgresql://{db_username}:{db_password}@{db_host}:{db_port}/{db_name}"

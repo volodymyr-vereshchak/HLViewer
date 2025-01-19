@@ -22,4 +22,4 @@ services:
     depends_on:
       - db
     command: >
-      sh -c "./wait_for_it.sh db:5432 -- sh -c 'cd backend/db && alembic upgrade head && cd .. && cd .. && uvicorn backend.api.main:app --host 0.0.0.0 --port 8000'"
+      sh -c "./wait_for_it.sh db:5432 -- sh -c 'cd backend && alembic upgrade head && cd .. && uvicorn backend.api.main:app --host 0.0.0.0 --port 8000'"
