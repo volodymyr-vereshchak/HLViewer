@@ -1,7 +1,9 @@
 from datetime import datetime
 
 import flet as ft
+from sqlalchemy.orm.sync import update
 
+from api_client.daily_archive_client import DailyArchiveClient
 from api_client.gas_volume_calc_client import GasVolumeCalcClient
 
 
@@ -41,8 +43,9 @@ class GasVolumeNameContainer(ft.Container):
 
 
 class GasVolumesContainer(ft.Container):
-    def __init__(self):
+    def __init__(self, data_table_instance: "DayArchiveTable"):
         super().__init__()
+        self.table_instance = data_table_instance
         self.gas_volumes = self.get_gas_volumes()
         self.content = ft.Column(
             [
@@ -79,7 +82,56 @@ class GasVolumesContainer(ft.Container):
         self.update()
 
     def con_click(self, e):
-        pass
+        gas_volume_calc_id = e.control.gas_volume_data["id"]
+        self.table_instance.update_table_by_gas_flow_calc_id(gas_volume_calc_id)
+
+
+class DayArchiveTable(ft.DataTable):
+    def __init__(
+        self,
+        columns: list[ft.DataColumn],
+        rows: list[ft.DataRow] = None,
+        table_data: list[dict] = None,
+        gas_flow_data: dict = None,
+    ):
+        super().__init__(rows=rows, columns=columns)
+        self.table_data = table_data
+        self.gas_flow_data = gas_flow_data
+        self.horizontal_lines = ft.BorderSide(color=ft.Colors.WHITE, width=2)
+        self.vertical_lines = ft.BorderSide(color=ft.Colors.WHITE, width=2)
+
+    @staticmethod
+    def get_daily_archive_data(gas_volume_calc_id: int):
+        status, daily_archive_data = DailyArchiveClient(
+            gas_volume_calc_id=gas_volume_calc_id
+        ).api_request()
+        return daily_archive_data
+
+    @staticmethod
+    def get_rows_data(data: list[dict]):
+        rows = [
+            ft.DataRow(
+                cells=[ft.DataCell(ft.Text(str(value))) for value in row.values()]
+            )
+            for row in data
+        ]
+        return rows
+
+    def update_table_by_gas_flow_calc_id(self, gas_volume_calc_id: int):
+        day_archive_data_list = self.get_daily_archive_data(
+            gas_volume_calc_id=gas_volume_calc_id
+        )
+        day_archive_data = [
+            {
+                key: volume
+                for key, volume in day_archive_dict.items()
+                if key not in ["id", "gas_vol_calc_id"]
+            }
+            for day_archive_dict in day_archive_data_list
+        ]
+
+        self.rows = self.get_rows_data(day_archive_data)
+        self.update()
 
 
 class DayArchiveTab(ft.Tab):
@@ -91,47 +143,15 @@ class DayArchiveTab(ft.Tab):
             size=icon_size,
             tooltip="Daily archive",
         )
-        self.daily_table = ft.DataTable(
-            columns=[
-                ft.DataColumn(ft.Text("First name")),
-                ft.DataColumn(ft.Text("Last name")),
-                ft.DataColumn(ft.Text("Age"), numeric=True),
-            ],
-            rows=[
-                ft.DataRow(
-                    cells=[
-                        ft.DataCell(ft.Text("John")),
-                        ft.DataCell(ft.Text("Smith")),
-                        ft.DataCell(ft.Text("43")),
-                    ],
-                ),
-                ft.DataRow(
-                    cells=[
-                        ft.DataCell(ft.Text("Jack")),
-                        ft.DataCell(ft.Text("Brown")),
-                        ft.DataCell(ft.Text("19")),
-                    ],
-                ),
-                ft.DataRow(
-                    cells=[
-                        ft.DataCell(ft.Text("Alice")),
-                        ft.DataCell(ft.Text("Wong")),
-                        ft.DataCell(ft.Text("25")),
-                    ],
-                ),
-            ],
-        )
+        self.daily_table = DayArchiveTable(columns=self.get_columns_data())
 
-        self.gas_vol_container = GasVolumesContainer()
+        self.gas_vol_container = GasVolumesContainer(self.daily_table)
 
         self.daily_content = ft.Row(
             controls=[
                 self.gas_vol_container,
-                ft.Container(
-                    content=self.daily_table,
-                    padding=10,
-                    bgcolor=ft.Colors.BLACK,
-                    expand=1,
+                ft.Column(
+                    controls=[self.daily_table], expand=True, scroll=ft.ScrollMode.AUTO
                 ),
             ],
             expand=True,
@@ -140,6 +160,7 @@ class DayArchiveTab(ft.Tab):
 
         self.start_date_picker = Calendar()
         self.end_date_picker = Calendar()
+        self.date_checkbox = ft.Checkbox(value=False)
         self.menu_day_row = ft.Row(
             controls=[
                 ft.IconButton(
@@ -154,7 +175,7 @@ class DayArchiveTab(ft.Tab):
                 ),
                 self.start_date_picker,
                 self.end_date_picker,
-                ft.Checkbox(value=False),
+                self.date_checkbox,
             ],
             alignment=ft.MainAxisAlignment.CENTER,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -164,3 +185,14 @@ class DayArchiveTab(ft.Tab):
             expand=True,
         )
         self.content = self.daily_column
+
+    @staticmethod
+    def get_columns_data():
+        return [
+            ft.DataColumn(ft.Text("Period")),
+            ft.DataColumn(ft.Text("Volume"), numeric=True),
+            ft.DataColumn(ft.Text("Dp"), numeric=True),
+            ft.DataColumn(ft.Text("Pressure"), numeric=True),
+            ft.DataColumn(ft.Text("Temperature"), numeric=True),
+            ft.DataColumn(ft.Text("Density"), numeric=True),
+        ]

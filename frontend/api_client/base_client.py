@@ -13,6 +13,7 @@ class BaseClient:
         self.port = frontend_settings.get("API_PORT")
         self.logger = logger_setup("frontend")
         self.endpoint = None
+        self.params = None
 
     def get_full_url(self, item_id: int = None):
         full_url = f"http://{self.base_url}:{self.port}"
@@ -23,9 +24,9 @@ class BaseClient:
 
         return full_url
 
-    def api_request(self, params: dict = None):
+    def api_request(self):
         try:
-            response = requests.get(url=self.get_full_url(), params=params)
+            response = requests.get(url=self.get_full_url(), params=self.params)
             response.raise_for_status()
         except requests.exceptions.HTTPError as http_err:
             self.logger.debug(http_err)
