@@ -1,7 +1,7 @@
 from fastapi import APIRouter, status
 
 from backend.db.preload_db.preload_db import preload_db
-from backend.main import update_hostlibs
+from backend.hl_engine.main import update_hostlibs
 
 
 class RootRouter:

@@ -1,7 +1,5 @@
 import os
 
-from dotenv import load_dotenv
-
 from backend.db.dao.daily_archive_dao import DailyArchiveDao
 from backend.db.dao.edit_archive_dao import EditArchiveDao
 from backend.db.dao.hourly_archive_dao import HourlyArchiveDao
@@ -16,9 +14,8 @@ from backend.hl_engine.daily_engine import DailyEngine
 from backend.hl_engine.edit_engine import EditEngine
 from backend.hl_engine.hourly_engine import HourlyEngine
 from backend.hl_engine.sys_engine import SysEngine
+from backend.settings import backend_settings
 from utils.files_utils import UnzipUtils
-
-load_dotenv()
 
 
 def update_archive(archive_gen, dao, constraint_list: list, chunk_size: int):
@@ -32,8 +29,8 @@ def update_archive(archive_gen, dao, constraint_list: list, chunk_size: int):
 
 def update_hostlibs():
     current_directory = os.getcwd()
-    path = os.path.join(current_directory, os.getenv("HOSTLIBS_PATH"))
-    chunk_size = int(os.getenv("CHUNK_SIZE"))
+    path = os.path.join(current_directory, backend_settings.get("HOSTLIB_PATH"))
+    chunk_size = backend_settings.get("CHUNK_SIZE")
     with UnzipUtils(path) as unzip_utils:
         daily_engine = DailyEngine(path=unzip_utils.temp_path, chunk_size=chunk_size)
         daily_archives_gen = daily_engine.read()

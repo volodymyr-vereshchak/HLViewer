@@ -1,7 +1,5 @@
-import os
 from logging.config import fileConfig
 
-from dotenv import load_dotenv
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 
@@ -39,17 +37,14 @@ from models import (
     SysArchiveCreate,
 )
 
-# Load environment variables from the .env file
-load_dotenv()
+from backend.settings import backend_settings
 
-# Build the SQLAlchemy URL dynamically
-db_username = os.getenv("DB_USERNAME", "default_user")
-db_password = os.getenv("DB_PASSWORD", "default_password")
-db_host = os.getenv("DB_HOST", "localhost")
-db_port = os.getenv("DB_PORT", "5432")
-db_name = os.getenv("DB_NAME", "default_db")
+db_username = backend_settings.get("DB_USERNAME", "default_user")
+db_password = backend_settings.get("DB_PASSWORD", "default_password")
+db_host = backend_settings.get("DB_HOST", "localhost")
+db_port = backend_settings.get("DB_PORT", "5432")
+db_name = backend_settings.get("DB_NAME", "default_db")
 
-# PostgreSQL connection URL
 sqlalchemy_url = (
     f"postgresql://{db_username}:{db_password}@{db_host}:{db_port}/{db_name}"
 )

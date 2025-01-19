@@ -1,13 +1,11 @@
 from fastapi import FastAPI
-from api.endpoints import (
-    day_archive_ep,
+from backend.api.endpoints import (
     lumg_ep,
     root_ep,
     hour_archive_ep,
-    gas_volume_calc_type_ep,
     gas_volume_calc_ep,
 )
-
+from backend.api.endpoints import gas_volume_calc_type_ep, day_archive_ep
 
 tags_metadata = [
     {
