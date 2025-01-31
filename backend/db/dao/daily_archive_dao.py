@@ -9,5 +9,5 @@ class DailyArchiveDao(BasicDao):
 
 
 if __name__ == "__main__":
-    archives = DailyArchiveDao().get_all()
+    archives = DailyArchiveDao().get_range(gas_volume_calc_id=[1, 2])
     pass

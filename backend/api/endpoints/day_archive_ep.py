@@ -22,7 +22,7 @@ class DailyArchiveRouter:
         self,
         from_date: datetime = None,
         to_date: datetime = None,
-        gas_volume_calc_id: int = None,
+        gas_volume_calc_id: list = None,
     ):
         daily_archives_dao = DailyArchiveDao()
         daily_archives = daily_archives_dao.get_range(
