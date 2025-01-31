@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, status, Query
 
 from backend.db.dao.daily_archive_dao import DailyArchiveDao
 from backend.db.models import DailyArchiveList
@@ -20,9 +20,9 @@ class DailyArchiveRouter:
 
     async def get_day_archive(
         self,
-        from_date: datetime = None,
-        to_date: datetime = None,
-        gas_volume_calc_id: list = None,
+        from_date: datetime = Query(None),
+        to_date: datetime = Query(None),
+        gas_volume_calc_id: list[int] = Query(None),
     ):
         daily_archives_dao = DailyArchiveDao()
         daily_archives = daily_archives_dao.get_range(
