@@ -2,7 +2,6 @@ import glob
 import os
 import shutil
 import zipfile
-from struct import calcsize, unpack
 
 from utils.math_utils import round_decimal
 
@@ -58,13 +57,12 @@ def find_files_by_mask(path: str, mask: str) -> list[str]:
     return unpacked_files
 
 
-def read_archive_file(file, file_struct, struct_tuple):
+def read_archive_file(file, file_struct):
     with open(file, "rb") as archive_file:
         while True:
-            data = archive_file.read(calcsize(file_struct))
+            data = archive_file.read(file_struct.size)
             if not data:
                 break
-            file_data = struct_tuple(*unpack(file_struct, data))
-            file_dict = file_data._asdict()
+            file_dict = file_struct.unpack(data)
             file_dict = round_decimal(file_dict)
             yield file_dict

@@ -1,9 +1,9 @@
-from collections import namedtuple
 from datetime import datetime
 
 from backend.db.dao.gas_volume_calc_dao import GasVolumeCalcDao
 from backend.db.dao.sys_type_dao import SysTypeDao
 from backend.db.models import SysArchiveCreate, SysTypeCreate
+from backend.hl_engine.data_classes.sys_dataclass import SysStruct
 from backend.hl_engine.hl_engine import Hostlib
 from utils.files_utils import find_files_by_mask, read_archive_file
 
@@ -13,12 +13,7 @@ class SysEngine(Hostlib):
     def __init__(self, path: str = "./", chunk_size: int = 900) -> None:
         super().__init__(path, chunk_size)
         self.sys_mask = "S*R*A.*"
-        self.SysStruct = namedtuple(
-            "SysStruct",
-            "month day year hour minutes seconds sys_type_id unknown standard_volume",
-            # TODO check struct of sys archive unknown
-        )
-        self.sys_struct = "=BBBBBBHBf"
+        self.sys_struct = SysStruct
         self.create_class = SysArchiveCreate
 
     def read(self):
@@ -39,7 +34,7 @@ class SysEngine(Hostlib):
             sys_list = sys_type_dao.get_by_gas_volume_type_id(gas_volume_calc_type_id)
             sys_dict = {instance.sys_type_id: instance.id for instance in sys_list}
 
-            read_archive_gen = read_archive_file(file, self.sys_struct, self.SysStruct)
+            read_archive_gen = read_archive_file(file, self.sys_struct)
             while True:
                 try:
                     file_dict = next(read_archive_gen)

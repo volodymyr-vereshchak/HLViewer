@@ -1,8 +1,8 @@
-from collections import namedtuple
 from datetime import datetime
 
 from backend.db.dao.gas_volume_calc_dao import GasVolumeCalcDao
 from backend.db.models import HourlyArchiveCreate
+from backend.hl_engine.data_classes.hour_dataclass import HourStruct
 from backend.hl_engine.hl_engine import Hostlib
 from utils.files_utils import find_files_by_mask, read_archive_file
 
@@ -12,11 +12,7 @@ class HourlyEngine(Hostlib):
     def __init__(self, path: str = "./", chunk_size: int = 900) -> None:
         super().__init__(path, chunk_size)
         self.hour_mask = "S*R*R.*"
-        self.HourStruct = namedtuple(
-            "HourStruct",
-            "month day year hour minutes volume unknown w_volume_dp pressure temperature density",
-        )
-        self.hour_struct = "=BBBBBffffff"
+        self.hour_struct = HourStruct
         self.create_class = HourlyArchiveCreate
 
     def read(self):
@@ -32,9 +28,7 @@ class HourlyEngine(Hostlib):
             )
             gas_volume_calc_id = gas_volume_calc.id
 
-            read_archive_gen = read_archive_file(
-                file, self.hour_struct, self.HourStruct
-            )
+            read_archive_gen = read_archive_file(file, self.hour_struct)
             while True:
                 try:
                     file_dict = next(read_archive_gen)

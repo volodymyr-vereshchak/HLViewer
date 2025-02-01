@@ -3,6 +3,7 @@ from datetime import date
 
 from backend.db.dao.gas_volume_calc_dao import GasVolumeCalcDao
 from backend.db.models import DailyArchiveCreate
+from backend.hl_engine.data_classes.day_dataclass import DayStruct
 from backend.hl_engine.hl_engine import Hostlib
 from utils.files_utils import find_files_by_mask, read_archive_file
 
@@ -12,11 +13,7 @@ class DailyEngine(Hostlib):
     def __init__(self, path: str = "./", chunk_size: int = 900) -> None:
         super().__init__(path, chunk_size)
         self.day_mask = "S*R*D.*"
-        self.DayStruct = namedtuple(
-            "DayStruct",
-            "month day year volume unknown w_volume_dp pressure temperature density",
-        )
-        self.day_struct = "=BBBffffff"
+        self.day_struct = DayStruct
         self.create_class = DailyArchiveCreate
 
     def read(self):
@@ -32,7 +29,7 @@ class DailyEngine(Hostlib):
             )
             gas_volume_calc_id = gas_volume_calc.id
 
-            read_archive_gen = read_archive_file(file, self.day_struct, self.DayStruct)
+            read_archive_gen = read_archive_file(file, self.day_struct)
 
             while True:
                 try:

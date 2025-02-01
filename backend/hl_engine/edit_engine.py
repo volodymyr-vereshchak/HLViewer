@@ -1,9 +1,9 @@
-from collections import namedtuple
 from datetime import datetime
 
 from backend.db.dao.edit_type_dao import EditTypeDao
 from backend.db.dao.gas_volume_calc_dao import GasVolumeCalcDao
 from backend.db.models import EditArchiveCreate, EditTypeCreate
+from backend.hl_engine.data_classes.edit_dataclass import EditStruct
 from backend.hl_engine.hl_engine import Hostlib
 from utils.files_utils import find_files_by_mask, read_archive_file
 
@@ -13,12 +13,7 @@ class EditEngine(Hostlib):
     def __init__(self, path: str = "./", chunk_size: int = 900) -> None:
         super().__init__(path, chunk_size)
         self.edit_mask = "S*R*U.*"
-        self.EditStruct = namedtuple(
-            "EditStruct",
-            "month day year hour minutes seconds edit_type_id unknown old_value new_value",
-            # TODO check struct of edit archive unknown
-        )
-        self.edit_struct = "=BBBBBBBBii"
+        self.edit_struct = EditStruct
         self.create_class = EditArchiveCreate
 
     def read(self):
@@ -39,9 +34,7 @@ class EditEngine(Hostlib):
             edit_list = edit_type_dao.get_by_gas_volume_type_id(gas_volume_calc_type_id)
             edit_dict = {instance.edit_type_id: instance.id for instance in edit_list}
 
-            read_archive_gen = read_archive_file(
-                file, self.edit_struct, self.EditStruct
-            )
+            read_archive_gen = read_archive_file(file, self.edit_struct)
             while True:
                 try:
                     file_dict = next(read_archive_gen)
