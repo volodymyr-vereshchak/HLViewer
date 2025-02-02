@@ -61,17 +61,15 @@ class BasicDao:
         self,
         from_date: datetime = None,
         to_date: datetime = None,
-        gas_volume_calc_id: list = None,
+        line_id: list = None,
     ):
         statement = select(self.model)
         if from_date:
             statement = statement.where(self.model.period >= from_date)
         if to_date:
             statement = statement.where(self.model.period <= to_date)
-        if gas_volume_calc_id:
-            statement = statement.where(
-                self.model.gas_vol_calc_id.in_(gas_volume_calc_id)
-            )
+        if line_id:
+            statement = statement.where(self.model.gas_vol_calc_id.in_(line_id))
 
         with self.get_session() as session:
             return session.exec(statement).all()

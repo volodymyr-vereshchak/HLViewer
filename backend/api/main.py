@@ -4,6 +4,7 @@ from backend.api.endpoints import (
     root_ep,
     hour_archive_ep,
     gas_volume_calc_ep,
+    line_ep,
 )
 from backend.api.endpoints import gas_volume_calc_type_ep, day_archive_ep
 
@@ -11,6 +12,14 @@ tags_metadata = [
     {
         "name": "lumg",
         "description": "Operations with lumgs.",
+    },
+    {
+        "name": "Gas volume calcs",
+        "description": "Operations with gas volume calcs.",
+    },
+    {
+        "name": "lines",
+        "description": "Operations with lines.",
     },
     {
         "name": "root",
@@ -34,3 +43,4 @@ app.include_router(lumg_ep.lumg_router)
 app.include_router(root_ep.root_router)
 app.include_router(gas_volume_calc_type_ep.gvct_router)
 app.include_router(gas_volume_calc_ep.gas_volume_calc_router)
+app.include_router(line_ep.line_router)

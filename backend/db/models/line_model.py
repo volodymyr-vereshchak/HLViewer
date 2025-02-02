@@ -50,3 +50,8 @@ class LineList(LineBase):
 
 class LineCreate(LineBase):
     gas_volume_calc_id: int
+
+
+class LineUpdate(LineBase):
+    meter: bool | None
+    name: str | None

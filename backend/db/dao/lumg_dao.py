@@ -1,7 +1,7 @@
 from sqlmodel import select
 
 from backend.db.dao.basic_dao import BasicDao
-from backend.db.models import Lumg
+from backend.db.models import Lumg, LumgCreate
 
 
 class LumgDao(BasicDao):
@@ -9,10 +9,15 @@ class LumgDao(BasicDao):
         super().__init__()
         self.model = Lumg
 
-    def get_lumg_by_name(self, name: str):
+    def get_lumg_by_name_or_create(self, name: str):
         statement = select(self.model).where(self.model.name == name)
         with self.get_session() as session:
-            return session.exec(statement).first()
+            result = session.exec(statement).first()
+
+        if not result:
+            result = self.create_item(LumgCreate(name=name))
+
+        return result
 
 
 if __name__ == "__main__":

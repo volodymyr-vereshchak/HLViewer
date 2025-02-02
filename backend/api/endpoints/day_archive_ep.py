@@ -22,12 +22,10 @@ class DailyArchiveRouter:
         self,
         from_date: datetime = Query(None),
         to_date: datetime = Query(None),
-        gas_volume_calc_id: list[int] = Query(None),
+        line_id: list[int] = Query(None),
     ):
         daily_archives_dao = DailyArchiveDao()
-        daily_archives = daily_archives_dao.get_range(
-            from_date, to_date, gas_volume_calc_id
-        )
+        daily_archives = daily_archives_dao.get_range(from_date, to_date, line_id)
 
         return daily_archives
 

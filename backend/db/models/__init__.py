@@ -53,4 +53,4 @@ from .edit_archive_model import (
     EDIT_ARCHIVE_CONSTRAINT,
 )
 
-from .line_model import Line, LineList, LineCreate, LINE_CONSTRAINT
+from .line_model import Line, LineList, LineCreate, LineUpdate, LINE_CONSTRAINT

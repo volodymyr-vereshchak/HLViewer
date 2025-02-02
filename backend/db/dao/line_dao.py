@@ -9,7 +9,9 @@ class LineDao(BasicDao):
         super().__init__()
         self.model = Line
 
-    def get_line_by_gas_id_and_line_or_create(self, gas_volume_calc_id: int, line: int):
+    def get_line_by_gas_id_and_line_or_create(
+        self, gas_volume_calc_id: int, line: int, meter: bool = False, name: str = None
+    ):
         session_db = self.get_session()
         statement = select(self.model).where(
             (self.model.gas_volume_calc_id == gas_volume_calc_id)
@@ -19,19 +21,26 @@ class LineDao(BasicDao):
             result = session.exec(statement).first()
 
         if not result:
-            result = self.create_default_line(gas_volume_calc_id, line)
-            self.logger.debug(
-                f"No gas volume calc with this address: {address} Created new!"
+            name = name if name else f"l{line}"
+            line = LineCreate(
+                line=line,
+                name=name,
+                gas_volume_calc_id=gas_volume_calc_id,
+                meter=meter,
             )
+            result = self.create_line(line)
+            self.logger.debug(f"No line with this number: {line} Created new!")
 
         return result
 
-    def create_default_line(self, gas_volume_calc_id: int, line: int):
-        line = LineCreate(
-            line=line,
-            name=f"l{line}",
-            gas_volume_calc_id=gas_volume_calc_id,
-            meter=False,
-        )
+    def get_line_by_lumg_id(self, lumg_id: int = None):
+        statement = select(self.model)
+        if lumg_id:
+            statement = statement.where(self.model.gas_volume_calc.lumg_id == lumg_id)
+
+        with self.get_session() as session:
+            return session.exec(statement).all()
+
+    def create_line(self, line: LineCreate):
         line_db = self.create_item(line)
         return line_db

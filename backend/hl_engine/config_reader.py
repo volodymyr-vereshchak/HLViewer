@@ -1,7 +1,8 @@
 from backend.db.dao.custom_exceptions import DatabaseIntegrityError
 from backend.db.dao.gas_volume_calc_dao import GasVolumeCalcDao
+from backend.db.dao.line_dao import LineDao
 from backend.db.dao.lumg_dao import LumgDao
-from backend.db.models import LumgCreate
+from backend.db.models import LumgCreate, GasVolumeCalcCreate
 from backend.hl_engine.data_classes.cfg_dataclass import (
     HeaderStruct,
     GisStruct,
@@ -45,9 +46,9 @@ class ConfigReader:
                         meter_type = line_struct.meter_type
                         lines.append(
                             {
-                                "line_name": line_name,
-                                "line_number": line_number,
-                                "meter_type": meter_type,
+                                "name": line_name,
+                                "line": line_number,
+                                "meter": meter_type,
                             }
                         )
                     gas_volume_calc_data = cfg_file.read(GasVolumeCalcStruct.size)
@@ -59,8 +60,8 @@ class ConfigReader:
                     c_time = 7
                     flows.append(
                         {
-                            "flow_name": flow_name,
-                            "flow_type": flow_type,
+                            "name": flow_name,
+                            "type_id": flow_type,
                             "address": address,
                             "lines": lines,
                             "c_time": c_time,
@@ -72,17 +73,25 @@ class ConfigReader:
     def update_db(self):
         data = self.read()
         lumg_dao = LumgDao()
+        gas_volume_calc_dao = GasVolumeCalcDao()
+        line_dao = LineDao()
         lumg_name = data["lumg_name"]
-        try:
-            lumg_db = lumg_dao.create_item(LumgCreate(name=lumg_name))
-        except DatabaseIntegrityError as e:
-            lumg_db = lumg_dao.get_lumg_by_name(lumg_name)
+        lumg_db = lumg_dao.get_lumg_by_name_or_create(lumg_name)
         lumg_id = lumg_db.id
 
-        gas_volume_calc_dao = GasVolumeCalcDao()
-
         for flow in data["flows"]:
-            pass
+            lines = flow.pop("lines")
+            gas_volume_db = (
+                gas_volume_calc_dao.get_flow_calc_by_address_and_lumg_or_create(
+                    lumg_id=lumg_id, **flow
+                )
+            )
+            gas_volume_id = gas_volume_db.id
+
+            for line in lines:
+                line_db = line_dao.get_line_by_gas_id_and_line_or_create(
+                    gas_volume_calc_id=gas_volume_id, **line
+                )
 
 
 if __name__ == "__main__":
