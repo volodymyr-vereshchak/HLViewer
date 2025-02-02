@@ -2,6 +2,7 @@ from sqlmodel import select
 
 from backend.db.dao.basic_dao import BasicDao
 from backend.db.models import GasVolumeCalc, GasVolumeCalcCreate
+from backend.db.models.gas_volume_calc_model import GasVolumeCalcUpdate
 
 
 class GasVolumeCalcDao(BasicDao):
@@ -24,7 +25,17 @@ class GasVolumeCalcDao(BasicDao):
         with session_db as session:
             result = session.exec(statement).first()
 
-        if not result:
+        if result:
+            gvc = GasVolumeCalcUpdate(
+                address=address,
+                name=name,
+                c_time=c_time,
+                lumg_id=lumg_id,
+                type_id=type_id,
+            )
+            result = self.update_by_id(result.id, gvc)
+
+        else:
             if not name:
                 name = f"a{address}"
             gvc = GasVolumeCalcCreate(

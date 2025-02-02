@@ -1,8 +1,7 @@
-from backend.db.dao.custom_exceptions import DatabaseIntegrityError
 from backend.db.dao.gas_volume_calc_dao import GasVolumeCalcDao
+from backend.db.dao.gas_volume_calc_type_dao import GasVolumeCalcTypeDao
 from backend.db.dao.line_dao import LineDao
 from backend.db.dao.lumg_dao import LumgDao
-from backend.db.models import LumgCreate, GasVolumeCalcCreate
 from backend.hl_engine.data_classes.cfg_dataclass import (
     HeaderStruct,
     GisStruct,
@@ -74,6 +73,7 @@ class ConfigReader:
         data = self.read()
         lumg_dao = LumgDao()
         gas_volume_calc_dao = GasVolumeCalcDao()
+        gas_volume_type_dao = GasVolumeCalcTypeDao()
         line_dao = LineDao()
         lumg_name = data["lumg_name"]
         lumg_db = lumg_dao.get_lumg_by_name_or_create(lumg_name)
@@ -81,6 +81,7 @@ class ConfigReader:
 
         for flow in data["flows"]:
             lines = flow.pop("lines")
+            flow["type_id"] = gas_volume_type_dao.get_by_type_id(flow["type_id"])
             gas_volume_db = (
                 gas_volume_calc_dao.get_flow_calc_by_address_and_lumg_or_create(
                     lumg_id=lumg_id, **flow

@@ -1,7 +1,7 @@
 from sqlmodel import select
 
 from backend.db.dao.basic_dao import BasicDao
-from backend.db.models import Line, LineCreate
+from backend.db.models import Line, LineCreate, LineUpdate
 
 
 class LineDao(BasicDao):
@@ -20,7 +20,16 @@ class LineDao(BasicDao):
         with session_db as session:
             result = session.exec(statement).first()
 
-        if not result:
+        if result:
+            line = LineUpdate(
+                line=line,
+                name=name,
+                gas_volume_calc_id=gas_volume_calc_id,
+                meter=meter,
+            )
+            result = self.update_by_id(result.id, line)
+
+        else:
             name = name if name else f"l{line}"
             line = LineCreate(
                 line=line,

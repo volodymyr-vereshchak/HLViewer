@@ -35,6 +35,10 @@ from db.models import (
     SysArchive,
     SysArchiveList,
     SysArchiveCreate,
+    Line,
+    LineList,
+    LineCreate,
+    LineUpdate,
 )
 
 from settings import backend_settings
