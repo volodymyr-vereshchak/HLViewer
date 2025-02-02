@@ -96,4 +96,4 @@ class ConfigReader:
 
 
 if __name__ == "__main__":
-    ConfigReader(file="D:/Projects/HLViewer/HLViewer/hostlibs/ask.CFG").update_db()
+    ConfigReader(file="backend/db/preload_db/ask.CFG").update_db()
