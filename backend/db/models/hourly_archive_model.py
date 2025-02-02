@@ -31,7 +31,7 @@ class HourlyArchive(HourlyArchiveBase, table=True):
     line_id: int | None = Field(
         default=None, foreign_key="gas_volume_line.id", ondelete="CASCADE"
     )
-    gas_volume_calc: "Line" = Relationship(back_populates="hourly_archives")
+    line: "Line" = Relationship(back_populates="hourly_archives")
 
 
 class HourlyArchiveList(HourlyArchiveBase):

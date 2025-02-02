@@ -35,7 +35,7 @@ class EditArchive(EditArchiveBase, table=True):
     line_id: int | None = Field(
         default=None, foreign_key="gas_volume_line.id", ondelete="CASCADE"
     )
-    gas_volume_calc: "Line" = Relationship(back_populates="edit_archives")
+    line: "Line" = Relationship(back_populates="edit_archives")
 
 
 class EditArchiveList(EditArchiveBase):
