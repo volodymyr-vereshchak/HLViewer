@@ -43,8 +43,8 @@ class GasVolumeCalcRouter:
             status_code=status.HTTP_204_NO_CONTENT,
         )
 
-    async def get_gas_volume_calc(self):
-        gas_volume_calc = GasVolumeCalcDao().get_all()
+    async def get_gas_volume_calc(self, lumg_id: int = None):
+        gas_volume_calc = GasVolumeCalcDao().get_flow_by_lumg_id(lumg_id)
         return gas_volume_calc
 
     async def create_gas_volume_calc(self, gvc: GasVolumeCalcCreate):

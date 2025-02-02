@@ -69,7 +69,7 @@ class BasicDao:
         if to_date:
             statement = statement.where(self.model.period <= to_date)
         if line_id:
-            statement = statement.where(self.model.gas_vol_calc_id.in_(line_id))
+            statement = statement.where(self.model.line_id.in_(line_id))
 
         with self.get_session() as session:
             return session.exec(statement).all()

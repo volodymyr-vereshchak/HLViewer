@@ -10,7 +10,12 @@ class LineDao(BasicDao):
         self.model = Line
 
     def get_line_by_gas_id_and_line_or_create(
-        self, gas_volume_calc_id: int, line: int, meter: bool = False, name: str = None
+        self,
+        gas_volume_calc_id: int,
+        line: int,
+        meter: bool = False,
+        name: str = None,
+        update: bool = False,
     ):
         session_db = self.get_session()
         statement = select(self.model).where(
@@ -20,7 +25,7 @@ class LineDao(BasicDao):
         with session_db as session:
             result = session.exec(statement).first()
 
-        if result:
+        if result and update:
             line = LineUpdate(
                 line=line,
                 name=name,
@@ -28,8 +33,11 @@ class LineDao(BasicDao):
                 meter=meter,
             )
             result = self.update_by_id(result.id, line)
+            self.logger.debug(
+                f"Gas volume id: {gas_volume_calc_id}. Line with this number: {line} was updated!"
+            )
 
-        else:
+        if not result:
             name = name if name else f"l{line}"
             line = LineCreate(
                 line=line,
@@ -43,9 +51,9 @@ class LineDao(BasicDao):
         return result
 
     def get_line_by_lumg_id(self, lumg_id: int = None):
-        statement = select(self.model)
+        statement = select(self.model).join(self.model.gas_volume_calc)
         if lumg_id:
-            statement = statement.where(self.model.gas_volume_calc.lumg_id == lumg_id)
+            statement = statement.where(self.model.gas_volume_calc.has(lumg_id=lumg_id))
 
         with self.get_session() as session:
             return session.exec(statement).all()

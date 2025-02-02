@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, status, Query
 from sqlmodel import select
 
 from backend.db.dao.hourly_archive_dao import HourlyArchiveDao
@@ -20,13 +20,13 @@ class HourlyArchiveRouter:
         )
 
     async def get_hour_archive(
-        self, from_date: datetime = None, to_date: datetime = None
+        self,
+        from_date: datetime = Query(None),
+        to_date: datetime = Query(None),
+        line_id: list = Query(None),
     ):
         hourly_archives_dao = HourlyArchiveDao()
-        if from_date and to_date:
-            hourly_archives = hourly_archives_dao.get_range(from_date, to_date)
-        else:
-            hourly_archives = hourly_archives_dao.get_all()
+        hourly_archives = hourly_archives_dao.get_range(from_date, to_date, line_id)
         return hourly_archives
 
 

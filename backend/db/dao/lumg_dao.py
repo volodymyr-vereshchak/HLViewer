@@ -9,15 +9,15 @@ class LumgDao(BasicDao):
         super().__init__()
         self.model = Lumg
 
-    def get_and_update_lumg_by_name_or_create(self, name: str):
+    def get_and_update_lumg_by_name_or_create(self, name: str, update: bool = False):
         statement = select(self.model).where(self.model.name == name)
         with self.get_session() as session:
             result = session.exec(statement).first()
 
-        if result:
+        if result and update:
             result = self.update_by_id(result.id, LumgUpdate(name=name))
 
-        else:
+        if not result:
             result = self.create_item(LumgCreate(name=name))
 
         return result

@@ -17,6 +17,7 @@ class GasVolumeCalcDao(BasicDao):
         type_id: int = 4,
         c_time: int = 7,
         name: str = None,
+        update: bool = False,
     ):
         session_db = self.get_session()
         statement = select(self.model).where(
@@ -25,7 +26,7 @@ class GasVolumeCalcDao(BasicDao):
         with session_db as session:
             result = session.exec(statement).first()
 
-        if result:
+        if result and update:
             gvc = GasVolumeCalcUpdate(
                 address=address,
                 name=name,
@@ -34,8 +35,11 @@ class GasVolumeCalcDao(BasicDao):
                 type_id=type_id,
             )
             result = self.update_by_id(result.id, gvc)
+            self.logger.debug(
+                f"Gas volume calc with this address: {address} was updated!"
+            )
 
-        else:
+        if not result:
             if not name:
                 name = f"a{address}"
             gvc = GasVolumeCalcCreate(
@@ -55,3 +59,11 @@ class GasVolumeCalcDao(BasicDao):
     def create_flow_calc(self, gvc: GasVolumeCalcCreate):
         gas_volume_calc = self.create_item(gvc)
         return gas_volume_calc
+
+    def get_flow_by_lumg_id(self, lumg_id: int = None):
+        statement = select(self.model)
+        if lumg_id:
+            statement = statement.where(self.model.lumg_id == lumg_id)
+
+        with self.get_session() as session:
+            return session.exec(statement).all()

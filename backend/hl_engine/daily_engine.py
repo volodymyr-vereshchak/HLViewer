@@ -11,11 +11,14 @@ from utils.files_utils import find_files_by_mask, read_archive_file
 
 class DailyEngine(Hostlib):
 
-    def __init__(self, path: str = "./", chunk_size: int = 900) -> None:
+    def __init__(
+        self, path: str = "./", chunk_size: int = 900, lumg_id: int = 1
+    ) -> None:
         super().__init__(path, chunk_size)
         self.day_mask = "S*R*D.*"
         self.day_struct = DayStruct
         self.create_class = DailyArchiveCreate
+        self.lumg_id = lumg_id
 
     def read(self):
         files = find_files_by_mask(self.path, self.day_mask)
@@ -24,8 +27,10 @@ class DailyEngine(Hostlib):
         line_dao = LineDao()
         for file in files:
             flow_params = self.get_params_from_file_name(file)
-            gas_volume_calc = gas_volume_dao.get_flow_calc_by_address_or_create(
-                flow_params["address"]
+            gas_volume_calc = (
+                gas_volume_dao.get_flow_calc_by_address_and_lumg_or_create(
+                    address=flow_params["address"], lumg_id=self.lumg_id
+                )
             )
             gas_volume_calc_id = gas_volume_calc.id
 

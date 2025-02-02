@@ -76,7 +76,7 @@ class ConfigReader:
         gas_volume_type_dao = GasVolumeCalcTypeDao()
         line_dao = LineDao()
         lumg_name = data["lumg_name"]
-        lumg_db = lumg_dao.get_and_update_lumg_by_name_or_create(lumg_name)
+        lumg_db = lumg_dao.get_and_update_lumg_by_name_or_create(lumg_name, update=True)
         lumg_id = lumg_db.id
 
         for flow in data["flows"]:
@@ -84,14 +84,14 @@ class ConfigReader:
             flow["type_id"] = gas_volume_type_dao.get_by_type_id(flow["type_id"])
             gas_volume_db = (
                 gas_volume_calc_dao.get_flow_calc_by_address_and_lumg_or_create(
-                    lumg_id=lumg_id, **flow
+                    lumg_id=lumg_id, **flow, update=True
                 )
             )
             gas_volume_id = gas_volume_db.id
 
             for line in lines:
                 line_db = line_dao.get_line_by_gas_id_and_line_or_create(
-                    gas_volume_calc_id=gas_volume_id, **line
+                    gas_volume_calc_id=gas_volume_id, **line, update=True
                 )
 
 
