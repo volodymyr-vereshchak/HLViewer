@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .edit_type_model import EditType
-    from .gas_volume_calc_model import GasVolumeCalc
+    from .line_model import Line
 
 
 class EditArchiveBase(SQLModel):
@@ -32,10 +32,8 @@ class EditArchive(EditArchiveBase, table=True):
         default=None, foreign_key="edit_type.id", ondelete="CASCADE"
     )
     edit: "EditType" = Relationship(back_populates="edit_archives")
-    gas_vol_calc_id: int | None = Field(
-        default=None, foreign_key="gas_volume_calc.id", ondelete="CASCADE"
-    )
-    gas_volume_calc: "GasVolumeCalc" = Relationship(back_populates="edit_archives")
+    line_id: int | None = Field(default=None, foreign_key="line.id", ondelete="CASCADE")
+    gas_volume_calc: "Line" = Relationship(back_populates="edit_archives")
 
 
 class EditArchiveList(EditArchiveBase):

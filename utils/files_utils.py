@@ -2,6 +2,7 @@ import glob
 import os
 import shutil
 import zipfile
+from dataclasses import asdict
 
 from utils.math_utils import round_decimal
 
@@ -63,6 +64,6 @@ def read_archive_file(file, file_struct):
             data = archive_file.read(file_struct.size)
             if not data:
                 break
-            file_dict = file_struct.unpack(data)
+            file_dict = asdict(file_struct.unpack(data))
             file_dict = round_decimal(file_dict)
             yield file_dict

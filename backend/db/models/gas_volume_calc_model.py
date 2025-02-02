@@ -4,16 +4,11 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .lumg_model import Lumg
     from .gas_volume_calc_type_model import GasVolumeCalcType
-    from .daily_archive_model import DailyArchive
-    from .hourly_archive_model import HourlyArchive
-    from .edit_archive_model import EditArchive
-    from .sys_archive_model import SysArchive
+    from .line_model import Line
 
 
 class GasVolumeCalcBase(SQLModel):
     address: int
-    line: int
-    meter: bool
     name: str = Field(max_length=255, unique=True)
     c_time: int
 
@@ -34,16 +29,7 @@ class GasVolumeCalc(GasVolumeCalcBase, table=True):
         default=None, foreign_key="gas_vol_calc_type.id", ondelete="CASCADE"
     )
     type: "GasVolumeCalcType" = Relationship(back_populates="gas_volume_calcs")
-    daily_archives: list["DailyArchive"] = Relationship(
-        back_populates="gas_volume_calc", cascade_delete=True
-    )
-    hourly_archives: list["HourlyArchive"] = Relationship(
-        back_populates="gas_volume_calc", cascade_delete=True
-    )
-    edit_archives: list["EditArchive"] = Relationship(
-        back_populates="gas_volume_calc", cascade_delete=True
-    )
-    sys_archives: list["SysArchive"] = Relationship(
+    lines: list["Line"] = Relationship(
         back_populates="gas_volume_calc", cascade_delete=True
     )
 
@@ -63,4 +49,3 @@ class GasVolumeCalcUpdate(GasVolumeCalcBase):
     name: str | None = None
     c_time: int | None = None
     address: int | None = None
-    meter: bool | None = None

@@ -25,14 +25,14 @@ class GasVolumeCalcDao(BasicDao):
 
         return result
 
-    def create_default_flow_calc(self, address: int, line: int):
+    def create_default_flow_calc(self, address: int, line: int, lumg_id: int = 1):
         gvc = GasVolumeCalcCreate(
             address=address,
             line=line,
             meter=False,
             name=f"a{address}_l{line}",
             c_time=7,
-            lumg_id=1,
+            lumg_id=lumg_id,
             type_id=4,
         )
         gas_volume_calc = self.create_item(gvc)

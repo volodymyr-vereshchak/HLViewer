@@ -5,7 +5,7 @@ from pydantic import field_validator
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .gas_volume_calc_model import GasVolumeCalc
+    from .line_model import Line
 
 
 class DailyArchiveBase(SQLModel):
@@ -28,15 +28,13 @@ class DailyArchive(DailyArchiveBase, table=True):
         ),
     )
     id: int | None = Field(default=None, primary_key=True)
-    gas_vol_calc_id: int | None = Field(
-        default=None, foreign_key="gas_volume_calc.id", ondelete="CASCADE"
-    )
-    gas_volume_calc: "GasVolumeCalc" = Relationship(back_populates="daily_archives")
+    line_id: int | None = Field(default=None, foreign_key="line.id", ondelete="CASCADE")
+    line: "Line" = Relationship(back_populates="daily_archives")
 
 
 class DailyArchiveList(DailyArchiveBase):
     id: int
-    gas_vol_calc_id: int
+    line_id: int
 
     @field_validator("density")
     def validate_density(cls, value: Decimal):
@@ -46,7 +44,7 @@ class DailyArchiveList(DailyArchiveBase):
 
 
 class DailyArchiveCreate(DailyArchiveBase):
-    gas_vol_calc_id: int
+    line_id: int
 
 
 if __name__ == "__main__":
@@ -58,6 +56,5 @@ if __name__ == "__main__":
         pressure=0,
         temperature=0,
         density=2,
-        gas_vol_calc_id=1,
     )
     pass

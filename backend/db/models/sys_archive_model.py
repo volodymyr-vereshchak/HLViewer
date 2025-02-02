@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .sys_type_model import SysType
-    from .gas_volume_calc_model import GasVolumeCalc
+    from .line_model import Line
 
 
 class SysArchiveBase(SQLModel):
@@ -25,18 +25,16 @@ class SysArchive(SysArchiveBase, table=True):
     id: int | None = Field(default=None, primary_key=True)
     sys_type_id: int = Field(foreign_key="sys_type.id", ondelete="CASCADE")
     sys_type: "SysType" = Relationship(back_populates="sys_archives")
-    gas_vol_calc_id: int | None = Field(
-        default=None, foreign_key="gas_volume_calc.id", ondelete="CASCADE"
-    )
-    gas_volume_calc: "GasVolumeCalc" = Relationship(back_populates="sys_archives")
+    line_id: int | None = Field(default=None, foreign_key="line.id", ondelete="CASCADE")
+    gas_volume_calc: "Line" = Relationship(back_populates="sys_archives")
 
 
 class SysArchiveList(SysArchiveBase):
     id: int
     sys_type_id: int
-    gas_vol_calc_id: int
+    line_id: int
 
 
 class SysArchiveCreate(SysArchiveBase):
     sys_type_id: int
-    gas_vol_calc_id: int
+    line_id: int
