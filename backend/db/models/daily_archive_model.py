@@ -17,7 +17,7 @@ class DailyArchiveBase(SQLModel):
     density: Decimal = Field(decimal_places=3)
 
 
-DAILY_ARCHIVE_CONSTRAINT = ["gas_vol_calc_id", "period", "volume"]
+DAILY_ARCHIVE_CONSTRAINT = ["line_id", "period", "volume"]
 
 
 class DailyArchive(DailyArchiveBase, table=True):
@@ -28,7 +28,9 @@ class DailyArchive(DailyArchiveBase, table=True):
         ),
     )
     id: int | None = Field(default=None, primary_key=True)
-    line_id: int | None = Field(default=None, foreign_key="line.id", ondelete="CASCADE")
+    line_id: int | None = Field(
+        default=None, foreign_key="gas_volume_line.id", ondelete="CASCADE"
+    )
     line: "Line" = Relationship(back_populates="daily_archives")
 
 

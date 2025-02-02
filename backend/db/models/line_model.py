@@ -15,11 +15,11 @@ class LineBase(SQLModel):
     name: str = Field(max_length=255)
 
 
-LINE_CONSTRAINT = ["lumg_id", "address", "line"]
+LINE_CONSTRAINT = ["gas_volume_calc_id", "line"]
 
 
 class Line(LineBase, table=True):
-    __tablename__ = "line"
+    __tablename__ = "gas_volume_line"
     __table_args__ = (
         UniqueConstraint(*LINE_CONSTRAINT, name="line_gas_volume_line_constraint"),
     )
@@ -41,3 +41,12 @@ class Line(LineBase, table=True):
     sys_archives: list["SysArchive"] = Relationship(
         back_populates="line", cascade_delete=True
     )
+
+
+class LineList(LineBase):
+    id: int
+    gas_volume_calc_id: int
+
+
+class LineCreate(LineBase):
+    gas_volume_calc_id: int

@@ -13,7 +13,7 @@ class GasVolumeCalcBase(SQLModel):
     c_time: int
 
 
-GAS_VOLUME_CALC_CONSTRAINT = ["lumg_id", "address", "line"]
+GAS_VOLUME_CALC_CONSTRAINT = ["lumg_id", "address"]
 
 
 class GasVolumeCalc(GasVolumeCalcBase, table=True):

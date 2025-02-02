@@ -9,28 +9,24 @@ class GasVolumeCalcDao(BasicDao):
         super().__init__()
         self.model = GasVolumeCalc
 
-    def get_flow_calc_by_address_and_line_or_create(self, address: int, line: int):
+    def get_flow_calc_by_address_or_create(self, address: int):
         session_db = self.get_session()
-        statement = select(self.model).where(
-            (self.model.address == address) & (self.model.line == line)
-        )
+        statement = select(self.model).where((self.model.address == address))
         with session_db as session:
             result = session.exec(statement).first()
 
         if not result:
-            result = self.create_default_flow_calc(address, line)
+            result = self.create_default_flow_calc(address)
             self.logger.debug(
-                f"No gas volume calc with this address: {address} line: {line}! Created new!"
+                f"No gas volume calc with this address: {address} Created new!"
             )
 
         return result
 
-    def create_default_flow_calc(self, address: int, line: int, lumg_id: int = 1):
+    def create_default_flow_calc(self, address: int, lumg_id: int = 1):
         gvc = GasVolumeCalcCreate(
             address=address,
-            line=line,
-            meter=False,
-            name=f"a{address}_l{line}",
+            name=f"a{address}",
             c_time=7,
             lumg_id=lumg_id,
             type_id=4,

@@ -16,7 +16,7 @@ class EditArchiveBase(SQLModel):
 EDIT_ARCHIVE_CONSTRAINT = [
     "period",
     "edit_id",
-    "gas_vol_calc_id",
+    "line_id",
     "new_value",
     "old_value",
 ]
@@ -32,7 +32,9 @@ class EditArchive(EditArchiveBase, table=True):
         default=None, foreign_key="edit_type.id", ondelete="CASCADE"
     )
     edit: "EditType" = Relationship(back_populates="edit_archives")
-    line_id: int | None = Field(default=None, foreign_key="line.id", ondelete="CASCADE")
+    line_id: int | None = Field(
+        default=None, foreign_key="gas_volume_line.id", ondelete="CASCADE"
+    )
     gas_volume_calc: "Line" = Relationship(back_populates="edit_archives")
 
 

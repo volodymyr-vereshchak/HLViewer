@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from backend.db.dao.gas_volume_calc_dao import GasVolumeCalcDao
+from backend.db.dao.line_dao import LineDao
 from backend.db.models import HourlyArchiveCreate
 from backend.hl_engine.data_classes.hour_dataclass import HourStruct
 from backend.hl_engine.hl_engine import Hostlib
@@ -19,14 +20,19 @@ class HourlyEngine(Hostlib):
         files = find_files_by_mask(self.path, self.hour_mask)
         archive_dict_list = []
         gas_volume_dao = GasVolumeCalcDao()
+        line_dao = LineDao()
         for file in files:
             flow_params = self.get_params_from_file_name(file)
-            gas_volume_calc = (
-                gas_volume_dao.get_flow_calc_by_address_and_line_or_create(
-                    flow_params["address"], flow_params["line"]
-                )
+            gas_volume_calc = gas_volume_dao.get_flow_calc_by_address_or_create(
+                flow_params["address"]
             )
             gas_volume_calc_id = gas_volume_calc.id
+
+            gas_volume_line = line_dao.get_line_by_gas_id_and_line_or_create(
+                gas_volume_calc_id, flow_params["line"]
+            )
+
+            line_id = gas_volume_line.id
 
             read_archive_gen = read_archive_file(file, self.hour_struct)
             while True:
@@ -40,7 +46,7 @@ class HourlyEngine(Hostlib):
                         file_dict["minutes"],
                     )
                     file_dict["period"] = datetime_period
-                    file_dict["gas_vol_calc_id"] = gas_volume_calc_id
+                    file_dict["line_id"] = line_id
                     archive_dict = {
                         key: value
                         for key, value in file_dict.items()

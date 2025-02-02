@@ -14,7 +14,7 @@ class SysArchiveBase(SQLModel):
     standard_volume: Decimal = Field(max_digits=20, decimal_places=3)
 
 
-SYS_ARCHIVE_CONSTRAINT = ["period", "sys_type_id", "gas_vol_calc_id", "standard_volume"]
+SYS_ARCHIVE_CONSTRAINT = ["period", "sys_type_id", "line_id", "standard_volume"]
 
 
 class SysArchive(SysArchiveBase, table=True):
@@ -25,7 +25,9 @@ class SysArchive(SysArchiveBase, table=True):
     id: int | None = Field(default=None, primary_key=True)
     sys_type_id: int = Field(foreign_key="sys_type.id", ondelete="CASCADE")
     sys_type: "SysType" = Relationship(back_populates="sys_archives")
-    line_id: int | None = Field(default=None, foreign_key="line.id", ondelete="CASCADE")
+    line_id: int | None = Field(
+        default=None, foreign_key="gas_volume_line.id", ondelete="CASCADE"
+    )
     gas_volume_calc: "Line" = Relationship(back_populates="sys_archives")
 
 
