@@ -27,33 +27,44 @@ def update_archive(archive_gen, dao, constraint_list: list, chunk_size: int):
             break
 
 
+def update_worker(engine, path: str, archive_dao, constraint, chunk_size: int):
+    archive_engine = engine(path=path, chunk_size=chunk_size)
+    archives_gen = archive_engine.read()
+    update_archive(archives_gen, archive_dao, constraint, chunk_size)
+
+
 def update_hostlibs():
     current_directory = os.getcwd()
     path = os.path.join(current_directory, backend_settings.get("HOSTLIB_PATH"))
     chunk_size = backend_settings.get("CHUNK_SIZE")
     with UnzipUtils(path) as unzip_utils:
-        daily_engine = DailyEngine(path=unzip_utils.temp_path, chunk_size=chunk_size)
-        daily_archives_gen = daily_engine.read()
-        update_archive(
-            daily_archives_gen, DailyArchiveDao, DAILY_ARCHIVE_CONSTRAINT, chunk_size
+        update_worker(
+            DailyEngine,
+            unzip_utils.temp_path,
+            DailyArchiveDao,
+            DAILY_ARCHIVE_CONSTRAINT,
+            chunk_size,
         )
-
-        hourly_engine = HourlyEngine(path=unzip_utils.temp_path, chunk_size=chunk_size)
-        hourly_archives_gen = hourly_engine.read()
-        update_archive(
-            hourly_archives_gen, HourlyArchiveDao, HOURLY_ARCHIVE_CONSTRAINT, chunk_size
+        update_worker(
+            HourlyEngine,
+            unzip_utils.temp_path,
+            HourlyArchiveDao,
+            HOURLY_ARCHIVE_CONSTRAINT,
+            chunk_size,
         )
-
-        edit_engine = EditEngine(path=unzip_utils.temp_path, chunk_size=chunk_size)
-        edit_archives_gen = edit_engine.read()
-        update_archive(
-            edit_archives_gen, EditArchiveDao, EDIT_ARCHIVE_CONSTRAINT, chunk_size
+        update_worker(
+            EditEngine,
+            unzip_utils.temp_path,
+            EditArchiveDao,
+            EDIT_ARCHIVE_CONSTRAINT,
+            chunk_size,
         )
-
-        sys_engine = SysEngine(path=unzip_utils.temp_path, chunk_size=chunk_size)
-        sys_archives_gen = sys_engine.read()
-        update_archive(
-            sys_archives_gen, SysArchiveDao, SYS_ARCHIVE_CONSTRAINT, chunk_size
+        update_worker(
+            SysEngine,
+            unzip_utils.temp_path,
+            SysArchiveDao,
+            SYS_ARCHIVE_CONSTRAINT,
+            chunk_size,
         )
 
 
