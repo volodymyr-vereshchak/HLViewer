@@ -31,20 +31,16 @@ class BasicDao:
         self,
         list_of_dict_data: list,
         list_of_constraints: list[str],
-        chunk_size: int = 900,
     ):
-        chunks = [
-            list_of_dict_data[i : i + chunk_size]
-            for i in range(0, len(list_of_dict_data), chunk_size)
-        ]
         with self.get_session() as session:
             try:
-                for chunk in chunks:
-                    stmt = insert(self.model).values([instance for instance in chunk])
-                    stmt = stmt.on_conflict_do_nothing(
-                        index_elements=list_of_constraints,
-                    )
-                    session.execute(stmt)
+                stmt = insert(self.model).values(
+                    [instance for instance in list_of_dict_data]
+                )
+                stmt = stmt.on_conflict_do_nothing(
+                    index_elements=list_of_constraints,
+                )
+                session.execute(stmt)
                 session.commit()
             except Exception as e:
                 session.rollback()
