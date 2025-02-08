@@ -23,9 +23,7 @@ def bulk_upsert_worker(archives_list, dao, constraint_list):
     dao().bulk_upsert(archives_list, constraint_list)
 
 
-def update_archive(
-    archive_gen, dao, constraint_list: list, chunk_size: int, max_processes=5
-):
+def update_archive(archive_gen, dao, constraint_list: list, max_processes=5):
     with multiprocessing.Pool(max_processes) as pool:
         tasks = []
 
@@ -48,7 +46,7 @@ def update_archive(
 def update_worker(engine, path: str, archive_dao, constraint, chunk_size: int):
     archive_engine = engine(path=path, chunk_size=chunk_size)
     archives_gen = archive_engine.read()
-    update_archive(archives_gen, archive_dao, constraint, chunk_size)
+    update_archive(archives_gen, archive_dao, constraint)
 
 
 def update_hostlibs():
