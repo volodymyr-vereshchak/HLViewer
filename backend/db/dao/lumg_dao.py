@@ -25,6 +25,7 @@ class LumgDao(BasicDao):
         result = self.get(name)
         if not result:
             result = self.create_item(LumgCreate(name=name))
+            pass
 
         return result
 
