@@ -81,18 +81,19 @@ class ConfigReader:
 
         for flow in data["flows"]:
             lines = flow.pop("lines")
-            flow["type_id"] = gas_volume_type_dao.get_by_type_id(flow["type_id"])
-            gas_volume_db = (
-                gas_volume_calc_dao.get_flow_calc_by_address_and_lumg_or_create(
-                    lumg_id=lumg_id, **flow, update=True
+            type_id = gas_volume_type_dao.get_by_type_id(flow["type_id"])
+            if type_id:
+                flow["type_id"] = type_id
+                gas_volume_db = gas_volume_calc_dao.update_if_exists(
+                    lumg_id=lumg_id, **flow
                 )
-            )
-            gas_volume_id = gas_volume_db.id
+                if gas_volume_db:
+                    gas_volume_id = gas_volume_db.id
 
-            for line in lines:
-                line_db = line_dao.get_line_by_gas_id_and_line_or_create(
-                    gas_volume_calc_id=gas_volume_id, **line, update=True
-                )
+                    for line in lines:
+                        line_db = line_dao.update_if_exists(
+                            gas_volume_calc_id=gas_volume_id, **line
+                        )
 
 
 if __name__ == "__main__":

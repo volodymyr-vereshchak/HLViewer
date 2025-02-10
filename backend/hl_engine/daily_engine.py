@@ -27,14 +27,12 @@ class DailyEngine(Hostlib):
         line_dao = LineDao()
         for file in files:
             flow_params = self.get_params_from_file_name(file)
-            gas_volume_calc = (
-                gas_volume_dao.get_flow_calc_by_address_and_lumg_or_create(
-                    address=flow_params["address"], lumg_id=self.lumg_id
-                )
+            gas_volume_calc = gas_volume_dao.get_or_create(
+                address=flow_params["address"], lumg_id=self.lumg_id
             )
             gas_volume_calc_id = gas_volume_calc.id
 
-            gas_volume_line = line_dao.get_line_by_gas_id_and_line_or_create(
+            gas_volume_line = line_dao.get_or_create(
                 gas_volume_calc_id, flow_params["line"]
             )
 

@@ -10,23 +10,25 @@ class GasVolumeCalcDao(BasicDao):
         super().__init__()
         self.model = GasVolumeCalc
 
-    def get_flow_calc_by_address_and_lumg_or_create(
-        self,
-        address: int,
-        lumg_id: int,
-        type_id: int = 4,
-        c_time: int = 7,
-        name: str = None,
-        update: bool = False,
-    ):
+    def get(self, address: int, lumg_id: int):
         session_db = self.get_session()
         statement = select(self.model).where(
             (self.model.address == address) & (self.model.lumg_id == lumg_id)
         )
         with session_db as session:
             result = session.exec(statement).first()
+        return result
 
-        if result and update:
+    def update_if_exists(
+        self,
+        address: int,
+        lumg_id: int,
+        type_id: int = 4,
+        c_time: int = 7,
+        name: str = None,
+    ):
+        result = self.get(address=address, lumg_id=lumg_id)
+        if result:
             gvc = GasVolumeCalcUpdate(
                 address=address,
                 name=name,
@@ -38,6 +40,17 @@ class GasVolumeCalcDao(BasicDao):
             self.logger.debug(
                 f"Gas volume calc with this address: {address} was updated!"
             )
+        return result
+
+    def get_or_create(
+        self,
+        address: int,
+        lumg_id: int,
+        type_id: int = 4,
+        c_time: int = 7,
+        name: str = None,
+    ):
+        result = self.get(address=address, lumg_id=lumg_id)
 
         if not result:
             if not name:
