@@ -1,5 +1,3 @@
-from time import sleep
-
 from sqlmodel import select
 
 from backend.db.dao.basic_dao import BasicDao
@@ -64,7 +62,6 @@ class LineDao(BasicDao):
                 result = self.create_line(line_inst)
                 self.logger.debug(f"No line with this number: {line} Created new!")
             except DatabaseIntegrityError:
-                sleep(1)
                 self.logger.debug(f"Line with this number: {line} is created!")
                 result = self.get(gas_volume_calc_id=gas_volume_calc_id, line=line)
 

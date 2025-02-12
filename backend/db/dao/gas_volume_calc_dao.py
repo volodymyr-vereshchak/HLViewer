@@ -69,7 +69,6 @@ class GasVolumeCalcDao(BasicDao):
                     f"No gas volume calc with this address: {address} Created new!"
                 )
             except DatabaseIntegrityError:
-                sleep(1)
                 self.logger.debug(
                     f"Gas volume calc with this address: {address} is created!"
                 )

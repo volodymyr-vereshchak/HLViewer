@@ -23,14 +23,14 @@ def bulk_upsert_worker(archives_list, dao, constraint_list):
     dao().bulk_upsert(archives_list, constraint_list)
 
 
-def update_archive(archive_gen, dao, constraint_list: list, max_processes=5):
+def update_archive(archive_gen, dao, constraint_list: list, max_processes=10):
     with multiprocessing.Pool(max_processes) as pool:
         tasks = []
 
         while True:
             try:
                 archives_list = next(archive_gen)
-                task = pool.apply_async(
+                task = pool.apply(
                     bulk_upsert_worker,
                     (archives_list, dao, constraint_list),
                 )
@@ -62,23 +62,10 @@ def update_hostlibs():
             (SysEngine, SysArchiveDao, SYS_ARCHIVE_CONSTRAINT),
         ]
 
-        processes = []
         for engine, archive_dao, constraint in workers:
-            p = multiprocessing.Process(
-                target=update_worker,
-                args=(
-                    engine,
-                    unzip_utils.temp_path,
-                    archive_dao,
-                    constraint,
-                    chunk_size,
-                ),
+            update_worker(
+                engine, unzip_utils.temp_path, archive_dao, constraint, chunk_size
             )
-            p.start()
-            processes.append(p)
-
-        for p in processes:
-            p.join()
 
 
 if __name__ == "__main__":
