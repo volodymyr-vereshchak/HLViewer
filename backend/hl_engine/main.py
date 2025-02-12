@@ -30,7 +30,7 @@ def update_archive(archive_gen, dao, constraint_list: list, max_processes=10):
         while True:
             try:
                 archives_list = next(archive_gen)
-                task = pool.apply(
+                task = pool.apply_async(
                     bulk_upsert_worker,
                     (archives_list, dao, constraint_list),
                 )
@@ -40,7 +40,7 @@ def update_archive(archive_gen, dao, constraint_list: list, max_processes=10):
                 break
 
         for task in tasks:
-            task.wait()
+            task.get()
 
 
 def update_worker(engine, path: str, archive_dao, constraint, chunk_size: int):
