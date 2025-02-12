@@ -20,7 +20,7 @@ class BaseArchiveRouter:
         self,
         from_date: datetime = Query(None),
         to_date: datetime = Query(None),
-        line_id: list = Query(None),
+        line_id: list[int] = Query(None),
     ):
         archive_dao = self.archive_dao()
         archives = archive_dao.get_range(from_date, to_date, line_id)

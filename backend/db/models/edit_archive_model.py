@@ -41,9 +41,9 @@ class EditArchive(EditArchiveBase, table=True):
 class EditArchiveList(EditArchiveBase):
     id: int
     edit_id: int
-    gas_vol_calc_id: int
+    line_id: int
 
 
 class EditArchiveCreate(EditArchiveBase):
     edit_id: int
-    gas_vol_calc_id: int
+    line_id: int
