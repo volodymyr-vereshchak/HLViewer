@@ -26,7 +26,7 @@ class SysArchive(SysArchiveBase, table=True):
     sys_type_id: int = Field(foreign_key="sys_type.id", ondelete="CASCADE")
     sys_type: "SysType" = Relationship(back_populates="sys_archives")
     line_id: int | None = Field(
-        default=None, foreign_key="gas_volume_line.id", ondelete="CASCADE"
+        default=None, foreign_key="gas_volume_line.id", ondelete="CASCADE", index=True
     )
     line: "Line" = Relationship(back_populates="sys_archives")
 

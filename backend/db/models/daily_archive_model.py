@@ -29,7 +29,7 @@ class DailyArchive(DailyArchiveBase, table=True):
     )
     id: int | None = Field(default=None, primary_key=True)
     line_id: int | None = Field(
-        default=None, foreign_key="gas_volume_line.id", ondelete="CASCADE"
+        default=None, foreign_key="gas_volume_line.id", ondelete="CASCADE", index=True
     )
     line: "Line" = Relationship(back_populates="daily_archives")
 

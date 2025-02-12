@@ -1,6 +1,7 @@
 from sqlmodel import select
 
 from backend.db.dao.basic_dao import BasicDao
+from backend.db.dao.custom_exceptions import DatabaseIntegrityError
 from backend.db.models import GasVolumeCalc, GasVolumeCalcCreate
 from backend.db.models.gas_volume_calc_model import GasVolumeCalcUpdate
 
@@ -62,10 +63,17 @@ class GasVolumeCalcDao(BasicDao):
                 lumg_id=lumg_id,
                 type_id=type_id,
             )
-            result = self.create_flow_calc(gvc)
-            self.logger.debug(
-                f"No gas volume calc with this address: {address} Created new!"
-            )
+            try:
+                result = self.create_flow_calc(gvc)
+                self.logger.debug(
+                    f"No gas volume calc with this address: {address} Created new!"
+                )
+            except DatabaseIntegrityError:
+                sleep(1)
+                self.logger.debug(
+                    f"Gas volume calc with this address: {address} is created!"
+                )
+                result = self.get(address=address, lumg_id=lumg_id)
 
         return result
 

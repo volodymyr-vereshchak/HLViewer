@@ -77,7 +77,7 @@ class ConfigReader:
         line_dao = LineDao()
         lumg_name = data["lumg_name"]
         lumg_db = lumg_dao.update_if_exist(lumg_name)
-        lumg_id = lumg_db.id
+        lumg_id = 1  # lumg_db.id
 
         for flow in data["flows"]:
             lines = flow.pop("lines")

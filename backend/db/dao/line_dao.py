@@ -1,6 +1,9 @@
+from time import sleep
+
 from sqlmodel import select
 
 from backend.db.dao.basic_dao import BasicDao
+from backend.db.dao.custom_exceptions import DatabaseIntegrityError
 from backend.db.models import Line, LineCreate, LineUpdate
 
 
@@ -51,14 +54,19 @@ class LineDao(BasicDao):
 
         if not result:
             name = name if name else f"l{line}"
-            line = LineCreate(
+            line_inst = LineCreate(
                 line=line,
                 name=name,
                 gas_volume_calc_id=gas_volume_calc_id,
                 meter=meter,
             )
-            result = self.create_line(line)
-            self.logger.debug(f"No line with this number: {line} Created new!")
+            try:
+                result = self.create_line(line_inst)
+                self.logger.debug(f"No line with this number: {line} Created new!")
+            except DatabaseIntegrityError:
+                sleep(1)
+                self.logger.debug(f"Line with this number: {line} is created!")
+                result = self.get(gas_volume_calc_id=gas_volume_calc_id, line=line)
 
         return result
 

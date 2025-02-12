@@ -33,7 +33,7 @@ class EditArchive(EditArchiveBase, table=True):
     )
     edit: "EditType" = Relationship(back_populates="edit_archives")
     line_id: int | None = Field(
-        default=None, foreign_key="gas_volume_line.id", ondelete="CASCADE"
+        default=None, foreign_key="gas_volume_line.id", ondelete="CASCADE", index=True
     )
     line: "Line" = Relationship(back_populates="edit_archives")
 
