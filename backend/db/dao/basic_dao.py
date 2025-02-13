@@ -136,6 +136,7 @@ class BasicDao:
             statement = select(
                 func.date_trunc("hour", self.model.period).label("hour_group"),
                 func.count().label("record_count"),
+                self.model.line_id,
             )
 
             if from_date:
@@ -145,10 +146,16 @@ class BasicDao:
             if line_id:
                 statement = statement.where(self.model.line_id.in_(line_id))
 
-            statement = statement.group_by("hour_group").order_by("hour_group")
+            statement = statement.group_by(self.model.line_id, "hour_group").order_by(
+                self.model.line_id, "hour_group"
+            )
 
             results = session.exec(statement).all()
         return [
-            {"hour_group": row.hour_group, "record_count": row.record_count}
+            {
+                "hour_group": row.hour_group,
+                "line_id": row.line_id,
+                "record_count": row.record_count,
+            }
             for row in results
         ]
