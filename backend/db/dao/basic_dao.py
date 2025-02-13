@@ -1,6 +1,7 @@
 from contextlib import contextmanager
 from datetime import datetime
 
+from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert
 from sqlmodel import select
 from sqlalchemy.exc import IntegrityError
@@ -57,7 +58,7 @@ class BasicDao:
         self,
         from_date: datetime = None,
         to_date: datetime = None,
-        line_id: list = None,
+        line_id: list[int] = None,
     ):
         statement = select(self.model)
         if from_date:
@@ -124,3 +125,30 @@ class BasicDao:
         )
         with self.get_session() as session:
             return session.exec(statement).all()
+
+    def get_data_counts_by_hour(
+        self,
+        from_date: datetime = None,
+        to_date: datetime = None,
+        line_id: list[int] = None,
+    ):
+        with self.get_session() as session:
+            statement = select(
+                func.date_trunc("hour", self.model.period).label("hour_group"),
+                func.count().label("record_count"),
+            )
+
+            if from_date:
+                statement = statement.where(self.model.period >= from_date)
+            if to_date:
+                statement = statement.where(self.model.period <= to_date)
+            if line_id:
+                statement = statement.where(self.model.line_id.in_(line_id))
+
+            statement = statement.group_by("hour_group").order_by("hour_group")
+
+            results = session.exec(statement).all()
+        return [
+            {"hour_group": row.hour_group, "record_count": row.record_count}
+            for row in results
+        ]

@@ -15,6 +15,13 @@ class BaseArchiveRouter:
             methods=["GET"],
             status_code=status.HTTP_200_OK,
         )
+        self.router.add_api_route(
+            path=path[:-1] + "_counts/",
+            endpoint=self.get_archive_counts,
+            tags=tags,
+            methods=["GET"],
+            status_code=status.HTTP_200_OK,
+        )
 
     async def get_archive(
         self,
@@ -25,3 +32,13 @@ class BaseArchiveRouter:
         archive_dao = self.archive_dao()
         archives = archive_dao.get_range(from_date, to_date, line_id)
         return archives
+
+    async def get_archive_counts(
+        self,
+        from_date: datetime = Query(None),
+        to_date: datetime = Query(None),
+        line_id: list[int] = Query(None),
+    ):
+        return self.archive_dao().get_data_counts_by_hour(
+            from_date=from_date, to_date=to_date, line_id=line_id
+        )
