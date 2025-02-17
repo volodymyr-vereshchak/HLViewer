@@ -1,13 +1,12 @@
 from datetime import datetime
 
 from fastapi import APIRouter, status, Query
-from backend.db.engine import DbEngine
+from backend.db.engine import DbEngine, async_session_factory
 
 
 class BaseArchiveRouter:
     def __init__(self, path: str, archive_list_class, tags: list[str], archive_dao):
         self.router = APIRouter()
-        self.session_factory = DbEngine().get_session()
         self.archive_dao = archive_dao
         self.router.add_api_route(
             path=path,
@@ -31,7 +30,7 @@ class BaseArchiveRouter:
         to_date: datetime = Query(None),
         line_id: list[int] = Query(None),
     ):
-        async with self.session_factory as session:
+        async with async_session_factory() as session:
             archive_dao = self.archive_dao(session=session)
             archives = await archive_dao.get_range(from_date, to_date, line_id)
             return archives
@@ -42,7 +41,7 @@ class BaseArchiveRouter:
         to_date: datetime = Query(None),
         line_id: list[int] = Query(None),
     ):
-        async with self.session_factory as session:
+        async with async_session_factory() as session:
             return await self.archive_dao(session=session).get_data_counts_by_hour(
                 from_date=from_date, to_date=to_date, line_id=line_id
             )

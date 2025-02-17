@@ -3,7 +3,7 @@ from fastapi import APIRouter, status, HTTPException
 from backend.db.dao.custom_exceptions import DatabaseIntegrityError
 from backend.db.dao.gas_volume_calc_dao import GasVolumeCalcDao
 from backend.db.dao.gas_volume_calc_type_dao import GasVolumeCalcTypeDao
-from backend.db.engine import DbEngine
+from backend.db.engine import DbEngine, async_session_factory
 from backend.db.models import GasVolumeCalcList, GasVolumeCalcCreate
 from backend.db.models.gas_volume_calc_model import GasVolumeCalcUpdate
 
@@ -11,7 +11,6 @@ from backend.db.models.gas_volume_calc_model import GasVolumeCalcUpdate
 class GasVolumeCalcRouter:
     def __init__(self):
         self.router = APIRouter()
-        self.session_factory = DbEngine().get_session()
         self.router.add_api_route(
             path="/gas_volume_calcs/",
             tags=["Gas volume calcs"],
@@ -46,7 +45,7 @@ class GasVolumeCalcRouter:
         )
 
     async def get_gas_volume_calc(self, lumg_id: int = None):
-        async with self.session_factory as session:
+        async with async_session_factory() as session:
             gas_volume_calc = await GasVolumeCalcDao(
                 session=session
             ).get_flow_by_lumg_id(lumg_id)
@@ -54,7 +53,7 @@ class GasVolumeCalcRouter:
 
     async def create_gas_volume_calc(self, gvc: GasVolumeCalcCreate):
         try:
-            async with self.session_factory as session:
+            async with async_session_factory() as session:
                 gas_volume_calc = await GasVolumeCalcDao(session=session).create_item(
                     gvc
                 )
@@ -65,7 +64,7 @@ class GasVolumeCalcRouter:
     async def update_gas_volume_calc(
         self, gas_volume_calc_id: int, gas_volume_calc: GasVolumeCalcUpdate
     ):
-        async with self.session_factory as session:
+        async with async_session_factory() as session:
             gas_volume_calc_db = await GasVolumeCalcDao(session=session).update_by_id(
                 gas_volume_calc_id, gas_volume_calc
             )
@@ -74,7 +73,7 @@ class GasVolumeCalcRouter:
         return gas_volume_calc_db
 
     async def delete_gas_volume_calc(self, gas_volume_calc_id: int):
-        async with self.session_factory as session:
+        async with async_session_factory() as session:
             delete_gas_volume_calc = await GasVolumeCalcTypeDao(
                 session=session
             ).delete_item(gas_volume_calc_id)

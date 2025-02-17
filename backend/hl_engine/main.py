@@ -6,7 +6,7 @@ from backend.db.dao.daily_archive_dao import DailyArchiveDao
 from backend.db.dao.edit_archive_dao import EditArchiveDao
 from backend.db.dao.hourly_archive_dao import HourlyArchiveDao
 from backend.db.dao.sys_archive_dao import SysArchiveDao
-from backend.db.engine import DbEngine
+from backend.db.engine import DbEngine, async_session_factory
 from backend.db.models import (
     DAILY_ARCHIVE_CONSTRAINT,
     HOURLY_ARCHIVE_CONSTRAINT,
@@ -22,7 +22,7 @@ from utils.files_utils import UnzipUtils
 
 
 async def bulk_upsert_worker(archives_list, dao, constraint_list):
-    async with DbEngine().async_session_factory() as session:
+    async with async_session_factory() as session:
         await dao(session=session).bulk_upsert(archives_list, constraint_list)
 
 

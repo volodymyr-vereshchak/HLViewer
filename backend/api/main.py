@@ -9,6 +9,7 @@ from backend.api.endpoints import (
     sys_archive_ep,
 )
 from backend.api.endpoints import gas_volume_calc_type_ep, day_archive_ep
+from backend.db.engine import DbEngine
 
 tags_metadata = [
     {
@@ -44,7 +45,6 @@ tags_metadata = [
         "description": "Operations with all sys archives.",
     },
 ]
-
 app = FastAPI(openapi_tags=tags_metadata)
 
 app.include_router(day_archive_ep.daily_router)

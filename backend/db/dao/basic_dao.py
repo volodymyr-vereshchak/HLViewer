@@ -133,7 +133,8 @@ class BasicDao:
         statement = statement.group_by("hour_group").order_by("hour_group")
 
         results = await self.session.execute(statement)
-        results = results.scalars().all()
+        results = results.all()
+
         return [
             {
                 "hour_group": row.hour_group,

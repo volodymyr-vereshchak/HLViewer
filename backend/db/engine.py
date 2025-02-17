@@ -19,15 +19,8 @@ class DbEngine:
 
         self.engine = create_async_engine(self.postgres_url, echo=True)
         self.async_session_factory = async_sessionmaker(
-            self.engine, class_=AsyncSession, expire_on_commit=False
+            self.engine, expire_on_commit=False
         )
 
-    async def get_session(self):
-        async with self.async_session_factory() as session:
-            try:
-                yield session
-            except Exception as exc:
-                await session.rollback()
-                raise exc
-            finally:
-                await session.close()
+
+async_session_factory = DbEngine().async_session_factory
