@@ -1,6 +1,6 @@
 import asyncio
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, status, HTTPException
 
 from backend.db.engine import DbEngine, async_session_factory
 from backend.db.preload_db.preload_db import preload_db
@@ -31,7 +31,10 @@ class RootRouter:
 
     async def update_data(self):
         if self.lock.locked():
-            return {"message": "Update is already in progress. Please try again later."}
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Update is already in progress. Please try again later.",
+            )
 
         async with self.lock:
             async with async_session_factory() as session:
