@@ -40,6 +40,7 @@ class RootRouter:
             async with async_session_factory() as session:
                 try:
                     await update_hostlibs(session=session)
+                    return {"message": "Updated"}
                 except Exception as e:
                     self.logger.error(
                         f"Unexpected error occurred while update_hostlibs: {e}",
