@@ -1,3 +1,4 @@
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from backend.db.dao.basic_dao import BasicDao
@@ -7,20 +8,18 @@ from backend.db.models.gas_volume_calc_model import GasVolumeCalcUpdate
 
 
 class GasVolumeCalcDao(BasicDao):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, session: AsyncSession):
+        super().__init__(session=session)
         self.model = GasVolumeCalc
 
-    def get(self, address: int, lumg_id: int):
-        session_db = self.get_session()
+    async def get(self, address: int, lumg_id: int):
         statement = select(self.model).where(
             (self.model.address == address) & (self.model.lumg_id == lumg_id)
         )
-        with session_db as session:
-            result = session.exec(statement).first()
-        return result
+        result = await self.session.execute(statement)
+        return result.scalars().first()
 
-    def update_if_exists(
+    async def update_if_exists(
         self,
         address: int,
         lumg_id: int,
@@ -28,7 +27,7 @@ class GasVolumeCalcDao(BasicDao):
         c_time: int = 7,
         name: str = None,
     ):
-        result = self.get(address=address, lumg_id=lumg_id)
+        result = await self.get(address=address, lumg_id=lumg_id)
         if result:
             gvc = GasVolumeCalcUpdate(
                 address=address,
@@ -37,13 +36,13 @@ class GasVolumeCalcDao(BasicDao):
                 lumg_id=lumg_id,
                 type_id=type_id,
             )
-            result = self.update_by_id(result.id, gvc)
+            result = await self.update_by_id(result.id, gvc)
             self.logger.debug(
                 f"Gas volume calc with this address: {address} was updated!"
             )
         return result
 
-    def get_or_create(
+    async def get_or_create(
         self,
         address: int,
         lumg_id: int,
@@ -51,7 +50,7 @@ class GasVolumeCalcDao(BasicDao):
         c_time: int = 7,
         name: str = None,
     ):
-        result = self.get(address=address, lumg_id=lumg_id)
+        result = await self.get(address=address, lumg_id=lumg_id)
 
         if not result:
             if not name:
@@ -64,7 +63,7 @@ class GasVolumeCalcDao(BasicDao):
                 type_id=type_id,
             )
             try:
-                result = self.create_flow_calc(gvc)
+                result = await self.create_flow_calc(gvc)
                 self.logger.debug(
                     f"No gas volume calc with this address: {address} Created new!"
                 )
@@ -72,18 +71,18 @@ class GasVolumeCalcDao(BasicDao):
                 self.logger.debug(
                     f"Gas volume calc with this address: {address} is created!"
                 )
-                result = self.get(address=address, lumg_id=lumg_id)
+                result = await self.get(address=address, lumg_id=lumg_id)
 
         return result
 
-    def create_flow_calc(self, gvc: GasVolumeCalcCreate):
-        gas_volume_calc = self.create_item(gvc)
+    async def create_flow_calc(self, gvc: GasVolumeCalcCreate):
+        gas_volume_calc = await self.create_item(gvc)
         return gas_volume_calc
 
-    def get_flow_by_lumg_id(self, lumg_id: int = None):
+    async def get_flow_by_lumg_id(self, lumg_id: int = None):
         statement = select(self.model)
         if lumg_id:
             statement = statement.where(self.model.lumg_id == lumg_id)
 
-        with self.get_session() as session:
-            return session.exec(statement).all()
+        result = await self.session.execute(statement)
+        return result.scalars().all()

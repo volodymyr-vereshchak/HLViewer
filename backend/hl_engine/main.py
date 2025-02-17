@@ -1,10 +1,12 @@
-import multiprocessing
+import asyncio
 import os
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.dao.daily_archive_dao import DailyArchiveDao
 from backend.db.dao.edit_archive_dao import EditArchiveDao
 from backend.db.dao.hourly_archive_dao import HourlyArchiveDao
 from backend.db.dao.sys_archive_dao import SysArchiveDao
+from backend.db.engine import DbEngine
 from backend.db.models import (
     DAILY_ARCHIVE_CONSTRAINT,
     HOURLY_ARCHIVE_CONSTRAINT,
@@ -19,37 +21,30 @@ from backend.settings import backend_settings
 from utils.files_utils import UnzipUtils
 
 
-def bulk_upsert_worker(archives_list, dao, constraint_list):
-    dao().bulk_upsert(archives_list, constraint_list)
+async def bulk_upsert_worker(archives_list, dao, constraint_list):
+    async with DbEngine().async_session_factory() as session:
+        await dao(session=session).bulk_upsert(archives_list, constraint_list)
 
 
-def update_archive(archive_gen, dao, constraint_list: list, max_processes=10):
-    with multiprocessing.Pool(max_processes) as pool:
-        tasks = []
+async def update_archive(archive_gen, dao, constraint_list: list, session):
+    tasks = []
 
-        while True:
-            try:
-                archives_list = next(archive_gen)
-                task = pool.apply_async(
-                    bulk_upsert_worker,
-                    (archives_list, dao, constraint_list),
-                )
-                tasks.append(task)
+    async for archives_list in archive_gen:
+        task = bulk_upsert_worker(archives_list, dao, constraint_list)
+        tasks.append(task)
 
-            except StopIteration:
-                break
-
-        for task in tasks:
-            task.get()
+    await asyncio.gather(*tasks)
 
 
-def update_worker(engine, path: str, archive_dao, constraint, chunk_size: int):
-    archive_engine = engine(path=path, chunk_size=chunk_size)
+async def update_worker(
+    engine, path: str, archive_dao, constraint, chunk_size: int, session: AsyncSession
+):
+    archive_engine = engine(path=path, chunk_size=chunk_size, session=session)
     archives_gen = archive_engine.read()
-    update_archive(archives_gen, archive_dao, constraint)
+    await update_archive(archives_gen, archive_dao, constraint, session)
 
 
-def update_hostlibs():
+async def update_hostlibs(session: AsyncSession):
     current_directory = os.getcwd()
     path = os.path.join(current_directory, backend_settings.get("HOSTLIB_PATH"))
     chunk_size = backend_settings.get("CHUNK_SIZE")
@@ -63,8 +58,13 @@ def update_hostlibs():
         ]
 
         for engine, archive_dao, constraint in workers:
-            update_worker(
-                engine, unzip_utils.temp_path, archive_dao, constraint, chunk_size
+            await update_worker(
+                engine,
+                unzip_utils.temp_path,
+                archive_dao,
+                constraint,
+                chunk_size,
+                session,
             )
 
 

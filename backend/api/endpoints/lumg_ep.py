@@ -2,6 +2,7 @@ from fastapi import APIRouter, status, HTTPException
 
 from backend.db.dao.custom_exceptions import DatabaseIntegrityError
 from backend.db.dao.lumg_dao import LumgDao
+from backend.db.engine import DbEngine
 from backend.db.models import LumgCreate, LumgList
 from backend.db.models.lumg_model import LumgUpdate
 
@@ -9,6 +10,7 @@ from backend.db.models.lumg_model import LumgUpdate
 class LumgRouter:
     def __init__(self):
         self.router = APIRouter()
+        self.session_factory = DbEngine().get_session()
         self.router.add_api_route(
             path="/lumgs/",
             tags=["lumg"],
@@ -43,24 +45,28 @@ class LumgRouter:
         )
 
     async def get_lumgs(self):
-        lumgs = LumgDao().get_all()
+        async with self.session_factory as session:
+            lumgs = await LumgDao(session=session).get_all()
         return lumgs
 
     async def create_lumg(self, lumg: LumgCreate):
         try:
-            lumg = LumgDao().create_item(lumg)
+            async with self.session_factory as session:
+                lumg = await LumgDao(session=session).create_item(lumg)
         except DatabaseIntegrityError as e:
             raise HTTPException(status_code=409, detail=str(e))
         return lumg
 
     async def update_lumg(self, lumg_id: int, lumg: LumgUpdate):
-        lumg_db = LumgDao().update_by_id(lumg_id, lumg)
+        async with self.session_factory as session:
+            lumg_db = await LumgDao(session=session).update_by_id(lumg_id, lumg)
         if not lumg_db:
             raise HTTPException(status_code=404, detail="Lumg not found")
         return lumg_db
 
     async def delete_lumg(self, lumg_id: int):
-        delete_lumg = LumgDao().delete_item(lumg_id)
+        async with self.session_factory as session:
+            delete_lumg = await LumgDao(session=session).delete_item(lumg_id)
         if not delete_lumg:
             raise HTTPException(status_code=404, detail="Lumg not found")
         return {"ok": True}

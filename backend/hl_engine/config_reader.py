@@ -69,29 +69,29 @@ class ConfigReader:
                 result = {"lumg_name": lumg_name, "flows": flows}
                 return result
 
-    def update_db(self):
+    async def update_db(self):
         data = self.read()
         lumg_dao = LumgDao()
         gas_volume_calc_dao = GasVolumeCalcDao()
         gas_volume_type_dao = GasVolumeCalcTypeDao()
         line_dao = LineDao()
         lumg_name = data["lumg_name"]
-        lumg_db = lumg_dao.update_if_exist(lumg_name)
+        lumg_db = await lumg_dao.update_if_exist(lumg_name)
         lumg_id = 1  # lumg_db.id
 
         for flow in data["flows"]:
             lines = flow.pop("lines")
-            type_id = gas_volume_type_dao.get_by_type_id(flow["type_id"])
+            type_id = await gas_volume_type_dao.get_by_type_id(flow["type_id"])
             if type_id:
                 flow["type_id"] = type_id
-                gas_volume_db = gas_volume_calc_dao.update_if_exists(
+                gas_volume_db = await gas_volume_calc_dao.update_if_exists(
                     lumg_id=lumg_id, **flow
                 )
                 if gas_volume_db:
                     gas_volume_id = gas_volume_db.id
 
                     for line in lines:
-                        line_db = line_dao.update_if_exists(
+                        line_db = await line_dao.update_if_exists(
                             gas_volume_calc_id=gas_volume_id, **line
                         )
 

@@ -12,9 +12,9 @@ from backend.db.models import (
 from backend.db.models.gas_volume_calc_type_model import GAS_VOLUME_CALC_TYPE_CONSTRAINT
 
 
-def preload_db():
+async def preload_db():
     new_lumg = LumgCreate(name="ЗЛВУМГ")
-    LumgDao().create_item(new_lumg)
+    await LumgDao().create_item(new_lumg)
     path = "backend/db/preload_db/FLOWTYPE.json"
     with open(path, "r", encoding="utf8") as file:
         flow_type = json.load(file)["FLOWTYPE"]
@@ -23,9 +23,11 @@ def preload_db():
         {"type_id": flow_dict["ID_TYPE"], "type_name": flow_dict["TYPENAME"].strip()}
         for flow_dict in flow_type
     ]
-    GasVolumeCalcTypeDao().bulk_upsert(instance_list, GAS_VOLUME_CALC_TYPE_CONSTRAINT)
+    await GasVolumeCalcTypeDao().bulk_upsert(
+        instance_list, GAS_VOLUME_CALC_TYPE_CONSTRAINT
+    )
     type_id_dict = {
-        type_id: GasVolumeCalcTypeDao().get_by_type_id(type_id)
+        type_id: await GasVolumeCalcTypeDao().get_by_type_id(type_id)
         for type_id in unique_type_id_calc
     }
 
@@ -40,7 +42,7 @@ def preload_db():
         }
         for flow_dict in flow_type
     ]
-    EditTypeDao().bulk_upsert(instance_list, EDIT_TYPE_CONSTRAINT)
+    await EditTypeDao().bulk_upsert(instance_list, EDIT_TYPE_CONSTRAINT)
 
     path = "backend/db/preload_db/SYSNAME.json"
     with open(path, "r", encoding="utf8") as file:
@@ -53,7 +55,7 @@ def preload_db():
         }
         for flow_dict in flow_type
     ]
-    SysTypeDao().bulk_upsert(instance_list, SYS_TYPE_CONSTRAINT)
+    await SysTypeDao().bulk_upsert(instance_list, SYS_TYPE_CONSTRAINT)
 
 
 if __name__ == "__main__":

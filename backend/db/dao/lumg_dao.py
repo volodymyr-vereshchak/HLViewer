@@ -1,3 +1,4 @@
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from backend.db.dao.basic_dao import BasicDao
@@ -5,26 +6,25 @@ from backend.db.models import Lumg, LumgCreate, LumgUpdate
 
 
 class LumgDao(BasicDao):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, session: AsyncSession):
+        super().__init__(session=session)
         self.model = Lumg
 
-    def get(self, name: str):
+    async def get(self, name: str):
         statement = select(self.model).where(self.model.name == name)
-        with self.get_session() as session:
-            result = session.exec(statement).first()
-        return result
+        result = await self.session.execute(statement)
+        return result.scalars().first()
 
-    def update_if_exist(self, name: str):
-        result = self.get(name)
+    async def update_if_exist(self, name: str):
+        result = await self.get(name)
         if result:
-            result = self.update_by_id(result.id, LumgUpdate(name=name))
+            result = await self.update_by_id(result.id, LumgUpdate(name=name))
         return result
 
-    def get_or_create(self, name: str):
-        result = self.get(name)
+    async def get_or_create(self, name: str):
+        result = await self.get(name)
         if not result:
-            result = self.create_item(LumgCreate(name=name))
+            result = await self.create_item(LumgCreate(name=name))
 
         return result
 

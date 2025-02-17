@@ -1,60 +1,47 @@
-from contextlib import contextmanager
 from datetime import datetime
 
 from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 from sqlalchemy.exc import IntegrityError
 
-from backend.db.engine import DbEngine
 from utils.logger import logger_setup
 from backend.db.dao.custom_exceptions import DatabaseIntegrityError
 
 
 class BasicDao:
-    def __init__(self):
+    def __init__(self, session: AsyncSession):
         self.model = None
         self.logger = logger_setup("backend")
+        self.session = session
 
-    @staticmethod
-    @contextmanager
-    def get_session():
-        session = DbEngine().get_session()
-        try:
-            yield session
-        except Exception as exc:
-            session.rollback()
-            raise exc
-        finally:
-            session.close()
-
-    def bulk_upsert(
+    async def bulk_upsert(
         self,
         list_of_dict_data: list,
         list_of_constraints: list[str],
     ):
-        with self.get_session() as session:
-            try:
-                stmt = insert(self.model).values(
-                    [instance for instance in list_of_dict_data]
-                )
-                stmt = stmt.on_conflict_do_nothing(
-                    index_elements=list_of_constraints,
-                )
-                session.execute(stmt)
-                session.commit()
-            except Exception as e:
-                session.rollback()
-                self.logger.error(
-                    f"Unexpected error occurred while bulk upsert: {e}", exc_info=True
-                )
-                raise
+        try:
+            stmt = insert(self.model).values(
+                [instance for instance in list_of_dict_data]
+            )
+            stmt = stmt.on_conflict_do_nothing(
+                index_elements=list_of_constraints,
+            )
+            await self.session.execute(stmt)
+            await self.session.commit()
+        except Exception as e:
+            self.logger.error(
+                f"Unexpected error occurred while bulk upsert: {e}", exc_info=True
+            )
+            await self.session.rollback()
+            raise
 
-    def get_all(self):
-        with self.get_session() as session:
-            return session.exec(select(self.model)).all()
+    async def get_all(self):
+        result = await self.session.execute(select(self.model))
+        return result.scalars().all()
 
-    def get_range(
+    async def get_range(
         self,
         from_date: datetime = None,
         to_date: datetime = None,
@@ -68,86 +55,85 @@ class BasicDao:
         if line_id:
             statement = statement.where(self.model.line_id.in_(line_id))
 
-        with self.get_session() as session:
-            return session.exec(statement).all()
+        result = await self.session.execute(statement)
+        return result.scalars().all()
 
-    def get_by_id(self, item_id: int):
-        with self.get_session() as session:
-            return session.get(self.model, item_id)
+    async def get_by_id(self, item_id: int):
+        result = await self.session.get(self.model, item_id)
+        return result
 
-    def update_by_id(self, item_id: int, item):
-        item_db = self.get_by_id(item_id)
+    async def update_by_id(self, item_id: int, item):
+        item_db = await self.get_by_id(item_id)
         if item_db:
             item_data = item.model_dump(exclude_unset=True)
-            item_db.sqlmodel_update(item_data)
-            with self.get_session() as session:
-                try:
-                    session.add(item_db)
-                    session.commit()
-                    session.refresh(item_db)
-                except Exception as e:
-                    session.rollback()
-                    self.logger.error(
-                        f"Unexpected error occurred while update: {e}", exc_info=True
-                    )
-                    raise
+            for key, value in item_data.items():
+                setattr(item_db, key, value)
+
+            try:
+                self.session.add(item_db)
+                await self.session.commit()
+                await self.session.refresh(item_db)
+            except Exception as e:
+                await self.session.rollback()
+                self.logger.error(
+                    f"Unexpected error occurred while updating: {e}", exc_info=True
+                )
+                raise
         return item_db
 
-    def create_item(self, item):
+    async def create_item(self, item):
         db_item = self.model.model_validate(item)
-        with self.get_session() as session:
-            try:
-                session.add(db_item)
-                session.commit()
-                session.refresh(db_item)
-            except IntegrityError as e:
-                self.logger.exception(e)
-                session.rollback()
-                raise DatabaseIntegrityError("Create item integrity error!")
-            except Exception as e:
-                session.rollback()
-                self.logger.error(f"Unexpected error occurred: {e}", exc_info=True)
-                raise
+        try:
+            self.session.add(db_item)
+            await self.session.commit()
+            await self.session.refresh(db_item)
+        except IntegrityError as e:
+            self.logger.exception(e)
+            await self.session.rollback()
+            raise DatabaseIntegrityError("Create item integrity error!")
+        except Exception as e:
+            await self.session.rollback()
+            self.logger.error(f"Unexpected error occurred: {e}", exc_info=True)
+            raise
         return db_item
 
-    def delete_item(self, item_id: int):
+    async def delete_item(self, item_id: int):
         db_item = self.get_by_id(item_id)
         if db_item:
-            with self.get_session() as session:
-                session.delete(db_item)
-                session.commit()
+            await self.session.delete(db_item)
+            await self.session.commit()
             return True
         return False
 
-    def get_by_gas_volume_type_id(self, gas_volume_type_id: int):
+    async def get_by_gas_volume_type_id(self, gas_volume_type_id: int):
         statement = select(self.model).where(
             self.model.gas_volume_calc_type_id == gas_volume_type_id
         )
-        with self.get_session() as session:
-            return session.exec(statement).all()
+        result = await self.session.execute(statement)
+        return result.scalars().all()
 
-    def get_data_counts_by_hour(
+    async def get_data_counts_by_hour(
         self,
         from_date: datetime = None,
         to_date: datetime = None,
         line_id: list[int] = None,
     ):
-        with self.get_session() as session:
-            statement = select(
-                func.date_trunc("hour", self.model.period).label("hour_group"),
-                func.count().label("record_count"),
-            )
+        statement = select(
+            func.date_trunc("hour", self.model.period).label("hour_group"),
+            func.count().label("record_count"),
+        )
 
-            if from_date:
-                statement = statement.where(self.model.period >= from_date)
-            if to_date:
-                statement = statement.where(self.model.period <= to_date)
-            if line_id:
-                statement = statement.where(self.model.line_id.in_(line_id))
+        if from_date:
+            statement = statement.where(self.model.period >= from_date)
+        if to_date:
+            statement = statement.where(self.model.period <= to_date)
+        if line_id:
+            statement = statement.where(self.model.line_id.in_(line_id))
 
-            statement = statement.group_by("hour_group").order_by("hour_group")
+        statement = statement.group_by("hour_group").order_by("hour_group")
 
-            results = session.exec(statement).all()
+        results = await self.session.execute(statement)
+        results = results.scalars().all()
         return [
             {
                 "hour_group": row.hour_group,
