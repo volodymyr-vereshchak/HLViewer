@@ -79,3 +79,8 @@ class LineDao(BasicDao):
     async def create_line(self, line: LineCreate):
         line_db = await self.create_item(line)
         return line_db
+
+    async def get_line_name_by_id(self, id_line: int):
+        statement = select(self.model).where((self.model.id == id_line))
+        result = await self.session.execute(statement)
+        return result.scalars().first().name

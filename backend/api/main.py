@@ -1,3 +1,5 @@
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI
 from backend.api.endpoints import (
     lumg_ep,
@@ -9,7 +11,7 @@ from backend.api.endpoints import (
     sys_archive_ep,
 )
 from backend.api.endpoints import gas_volume_calc_type_ep, day_archive_ep
-from backend.db.engine import DbEngine
+from backend.hl_engine.hostlib_updater import HostlibUpdater
 
 tags_metadata = [
     {
@@ -46,6 +48,12 @@ tags_metadata = [
     },
 ]
 app = FastAPI(openapi_tags=tags_metadata)
+
+
+scheduler = AsyncIOScheduler()
+trigger = CronTrigger(hour="*/2", minute=30)
+scheduler.add_job(HostlibUpdater().update_and_send_notification, trigger)
+scheduler.start()
 
 app.include_router(day_archive_ep.daily_router)
 app.include_router(hour_archive_ep.hourly_router)

@@ -10,6 +10,9 @@ backend_settings = {
     "DB_HOST": os.getenv("DB_HOST"),
     "DB_PORT": os.getenv("DB_PORT"),
     "POSTGRES_DB": os.getenv("POSTGRES_DB"),
-    "HOSTLIB_PATH": os.getenv("HOSTLIBS_PATH"),
-    "CHUNK_SIZE": int(os.getenv("CHUNK_SIZE")),
+    "HOSTLIB_PATH": "hostlibs/",
+    "CHUNK_SIZE": 1000,
+    "BOT_TOKEN": os.getenv("BOT_TOKEN"),
+    "CHAT_ID": os.getenv("CHAT_ID"),
+    "LINES_IDS": [4, 1, 8, 9, 25, 24, 23, 22, 20, 10, 12, 19, 21, 16, 15],
 }

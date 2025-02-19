@@ -41,6 +41,12 @@ class BasicDao:
         result = await self.session.execute(select(self.model))
         return result.scalars().all()
 
+    async def get_last_period(self):
+        result = await self.session.execute(
+            select(self.model).order_by(self.model.id.desc()).limit(1)
+        )
+        return result.scalars().first().period
+
     async def get_range(
         self,
         from_date: datetime = None,
