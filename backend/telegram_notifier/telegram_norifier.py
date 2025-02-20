@@ -15,7 +15,9 @@ class TelegramNotifier:
     async def send_message(self, message):
         try:
             async with self.bot as bot:
-                await bot.send_message(chat_id=self.chat_id, text=message)
+                await bot.send_message(
+                    chat_id=self.chat_id, text=message, parse_mode="HTML"
+                )
 
         except Exception as e:
             self.logger.error(f"Failed to send message to {self.chat_id}:\n{e}")

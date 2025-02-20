@@ -83,4 +83,4 @@ class LineDao(BasicDao):
     async def get_line_name_by_id(self, id_line: int):
         statement = select(self.model).where((self.model.id == id_line))
         result = await self.session.execute(statement)
-        return result.scalars().first().name
+        return result.scalars().first()

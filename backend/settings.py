@@ -15,4 +15,5 @@ backend_settings = {
     "BOT_TOKEN": os.getenv("BOT_TOKEN"),
     "CHAT_ID": os.getenv("CHAT_ID"),
     "LINES_IDS": [4, 1, 8, 9, 25, 24, 23, 22, 20, 10, 12, 19, 21, 16, 15],
+    "HIGH_P_LINES_IDS": [1, 4, 10, 12, 16],
 }
