@@ -59,7 +59,7 @@ class TelegramUserDao(BasicDao):
         return False
 
     async def get_all_user_ids(self):
-        statement = select(self.model.user_id)
+        statement = select(self.model.user_id).where(self.model.active)
         result = await self.session.execute(statement)
         ids_list = result.scalars().all()
         return ids_list
