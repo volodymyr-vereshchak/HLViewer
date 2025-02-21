@@ -32,7 +32,7 @@ class TelegramBot:
                     message.from_user.id
                 )
             if result:
-                await message.answer("Вы подписаны на уведомления по ГРС!")
+                await message.answer("Вы подписались на уведомления по ГРС!")
             else:
                 await message.answer("Вы уже подписаны на обновления!")
         except Exception as e:
