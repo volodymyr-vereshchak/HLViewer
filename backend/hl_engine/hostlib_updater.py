@@ -32,7 +32,7 @@ class HostlibUpdater:
         df_lines = df[df.line_id.isin(lines)]
         volume_lines = df_lines.volume.sum()
         start_lines = df_lines.period.min()
-        end_lines = df_lines.period.max()
+        end_lines = df_lines.period.max() + timedelta(hours=1)
         message += f"{start_lines.strftime('%d-%m-%Y %H:%M')} - {end_lines.strftime('%d-%m-%Y %H:%M')}\n\n"
         message += "<b>ГРС</b> всего: {:,} м³;\n\n".format(volume_lines).replace(
             ",", " "
@@ -65,8 +65,7 @@ class HostlibUpdater:
         await self.update_hostlibs()
         async with async_session_factory() as session:
             end = await HourlyArchiveDao(session=session).get_last_period()
-            end += timedelta(hours=1)
-            start = end - timedelta(hours=24)
+            start = end - timedelta(hours=23)
             result = await HourlyArchiveDao(session=session).get_range(
                 from_date=start, to_date=end
             )
