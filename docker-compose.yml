@@ -4,8 +4,11 @@ services:
     container_name: postgres_db
     env_file:
       - .env
+    networks:
+      - hostlib_network
     ports:
       - "5432:5432"
+    restart: always
 
   fastapi:
     build:
@@ -20,5 +23,12 @@ services:
       - "8000:8000"
     depends_on:
       - db
+    networks:
+      - hostlib_network
     command: >
       sh -c "./wait_for_it.sh db:5432 -- sh -c 'cd backend && alembic upgrade head && cd .. && uvicorn backend.api.main:app --host 0.0.0.0 --port 8000'"
+    restart: always
+
+networks:
+  hostlib_network:
+    external: true

@@ -65,7 +65,8 @@ class HostlibUpdater:
         await self.update_hostlibs()
         async with async_session_factory() as session:
             end = await HourlyArchiveDao(session=session).get_last_period()
-            start = end - timedelta(hours=23)
+            end += timedelta(hours=1)
+            start = end - timedelta(hours=24)
             result = await HourlyArchiveDao(session=session).get_range(
                 from_date=start, to_date=end
             )
