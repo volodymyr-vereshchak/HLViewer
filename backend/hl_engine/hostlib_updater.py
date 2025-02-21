@@ -10,7 +10,7 @@ from backend.db.dao.line_dao import LineDao
 from backend.db.engine import async_session_factory
 from backend.db.models import HourlyArchiveList
 from backend.settings import backend_settings
-from backend.telegram_notifier.telegram_norifier import TelegramNotifier
+from backend.telegram_notifier.telegram_norifier import TelegramBot
 
 
 class HostlibUpdater:
@@ -21,7 +21,7 @@ class HostlibUpdater:
 
     @staticmethod
     async def send_telegram_message(message: str):
-        await TelegramNotifier().send_message(message)
+        await TelegramBot().send_updates(message)
 
     @staticmethod
     async def create_message(df: pd.DataFrame):

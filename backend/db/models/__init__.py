@@ -54,3 +54,5 @@ from .edit_archive_model import (
 )
 
 from .line_model import Line, LineList, LineCreate, LineUpdate, LINE_CONSTRAINT
+
+from .telegram_user_model import TelegramUser, TelegramUserList, TelegramUserCreate

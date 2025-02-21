@@ -39,6 +39,9 @@ from db.models import (
     LineList,
     LineCreate,
     LineUpdate,
+    TelegramUser,
+    TelegramUserList,
+    TelegramUserCreate,
 )
 
 from settings import backend_settings

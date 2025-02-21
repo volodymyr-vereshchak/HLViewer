@@ -1,7 +1,10 @@
+import asyncio
+
 from backend.db.dao.gas_volume_calc_dao import GasVolumeCalcDao
 from backend.db.dao.gas_volume_calc_type_dao import GasVolumeCalcTypeDao
 from backend.db.dao.line_dao import LineDao
 from backend.db.dao.lumg_dao import LumgDao
+from backend.db.engine import async_session_factory
 from backend.hl_engine.data_classes.cfg_dataclass import (
     HeaderStruct,
     GisStruct,
@@ -71,30 +74,31 @@ class ConfigReader:
 
     async def update_db(self):
         data = self.read()
-        lumg_dao = LumgDao()
-        gas_volume_calc_dao = GasVolumeCalcDao()
-        gas_volume_type_dao = GasVolumeCalcTypeDao()
-        line_dao = LineDao()
-        lumg_name = data["lumg_name"]
-        lumg_db = await lumg_dao.update_if_exist(lumg_name)
-        lumg_id = 1  # lumg_db.id
+        async with async_session_factory() as session:
+            lumg_dao = LumgDao(session=session)
+            gas_volume_calc_dao = GasVolumeCalcDao(session=session)
+            gas_volume_type_dao = GasVolumeCalcTypeDao(session=session)
+            line_dao = LineDao(session=session)
+            lumg_name = data["lumg_name"]
+            lumg_db = await lumg_dao.update_if_exist(lumg_name)
+            lumg_id = 1  # lumg_db.id
 
-        for flow in data["flows"]:
-            lines = flow.pop("lines")
-            type_id = await gas_volume_type_dao.get_by_type_id(flow["type_id"])
-            if type_id:
-                flow["type_id"] = type_id
-                gas_volume_db = await gas_volume_calc_dao.update_if_exists(
-                    lumg_id=lumg_id, **flow
-                )
-                if gas_volume_db:
-                    gas_volume_id = gas_volume_db.id
+            for flow in data["flows"]:
+                lines = flow.pop("lines")
+                type_id = await gas_volume_type_dao.get_by_type_id(flow["type_id"])
+                if type_id:
+                    flow["type_id"] = type_id
+                    gas_volume_db = await gas_volume_calc_dao.update_if_exists(
+                        lumg_id=lumg_id, **flow
+                    )
+                    if gas_volume_db:
+                        gas_volume_id = gas_volume_db.id
 
-                    for line in lines:
-                        line_db = await line_dao.update_if_exists(
-                            gas_volume_calc_id=gas_volume_id, **line
-                        )
+                        for line in lines:
+                            line_db = await line_dao.update_if_exists(
+                                gas_volume_calc_id=gas_volume_id, **line
+                            )
 
 
 if __name__ == "__main__":
-    ConfigReader(file="backend/db/preload_db/ask.CFG").update_db()
+    asyncio.run(ConfigReader(file="backend/db/preload_db/ask.CFG").update_db())

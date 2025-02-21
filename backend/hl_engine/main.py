@@ -70,4 +70,8 @@ async def update_hostlibs(session: AsyncSession):
 
 if __name__ == "__main__":
     # path_dir = "D:/Projects/HLViewer/HLViewer/develop_data/ASK/hostlib"
-    update_hostlibs()
+    async def update():
+        async with async_session_factory() as session:
+            await update_hostlibs(session=session)
+
+    asyncio.run(update())

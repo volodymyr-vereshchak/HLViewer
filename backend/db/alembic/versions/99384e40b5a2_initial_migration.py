@@ -1,8 +1,8 @@
 """initial migration
 
-Revision ID: b8f214414390
+Revision ID: 99384e40b5a2
 Revises: 
-Create Date: 2025-02-12 18:21:53.551712
+Create Date: 2025-02-21 12:59:35.405519
 
 """
 from alembic import op
@@ -11,7 +11,7 @@ import sqlmodel             # NEW
 
 
 # revision identifiers, used by Alembic.
-revision = 'b8f214414390'
+revision = '99384e40b5a2'
 down_revision = None
 branch_labels = None
 depends_on = None
@@ -31,6 +31,13 @@ def upgrade():
     sa.Column('id', sa.Integer(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('name')
+    )
+    op.create_table('telegram_users',
+    sa.Column('user_id', sa.Integer(), nullable=False),
+    sa.Column('active', sa.Boolean(), nullable=False),
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('user_id')
     )
     op.create_table('edit_type',
     sa.Column('edit_type_id', sa.Integer(), nullable=False),
@@ -151,6 +158,7 @@ def downgrade():
     op.drop_table('sys_type')
     op.drop_table('gas_volume_calc')
     op.drop_table('edit_type')
+    op.drop_table('telegram_users')
     op.drop_table('lumg')
     op.drop_table('gas_vol_calc_type')
     # ### end Alembic commands ###
