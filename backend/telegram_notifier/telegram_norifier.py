@@ -80,9 +80,7 @@ class TelegramBot:
     async def run(self):
         """Run bot"""
         try:
-            self.logger.info("Запуск бота...")
             await self.dp.start_polling(self.bot)
-            self.logger.info("Бот запущен")
         except Exception as e:
             self.logger.error(f"Ошибка запуска бота: {e}")
 
