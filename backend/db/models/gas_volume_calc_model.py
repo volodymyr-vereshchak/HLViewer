@@ -1,5 +1,7 @@
-from sqlmodel import SQLModel, Field, Relationship, UniqueConstraint
+from sqlmodel import Field, Relationship, UniqueConstraint
 from typing import TYPE_CHECKING
+
+from .base_model import HlBaseModel
 
 if TYPE_CHECKING:
     from .lumg_model import Lumg
@@ -7,7 +9,7 @@ if TYPE_CHECKING:
     from .line_model import Line
 
 
-class GasVolumeCalcBase(SQLModel):
+class GasVolumeCalcBase(HlBaseModel):
     address: int
     name: str = Field(max_length=255, unique=True)
     c_time: int

@@ -1,13 +1,14 @@
-from sqlmodel import SQLModel
 from sqlmodel import Field, Relationship
 
 from typing import TYPE_CHECKING
+
+from .base_model import HlBaseModel
 
 if TYPE_CHECKING:
     from .gas_volume_calc_model import GasVolumeCalc
 
 
-class LumgBase(SQLModel):
+class LumgBase(HlBaseModel):
     name: str = Field(max_length=255, unique=True)
 
 

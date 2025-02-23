@@ -1,14 +1,16 @@
-from sqlmodel import SQLModel, Field, Relationship, UniqueConstraint
+from sqlmodel import Field, Relationship, UniqueConstraint
 from datetime import datetime
 from decimal import Decimal
 from pydantic import field_validator
 from typing import TYPE_CHECKING
 
+from .base_model import HlBaseModel
+
 if TYPE_CHECKING:
     from .line_model import Line
 
 
-class HourlyArchiveBase(SQLModel):
+class HourlyArchiveBase(HlBaseModel):
     period: datetime = Field(index=True)
     volume: Decimal = Field(decimal_places=3)
     w_volume_dp: Decimal = Field(decimal_places=3)

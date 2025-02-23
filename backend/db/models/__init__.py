@@ -1,4 +1,5 @@
 from .lumg_model import Lumg, LumgBase, LumgList, LumgCreate, LumgUpdate
+from .base_model import HlBaseModel
 from .gas_volume_calc_model import (
     GasVolumeCalc,
     GasVolumeCalcBase,

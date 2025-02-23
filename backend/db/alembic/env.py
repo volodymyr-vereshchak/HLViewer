@@ -6,6 +6,7 @@ from sqlalchemy import pool
 from alembic import context
 from sqlmodel import SQLModel
 from db.models import (
+    HlBaseModel,
     Lumg,
     LumgCreate,
     LumgList,

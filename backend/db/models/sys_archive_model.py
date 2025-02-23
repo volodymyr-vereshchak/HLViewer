@@ -1,15 +1,17 @@
 from decimal import Decimal
 
-from sqlmodel import SQLModel, Field, Relationship, UniqueConstraint
+from sqlmodel import Field, Relationship, UniqueConstraint
 from datetime import datetime
 from typing import TYPE_CHECKING
+
+from .base_model import HlBaseModel
 
 if TYPE_CHECKING:
     from .sys_type_model import SysType
     from .line_model import Line
 
 
-class SysArchiveBase(SQLModel):
+class SysArchiveBase(HlBaseModel):
     period: datetime = Field(index=True)
     standard_volume: Decimal = Field(max_digits=20, decimal_places=3)
 

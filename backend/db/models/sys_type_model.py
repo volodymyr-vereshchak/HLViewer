@@ -1,12 +1,14 @@
-from sqlmodel import SQLModel, Field, Relationship, UniqueConstraint
+from sqlmodel import Field, Relationship, UniqueConstraint
 from typing import TYPE_CHECKING
+
+from .base_model import HlBaseModel
 
 if TYPE_CHECKING:
     from .gas_volume_calc_type_model import GasVolumeCalcType
     from .sys_archive_model import SysArchive
 
 
-class SysTypeBase(SQLModel):
+class SysTypeBase(HlBaseModel):
     sys_type_id: int
     sys_name: str
 

@@ -1,12 +1,14 @@
-from sqlmodel import SQLModel, Field, Relationship, UniqueConstraint
+from sqlmodel import Field, Relationship, UniqueConstraint
 from typing import TYPE_CHECKING
+
+from .base_model import HlBaseModel
 
 if TYPE_CHECKING:
     from .gas_volume_calc_type_model import GasVolumeCalcType
     from .edit_archive_model import EditArchive
 
 
-class EditTypeBase(SQLModel):
+class EditTypeBase(HlBaseModel):
     edit_type_id: int
     edit_name: str = Field(max_length=255)
 

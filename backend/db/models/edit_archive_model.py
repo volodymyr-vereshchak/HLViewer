@@ -1,13 +1,15 @@
-from sqlmodel import SQLModel, Field, Relationship, UniqueConstraint
+from sqlmodel import Field, Relationship, UniqueConstraint
 from datetime import datetime
 from typing import TYPE_CHECKING
+
+from .base_model import HlBaseModel
 
 if TYPE_CHECKING:
     from .edit_type_model import EditType
     from .line_model import Line
 
 
-class EditArchiveBase(SQLModel):
+class EditArchiveBase(HlBaseModel):
     period: datetime = Field(index=True)
     old_value: int
     new_value: int

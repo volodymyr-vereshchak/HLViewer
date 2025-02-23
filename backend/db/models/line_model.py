@@ -1,5 +1,7 @@
 from typing import TYPE_CHECKING
-from sqlmodel import SQLModel, Field, UniqueConstraint, Relationship
+from sqlmodel import Field, UniqueConstraint, Relationship
+
+from .base_model import HlBaseModel
 
 if TYPE_CHECKING:
     from .gas_volume_calc_model import GasVolumeCalc
@@ -9,7 +11,7 @@ if TYPE_CHECKING:
     from .sys_archive_model import SysArchive
 
 
-class LineBase(SQLModel):
+class LineBase(HlBaseModel):
     line: int
     meter: bool
     name: str = Field(max_length=255)
