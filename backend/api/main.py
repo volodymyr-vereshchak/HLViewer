@@ -58,17 +58,16 @@ async def lifespan(application: FastAPI):
     # Run telegram bot
     bot = TelegramBot()
     asyncio.create_task(bot.run())
+    scheduler = AsyncIOScheduler()
+    trigger = CronTrigger(hour="*/2", minute=30)
+    scheduler.add_job(HostlibUpdater().update_and_send_notification, trigger)
+    scheduler.start()
     yield
     await bot.stop_bot()
 
 
 # run FastApi
 app = FastAPI(openapi_tags=tags_metadata, lifespan=lifespan)
-
-scheduler = AsyncIOScheduler()
-trigger = CronTrigger(hour="*/2", minute=30)
-scheduler.add_job(HostlibUpdater().update_and_send_notification, trigger)
-scheduler.start()
 
 app.include_router(day_archive_ep.daily_router)
 app.include_router(hour_archive_ep.hourly_router)

@@ -1,3 +1,5 @@
+import asyncio
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
@@ -63,3 +65,15 @@ class TelegramUserDao(BasicDao):
         result = await self.session.execute(statement)
         ids_list = result.scalars().all()
         return ids_list
+
+
+if __name__ == "__main__":
+
+    async def get_all_users():
+        from backend.db.engine import async_session_factory
+
+        async with async_session_factory() as session:
+            subscribers = await TelegramUserDao(session=session).get_all_user_ids()
+            print(subscribers)
+
+    asyncio.run(get_all_users())

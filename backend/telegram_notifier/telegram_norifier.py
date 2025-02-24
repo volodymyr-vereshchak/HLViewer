@@ -6,7 +6,6 @@ from aiogram.types import Message
 
 from backend.db.dao.telegram_user_dao import TelegramUserDao
 from backend.db.engine import async_session_factory
-from backend.db.models.telegram_user_model import TelegramUserCreate
 from backend.settings import backend_settings
 from utils.logger import logger_setup
 
@@ -18,7 +17,6 @@ class TelegramBot:
         self.dp = Dispatcher(storage=MemoryStorage())
         self.logger = logger_setup("backend")
         self.users_dao = TelegramUserDao
-        self.subscribers = set()
 
         self.dp.message.register(self.start, Command("start"))
         self.dp.message.register(self.stop, Command("stop"))
@@ -62,14 +60,18 @@ class TelegramBot:
 
     async def send_updates(self, message: str):
         """Send message to all subscribers"""
-        async with async_session_factory() as session:
-            subscribers = await self.users_dao(session=session).get_all_user_ids()
+        try:
+            async with async_session_factory() as session:
+                subscribers = await self.users_dao(session=session).get_all_user_ids()
 
-        tasks = []
-        for user_id in subscribers:
-            tasks.append(self._send_message(user_id, message))
+            tasks = []
+            for user_id in subscribers:
+                tasks.append(self._send_message(user_id, message))
 
-        await asyncio.gather(*tasks)
+            await asyncio.gather(*tasks)
+            self.logger.error(f"Отправка успешна")
+        except Exception as e:
+            self.logger.error(f"Ошибка отправки обновления: {e}")
 
     async def _send_message(self, user_id: int, message: str):
         try:
@@ -86,6 +88,7 @@ class TelegramBot:
 
     async def stop_bot(self):
         """Stop bot"""
+        await self.bot.session.close()
         await self.bot.close()
         await self.dp.stop_polling()
 
