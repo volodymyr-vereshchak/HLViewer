@@ -134,7 +134,7 @@ class HostlibUpdater:
         return message
 
     async def update_and_send_notification(self):
-        # await self.update_hostlibs()
+        await self.update_hostlibs()
         async with async_session_factory() as session:
             end = await HourlyArchiveDao(session=session).get_last_period()
             start = end - timedelta(hours=23)

@@ -69,7 +69,6 @@ class TelegramBot:
                 tasks.append(self._send_message(user_id, message))
 
             await asyncio.gather(*tasks)
-            self.logger.error(f"Отправка успешна")
         except Exception as e:
             self.logger.error(f"Ошибка отправки обновления: {e}")
 
