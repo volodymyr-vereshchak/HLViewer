@@ -62,9 +62,9 @@ class HostlibUpdater:
                     line.name, volume, p_out
                 ).replace(",", " ")
             else:
-                message += "<b>{}</b>: {:,} м³;\n\n".format(line.name, volume).replace(
-                    ",", " "
-                )
+                message += "<b>{}</b>: {:,} м³; Pвх: {} кг/см²\n\n".format(
+                    line.name, volume, p_out
+                ).replace(",", " ")
 
         return message
 
