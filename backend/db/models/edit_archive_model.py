@@ -1,6 +1,6 @@
 from sqlmodel import Field, Relationship, UniqueConstraint
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from .base_model import HlBaseModel
 
@@ -44,6 +44,7 @@ class EditArchiveList(EditArchiveBase):
     id: int
     edit_id: int
     line_id: int
+    edit_name: str | None = None
 
 
 class EditArchiveCreate(EditArchiveBase):
