@@ -1,4 +1,5 @@
 import asyncio
+import os
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.dao.daily_archive_dao import DailyArchiveDao
@@ -39,7 +40,9 @@ async def update_worker(
 
 
 async def update_hostlibs(session: AsyncSession):
+    print(os.getcwd())
     path = backend_settings.get("HOSTLIB_PATH")
+    print(path)
     chunk_size = backend_settings.get("CHUNK_SIZE")
 
     with UnzipUtils(path) as unzip_utils:
