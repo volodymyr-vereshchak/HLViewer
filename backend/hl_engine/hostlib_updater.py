@@ -145,10 +145,10 @@ class HostlibUpdater:
             HourlyArchiveList(**vars(item)).model_dump() for item in result
         ]
         df = pd.DataFrame(extracted_data).sort_values("period")
-        message = await self.create_message(df)
-        await self.send_telegram_message(message)
-        # message = await self.create_email_message(df)
-        # self.send_email_message(message)
+        # message = await self.create_message(df)
+        # await self.send_telegram_message(message)
+        message = await self.create_email_message(df)
+        self.send_email_message(message)
 
 
 if __name__ == "__main__":
