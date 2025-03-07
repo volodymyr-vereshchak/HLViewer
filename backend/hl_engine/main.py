@@ -6,7 +6,7 @@ from backend.db.dao.daily_archive_dao import DailyArchiveDao
 from backend.db.dao.edit_archive_dao import EditArchiveDao
 from backend.db.dao.hourly_archive_dao import HourlyArchiveDao
 from backend.db.dao.sys_archive_dao import SysArchiveDao
-from backend.db.engine import DbEngine, async_session_factory
+from backend.db.engine import async_session_factory
 from backend.db.models import (
     DAILY_ARCHIVE_CONSTRAINT,
     HOURLY_ARCHIVE_CONSTRAINT,
@@ -45,8 +45,9 @@ async def update_worker(
 
 
 async def update_hostlibs(session: AsyncSession):
-    current_directory = os.getcwd()
-    path = os.path.join(current_directory, backend_settings.get("HOSTLIB_PATH"))
+    # current_directory = os.getcwd()
+    # path = os.path.join(current_directory, backend_settings.get("HOSTLIB_PATH"))
+    path = backend_settings.get("HOSTLIB_PATH")
     chunk_size = backend_settings.get("CHUNK_SIZE")
 
     with UnzipUtils(path) as unzip_utils:

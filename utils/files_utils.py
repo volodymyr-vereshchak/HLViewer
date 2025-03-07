@@ -11,7 +11,7 @@ class UnzipUtils:
 
     def __init__(self, path: str):
         self.path = path
-        self.temp_path = os.path.join(self.path, "__temp_unpacked__")
+        self.temp_path = os.path.join(os.getcwd(), "hostlibs/__temp_unpacked__")
 
     def __enter__(self):
         self.unzip_files()

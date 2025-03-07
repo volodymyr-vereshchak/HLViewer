@@ -15,7 +15,14 @@ class DbEngine:
             f"@{self.db_host}:{self.db_port}/{self.db_name}"
         )
 
-        self.engine = create_async_engine(self.postgres_url, echo=True)
+        self.engine = create_async_engine(
+            self.postgres_url,
+            echo=True,
+            pool_size=30,
+            max_overflow=60,
+            pool_timeout=30,
+            pool_recycle=1800,
+        )
         self.async_session_factory = async_sessionmaker(
             self.engine, expire_on_commit=False
         )

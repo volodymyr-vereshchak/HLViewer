@@ -55,15 +55,15 @@ tags_metadata = [
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    # Run telegram bot
-    bot = TelegramBot()
-    asyncio.create_task(bot.run())
+    # # Run telegram bot
+    # bot = TelegramBot()
+    # asyncio.create_task(bot.run())
     scheduler = AsyncIOScheduler()
     trigger = CronTrigger(hour="*/2", minute=30)
     scheduler.add_job(HostlibUpdater().update_and_send_notification, trigger)
     scheduler.start()
     yield
-    await bot.stop_bot()
+    # await bot.stop_bot()
 
 
 # run FastApi
