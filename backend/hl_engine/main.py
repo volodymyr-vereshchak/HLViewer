@@ -1,5 +1,4 @@
 import asyncio
-import os
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.dao.daily_archive_dao import DailyArchiveDao
@@ -21,19 +20,14 @@ from backend.settings import backend_settings
 from utils.files_utils import UnzipUtils
 
 
-async def bulk_upsert_worker(archives_list, dao, constraint_list):
-    async with async_session_factory() as session:
-        await dao(session=session).bulk_upsert(archives_list, constraint_list)
+async def bulk_upsert_worker(archives_list, dao, constraint_list, session):
+    await dao(session=session).bulk_upsert(archives_list, constraint_list)
 
 
 async def update_archive(archive_gen, dao, constraint_list: list, session):
-    tasks = []
 
     async for archives_list in archive_gen:
-        task = bulk_upsert_worker(archives_list, dao, constraint_list)
-        tasks.append(task)
-
-    await asyncio.gather(*tasks)
+        await bulk_upsert_worker(archives_list, dao, constraint_list, session)
 
 
 async def update_worker(
@@ -45,8 +39,6 @@ async def update_worker(
 
 
 async def update_hostlibs(session: AsyncSession):
-    # current_directory = os.getcwd()
-    # path = os.path.join(current_directory, backend_settings.get("HOSTLIB_PATH"))
     path = backend_settings.get("HOSTLIB_PATH")
     chunk_size = backend_settings.get("CHUNK_SIZE")
 
@@ -70,7 +62,7 @@ async def update_hostlibs(session: AsyncSession):
 
 
 if __name__ == "__main__":
-    # path_dir = "D:/Projects/HLViewer/HLViewer/develop_data/ASK/hostlib"
+
     async def update():
         async with async_session_factory() as session:
             await update_hostlibs(session=session)

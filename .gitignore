@@ -3,3 +3,4 @@
 /backend/db/ask.db
 /develop_data/
 /.env
+/packages/
