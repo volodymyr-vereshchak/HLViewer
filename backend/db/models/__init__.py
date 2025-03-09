@@ -38,6 +38,7 @@ from .sys_archive_model import (
     SysArchive,
     SysArchiveList,
     SysArchiveCreate,
+    SysArchiveEndpointList,
     SYS_ARCHIVE_CONSTRAINT,
 )
 from .edit_type_model import (
@@ -51,6 +52,7 @@ from .edit_archive_model import (
     EditArchive,
     EditArchiveList,
     EditArchiveCreate,
+    EditArchiveEndpointList,
     EDIT_ARCHIVE_CONSTRAINT,
 )
 

@@ -42,3 +42,7 @@ class SysArchiveList(SysArchiveBase):
 class SysArchiveCreate(SysArchiveBase):
     sys_type_id: int
     line_id: int
+
+
+class SysArchiveEndpointList(SysArchiveList):
+    sys_name: str | None = None

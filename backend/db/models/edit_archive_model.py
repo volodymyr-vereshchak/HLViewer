@@ -44,9 +44,12 @@ class EditArchiveList(EditArchiveBase):
     id: int
     edit_id: int
     line_id: int
-    edit_name: str | None = None
 
 
 class EditArchiveCreate(EditArchiveBase):
     edit_id: int
     line_id: int
+
+
+class EditArchiveEndpointList(EditArchiveList):
+    edit_name: str | None = None
