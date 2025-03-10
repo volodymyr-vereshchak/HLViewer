@@ -54,7 +54,11 @@ class HostlibUpdater:
             p_out = df_last.pressure.sum()
             if not line.meter:
                 p_out = p_out - df_last.w_volume_dp.sum() / 10_000
-            p_out = p_out.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            p_out = (
+                p_out.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                if type(p_out) is not int
+                else p_out
+            )
             if df_len != 24:
                 message += attention_text
             if line_id not in high_p_lines:
@@ -106,7 +110,11 @@ class HostlibUpdater:
             p_out = df_last.pressure.sum()
             if not line.meter:
                 p_out = p_out - df_last.w_volume_dp.sum() / 10_000
-            p_out = p_out.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            p_out = (
+                p_out.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                if type(p_out) is not int
+                else p_out
+            )
             if df_len != 24:
                 pass
             formated_volume = "{:,}".format(volume).replace(",", " ")
