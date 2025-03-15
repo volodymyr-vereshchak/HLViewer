@@ -56,7 +56,7 @@ class HostlibUpdater:
                 p_out = p_out - df_last.w_volume_dp.sum() / 10_000
             p_out = (
                 p_out.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-                if type(p_out) is not int
+                if type(p_out) is Decimal
                 else p_out
             )
             if df_len != 24:
@@ -153,10 +153,10 @@ class HostlibUpdater:
             HourlyArchiveList(**vars(item)).model_dump() for item in result
         ]
         df = pd.DataFrame(extracted_data).sort_values("period")
-        # message = await self.create_message(df)
-        # await self.send_telegram_message(message)
-        message = await self.create_email_message(df)
-        self.send_email_message(message)
+        message = await self.create_message(df)
+        await self.send_telegram_message(message)
+        # message = await self.create_email_message(df)
+        # self.send_email_message(message)
 
 
 if __name__ == "__main__":
