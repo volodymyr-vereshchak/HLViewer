@@ -37,6 +37,27 @@ class BasicDao:
             await self.session.rollback()
             raise
 
+    async def bulk_upsert_with_update(
+        self,
+        list_of_dict_data: list,
+        list_of_constraints: list[str],
+    ):
+        try:
+            stmt = insert(self.model).values(list_of_dict_data)
+            update_fields = {key: stmt.excluded[key] for key in list_of_dict_data[0].keys()}
+            stmt = stmt.on_conflict_do_update(
+                index_elements=list_of_constraints,
+                set_=update_fields
+            )
+            await self.session.execute(stmt)
+            await self.session.commit()
+        except Exception as e:
+            self.logger.error(
+                f"Unexpected error occurred while bulk upsert: {e}", exc_info=True
+            )
+            await self.session.rollback()
+            raise
+
     async def get_all(self):
         result = await self.session.execute(select(self.model))
         return result.scalars().all()
