@@ -10,6 +10,7 @@ if TYPE_CHECKING:
 class EditTypeBase(HlBaseModel):
     edit_type_id: int
     edit_name: str = Field(max_length=255)
+    gas_volume_calc_type_id: int
 
 
 EDIT_TYPE_CONSTRAINT = ["edit_type_id", "gas_volume_calc_type_id"]
@@ -21,23 +22,14 @@ class EditType(EditTypeBase, table=True):
         UniqueConstraint(*EDIT_TYPE_CONSTRAINT, name="edit_type_id_constraint"),
     )
     id: int | None = Field(default=None, primary_key=True)
-    gas_volume_calc_type_id: int | None = Field(
-        default=None, foreign_key="gas_vol_calc_type.id", ondelete="CASCADE"
-    )
-    gas_volume_calc_type: "GasVolumeCalcType" = Relationship(
-        back_populates="edit_types"
-    )
 
 
 class EditTypeList(EditTypeBase):
     id: int
-    gas_volume_calc_type_id: int
 
 
 class EditTypeCreate(EditTypeBase):
-    edit_type_id: int
-    gas_volume_calc_type_id: int
-    edit_name: str
+    pass
 
 
 class EditTypeUpdate(EditTypeBase):
