@@ -14,7 +14,7 @@ class SysStruct(BaseDataclass):
     seconds: int
     sys_type_id: int
     unknown: int
-    standard_volume: float
+    volume: float
 
     format = "=6BHBf"
     size = struct.calcsize(format)

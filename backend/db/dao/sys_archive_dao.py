@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from backend.db.dao.basic_dao import BasicDao
-from backend.db.models import SysArchive, SysType
+from backend.db.models import SysArchive, SysType, GasVolumeCalc, Line
 
 
 class SysArchiveDao(BasicDao):
@@ -18,7 +18,17 @@ class SysArchiveDao(BasicDao):
         to_date: datetime = None,
         line_id: list[int] = None,
     ):
-        statement = select(self.model, SysType).join(self.model.sys_type)
+        statement = select(self.model, SysType).outerjoin(
+            SysType,
+            (
+                self.model.line.has(
+                    Line.gas_volume_calc.has(
+                        GasVolumeCalc.type_id == SysType.gas_volume_calc_type_id
+                    )
+                )
+            )
+            & (self.model.sys_type_id == SysType.sys_type_id),
+        )
         if from_date:
             statement = statement.where(self.model.period >= from_date)
         if to_date:
@@ -30,7 +40,11 @@ class SysArchiveDao(BasicDao):
         result = []
         for sys_archive, sys_type in query.all():
             row = sys_archive.model_dump()
-            row["sys_name"] = sys_type.sys_name
+            row["sys_name"] = (
+                sys_type.sys_name
+                if sys_type
+                else f"Неизвестный код {row['sys_type_id']}"
+            )
             result.append(row)
         return result
 

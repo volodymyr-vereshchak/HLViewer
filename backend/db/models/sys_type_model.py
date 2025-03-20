@@ -5,7 +5,6 @@ from .base_model import HlBaseModel
 
 if TYPE_CHECKING:
     from .gas_volume_calc_type_model import GasVolumeCalcType
-    from .sys_archive_model import SysArchive
 
 
 class SysTypeBase(HlBaseModel):
@@ -26,10 +25,6 @@ class SysType(SysTypeBase, table=True):
         default=None, foreign_key="gas_vol_calc_type.id", ondelete="CASCADE"
     )
     gas_volume_calc_type: "GasVolumeCalcType" = Relationship(back_populates="sys_types")
-
-    sys_archives: list["SysArchive"] = Relationship(
-        back_populates="sys_type", cascade_delete=True
-    )
 
 
 class SysTypeList(SysTypeBase):

@@ -5,7 +5,6 @@ from .base_model import HlBaseModel
 
 if TYPE_CHECKING:
     from .gas_volume_calc_type_model import GasVolumeCalcType
-    from .edit_archive_model import EditArchive
 
 
 class EditTypeBase(HlBaseModel):
@@ -27,10 +26,6 @@ class EditType(EditTypeBase, table=True):
     )
     gas_volume_calc_type: "GasVolumeCalcType" = Relationship(
         back_populates="edit_types"
-    )
-
-    edit_archives: list["EditArchive"] = Relationship(
-        back_populates="edit", cascade_delete=True
     )
 
 
