@@ -3,6 +3,7 @@ from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.dao.gas_volume_calc_dao import GasVolumeCalcDao
+from backend.db.dao.gas_volume_calc_type_dao import GasVolumeCalcTypeDao
 from backend.db.dao.line_dao import LineDao
 from backend.db.dao.sys_type_dao import SysTypeDao
 from backend.db.models import SysArchiveCreate, SysTypeCreate
@@ -39,7 +40,7 @@ class SysEngine(Hostlib):
                 address=flow_params["address"], lumg_id=self.lumg_id
             )
             gas_volume_calc_id = gas_volume_calc.id
-            gas_volume_calc_type_id = gas_volume_calc.type_id
+            gas_volume_calc_type_id = await GasVolumeCalcTypeDao(session=self.session).get_by_type_id(gas_volume_calc.type_id)
 
             gas_volume_line = await line_dao.get_or_create(
                 gas_volume_calc_id, flow_params["line"]

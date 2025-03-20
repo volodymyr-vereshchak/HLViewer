@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.dao.edit_type_dao import EditTypeDao
 from backend.db.dao.gas_volume_calc_dao import GasVolumeCalcDao
+from backend.db.dao.gas_volume_calc_type_dao import GasVolumeCalcTypeDao
 from backend.db.dao.line_dao import LineDao
 from backend.db.models import EditArchiveCreate, EditTypeCreate
 from backend.hl_engine.data_classes.edit_dataclass import EditStruct
@@ -39,7 +40,7 @@ class EditEngine(Hostlib):
                 address=flow_params["address"], lumg_id=self.lumg_id
             )
             gas_volume_calc_id = gas_volume_calc.id
-            gas_volume_calc_type_id = gas_volume_calc.type_id
+            gas_volume_calc_type_id = await GasVolumeCalcTypeDao(session=self.session).get_by_type_id(gas_volume_calc.type_id)
 
             gas_volume_line = await line_dao.get_or_create(
                 gas_volume_calc_id, flow_params["line"]
