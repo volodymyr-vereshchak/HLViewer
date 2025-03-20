@@ -17,7 +17,7 @@ class DbEngine:
 
         self.engine = create_async_engine(
             self.postgres_url,
-            echo=True,
+            echo=False,
             pool_size=30,
             max_overflow=60,
             pool_timeout=30,

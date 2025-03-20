@@ -38,6 +38,10 @@ async def preload_db():
         await GasVolumeCalcTypeDao(session=session).bulk_upsert_with_update(
             instance_list, GAS_VOLUME_CALC_TYPE_CONSTRAINT
         )
+        type_id_dict = {
+            type_id: await GasVolumeCalcTypeDao(session=session).get_by_type_id(type_id)
+            for type_id in unique_type_id_calc
+        }
 
         path = "backend/db/preload_db/EDITNAME.json"
         with open(path, "r", encoding="utf8") as file:
@@ -45,7 +49,7 @@ async def preload_db():
         instance_list = [
             {
                 "edit_type_id": flow_dict["EDIT_ID"],
-                "gas_volume_calc_type_id": flow_dict["ID_TYPE"],
+                "gas_volume_calc_type_id": type_id_dict[flow_dict["ID_TYPE"]],
                 "edit_name": flow_dict["EDITNAME"].strip(),
                 "updated_at": datetime.now(),
             }
@@ -61,7 +65,7 @@ async def preload_db():
         instance_list = [
             {
                 "sys_type_id": flow_dict["SYS_ID"],
-                "gas_volume_calc_type_id": flow_dict["ID_TYPE"],
+                "gas_volume_calc_type_id": type_id_dict[flow_dict["ID_TYPE"]],
                 "sys_name": flow_dict["SYSNAME"].strip(),
                 "updated_at": datetime.now(),
             }
