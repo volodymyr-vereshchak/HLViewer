@@ -4,7 +4,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from backend.db.dao.basic_dao import BasicDao
-from backend.db.models import EditArchive, EditType, Line, GasVolumeCalc
+from backend.db.models import (
+    EditArchive,
+    EditType,
+    Line,
+    GasVolumeCalc,
+    GasVolumeCalcType,
+)
 
 
 class EditArchiveDao(BasicDao):
@@ -23,7 +29,10 @@ class EditArchiveDao(BasicDao):
             (
                 self.model.line.has(
                     Line.gas_volume_calc.has(
-                        GasVolumeCalc.type_id == EditType.gas_volume_calc_type_id
+                        GasVolumeCalc.type.has(
+                            GasVolumeCalcType.type_id
+                            == EditType.gas_volume_calc_type_id
+                        )
                     )
                 )
             )

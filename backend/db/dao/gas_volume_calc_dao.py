@@ -38,7 +38,7 @@ class GasVolumeCalcDao(BasicDao):
             )
             result = await self.update_by_id(result.id, gvc)
             self.logger.debug(
-                f"Gas volume calc with this address: {address} was updated!"
+                f"Gas volume calc with this address: {address} was updated {type_id}!"
             )
         return result
 

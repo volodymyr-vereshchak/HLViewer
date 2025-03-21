@@ -51,3 +51,4 @@ class GasVolumeCalcUpdate(GasVolumeCalcBase):
     name: str | None = None
     c_time: int | None = None
     address: int | None = None
+    type_id: int | None = None
