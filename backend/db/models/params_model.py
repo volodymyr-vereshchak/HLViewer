@@ -46,7 +46,7 @@ class Param(ParamBase, table=True):
     line_id: int | None = Field(
         default=None, foreign_key="gas_volume_line.id", ondelete="CASCADE", index=True
     )
-    line: "Line" = Relationship(back_populates="daily_archives")
+    line: "Line" = Relationship(back_populates="params")
 
 
 class ParamList(ParamBase):

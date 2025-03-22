@@ -9,6 +9,7 @@ if TYPE_CHECKING:
     from .hourly_archive_model import HourlyArchive
     from .edit_archive_model import EditArchive
     from .sys_archive_model import SysArchive
+    from .params_model import Param
 
 
 class LineBase(HlBaseModel):
@@ -43,6 +44,7 @@ class Line(LineBase, table=True):
     sys_archives: list["SysArchive"] = Relationship(
         back_populates="line", cascade_delete=True
     )
+    params: list["Param"] = Relationship(back_populates="line", cascade_delete=True)
 
 
 class LineList(LineBase):
