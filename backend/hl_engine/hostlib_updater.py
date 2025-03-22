@@ -41,9 +41,9 @@ class HostlibUpdater:
         start_lines = df_lines.period.min()
         end_lines = df_lines.period.max() + timedelta(hours=1)
         message += f"{start_lines.strftime('%d-%m-%Y %H:%M')} - {end_lines.strftime('%d-%m-%Y %H:%M')}\n\n"
-        message += "<b>ГРС</b> всего: {:,.3f} м³;\n\n".format(volume_lines).replace(
-            ",", " "
-        )
+        message += "<b>ГРС</b> всего: {:,} м³;\n\n".format(
+            round(volume_lines, 3)
+        ).replace(",", " ")
         for line_id in lines:
             df_i = df[df.line_id == line_id]
             df_len = df_i.shape[0]
@@ -62,12 +62,12 @@ class HostlibUpdater:
             if df_len != 24:
                 message += attention_text
             if line_id not in high_p_lines:
-                message += "<b>{}</b>: {:,.3f} м³; Pвых: {.3f} кг/см²\n\n".format(
-                    line.name, volume, p_out
+                message += "<b>{}</b>: {:,} м³; Pвых: {} кг/см²\n\n".format(
+                    line.name, round(volume, 3), round(p_out, 3)
                 ).replace(",", " ")
             else:
-                message += "<b>{}</b>: {:,.3f} м³; Pвх: {.3f} кг/см²\n\n".format(
-                    line.name, volume, p_out
+                message += "<b>{}</b>: {:,} м³; Pвх: {} кг/см²\n\n".format(
+                    line.name, round(volume, 3), round(p_out, 3)
                 ).replace(",", " ")
 
         return message
