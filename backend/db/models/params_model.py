@@ -35,14 +35,14 @@ class ParamBase(HlBaseModel):
     min_t: float
 
 
-PARAM_CONSTRAINT = ["line_id", "period"]
+PARAM_CONSTRAINT = [field for field in ParamBase.__annotations__ if field != "period"]
+
+PARAM_CONSTRAINT.append("line_id")
 
 
 class Param(ParamBase, table=True):
     __tablename__ = "params"
-    __table_args__ = (
-        UniqueConstraint(*PARAM_CONSTRAINT, name="param_line_period_constraint"),
-    )
+    __table_args__ = (UniqueConstraint(*PARAM_CONSTRAINT, name="param_all_constraint"),)
     id: int | None = Field(default=None, primary_key=True)
     line_id: int | None = Field(
         default=None, foreign_key="gas_volume_line.id", ondelete="CASCADE", index=True
