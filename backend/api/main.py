@@ -12,6 +12,7 @@ from backend.api.endpoints import (
     line_ep,
     edit_archive_ep,
     sys_archive_ep,
+    param_ep,
 )
 from backend.api.endpoints import gas_volume_calc_type_ep, day_archive_ep
 from backend.hl_engine.hostlib_updater import HostlibUpdater
@@ -50,6 +51,10 @@ tags_metadata = [
         "name": "sys",
         "description": "Operations with all sys archives.",
     },
+    {
+        "name": "param",
+        "description": "Operations with all params.",
+    },
 ]
 
 
@@ -78,3 +83,4 @@ app.include_router(root_ep.root_router)
 app.include_router(gas_volume_calc_type_ep.gvct_router)
 app.include_router(gas_volume_calc_ep.gas_volume_calc_router)
 app.include_router(line_ep.line_router)
+app.include_router(param_ep.param_router)
