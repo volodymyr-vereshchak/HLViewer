@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING
 
 from sqlmodel import Field, UniqueConstraint, Relationship
 
-from backend.db.models import HlBaseModel
+from .base_model import HlBaseModel
 
 if TYPE_CHECKING:
     from .line_model import Line
