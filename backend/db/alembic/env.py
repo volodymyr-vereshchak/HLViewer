@@ -43,6 +43,9 @@ from db.models import (
     TelegramUser,
     TelegramUserList,
     TelegramUserCreate,
+    Param,
+    ParamList,
+    ParamCreate,
 )
 
 from settings import backend_settings

@@ -1,11 +1,10 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from backend.db.models import DailyArchiveCreate
-from backend.hl_engine.data_classes.day_dataclass import DayStruct
+from backend.db.models import ParamCreate
+from backend.hl_engine.data_classes.param_dataclass import ParamStruct
 from backend.hl_engine.hl_engine import Hostlib
 
 
-class DailyEngine(Hostlib):
+class ParamEngine(Hostlib):
 
     def __init__(
         self,
@@ -17,10 +16,10 @@ class DailyEngine(Hostlib):
         super().__init__(
             session=session,
             path=path,
-            mask="S*R*D.*",
-            struct=DayStruct,
-            create_class=DailyArchiveCreate,
+            mask="S*R*S.*",
+            struct=ParamStruct,
+            create_class=ParamCreate,
             chunk_size=chunk_size,
             lumg_id=lumg_id,
-            date_flag=True,
+            date_flag=False,
         )
