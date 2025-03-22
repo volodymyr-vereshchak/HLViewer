@@ -4,8 +4,6 @@ import shutil
 import zipfile
 from dataclasses import asdict
 
-from utils.math_utils import round_decimal
-
 
 class UnzipUtils:
 
@@ -64,5 +62,4 @@ def read_archive_file(file, file_struct):
             if not data:
                 break
             file_dict = asdict(file_struct.unpack(data))
-            file_dict = round_decimal(file_dict)
             yield file_dict

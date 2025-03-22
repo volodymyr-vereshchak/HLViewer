@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.dao.daily_archive_dao import DailyArchiveDao
 from backend.db.dao.edit_archive_dao import EditArchiveDao
 from backend.db.dao.hourly_archive_dao import HourlyArchiveDao
+from backend.db.dao.param_dao import ParamDao
 from backend.db.dao.sys_archive_dao import SysArchiveDao
 from backend.db.engine import async_session_factory
 from backend.db.models import (
@@ -12,10 +13,12 @@ from backend.db.models import (
     HOURLY_ARCHIVE_CONSTRAINT,
     EDIT_ARCHIVE_CONSTRAINT,
     SYS_ARCHIVE_CONSTRAINT,
+    PARAM_CONSTRAINT,
 )
 from backend.hl_engine.daily_engine import DailyEngine
 from backend.hl_engine.edit_engine import EditEngine
 from backend.hl_engine.hourly_engine import HourlyEngine
+from backend.hl_engine.param_engine import ParamEngine
 from backend.hl_engine.sys_engine import SysEngine
 from backend.settings import backend_settings
 from utils.files_utils import UnzipUtils
@@ -49,6 +52,7 @@ async def update_hostlibs(session: AsyncSession):
             (HourlyEngine, HourlyArchiveDao, HOURLY_ARCHIVE_CONSTRAINT),
             (EditEngine, EditArchiveDao, EDIT_ARCHIVE_CONSTRAINT),
             (SysEngine, SysArchiveDao, SYS_ARCHIVE_CONSTRAINT),
+            (ParamEngine, ParamDao, PARAM_CONSTRAINT),
         ]
 
         for engine, archive_dao, constraint in workers:

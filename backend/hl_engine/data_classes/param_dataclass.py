@@ -6,7 +6,7 @@ from backend.hl_engine.data_classes.base_dataclass import BaseDataclass
 
 @dataclass
 class ParamStruct(BaseDataclass):
-    name: str
+    name1: str
     density: float
     co2: float
     n2: float
@@ -39,5 +39,5 @@ class ParamStruct(BaseDataclass):
     minutes: int
     seconds: int
 
-    format = "=16B12f5B12f6I"
+    format = "=16s12f5s12f6B"
     size = struct.calcsize(format)

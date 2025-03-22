@@ -11,11 +11,11 @@ if TYPE_CHECKING:
 
 class DailyArchiveBase(HlBaseModel):
     period: date = Field(index=True)
-    volume: Decimal = Field(decimal_places=3)
-    w_volume_dp: Decimal = Field(decimal_places=3)
-    pressure: Decimal = Field(decimal_places=3)
-    temperature: Decimal = Field(decimal_places=3)
-    density: Decimal = Field(decimal_places=3)
+    volume: float
+    w_volume_dp: float
+    pressure: float
+    temperature: float
+    density: float
 
 
 DAILY_ARCHIVE_CONSTRAINT = ["line_id", "period", "volume"]
