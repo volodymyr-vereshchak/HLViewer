@@ -42,7 +42,7 @@ class DailyArchiveList(DailyArchiveBase):
     @field_validator("density")
     def validate_density(cls, value: Decimal):
         if value > 1 or value < 0.5:
-            value = Decimal(0)
+            value = 0
         return value
 
 
