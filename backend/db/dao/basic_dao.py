@@ -3,7 +3,7 @@ from datetime import datetime
 from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import select
+from sqlmodel import select, desc
 from sqlalchemy.exc import IntegrityError
 
 from utils.logger import logger_setup
@@ -44,10 +44,11 @@ class BasicDao:
     ):
         try:
             stmt = insert(self.model).values(list_of_dict_data)
-            update_fields = {key: stmt.excluded[key] for key in list_of_dict_data[0].keys()}
+            update_fields = {
+                key: stmt.excluded[key] for key in list_of_dict_data[0].keys()
+            }
             stmt = stmt.on_conflict_do_update(
-                index_elements=list_of_constraints,
-                set_=update_fields
+                index_elements=list_of_constraints, set_=update_fields
             )
             await self.session.execute(stmt)
             await self.session.commit()
@@ -82,6 +83,22 @@ class BasicDao:
 
         result = await self.session.execute(statement)
         return result.scalars().all()
+
+    async def get_last_for_to_date(
+        self,
+        to_date: datetime = None,
+        line_id: list[int] = None,
+    ):
+        statement = select(self.model).order_by(desc(self.model.period))
+        if to_date:
+            statement = statement.where(self.model.period <= to_date)
+        if line_id:
+            statement = statement.where(self.model.line_id.in_(line_id))
+
+        statement = statement.limit(1)
+
+        result = await self.session.execute(statement)
+        return result.scalars().first()
 
     async def get_by_id(self, item_id: int):
         result = await self.session.get(self.model, item_id)
