@@ -26,7 +26,13 @@ class ParamRouter(BaseArchiveRouter):
         async with async_session_factory() as session:
             archive_dao = self.archive_dao(session=session)
             archives = await archive_dao.get_last_for_to_date(to_date, line_id)
-            return archives
+            return [archives]
 
 
 param_router = ParamRouter().router
+
+if __name__ == "__main__":
+    import asyncio
+
+    start, end = datetime(2023, 1, 1), datetime(2025, 4, 1)
+    asyncio.run(ParamRouter().get_archive(start, end, [1]))
