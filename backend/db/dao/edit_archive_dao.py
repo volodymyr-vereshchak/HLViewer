@@ -32,7 +32,7 @@ class EditArchiveDao(BasicDao):
             .outerjoin(
                 EditType, GasVolumeCalcType.type_id == EditType.gas_volume_calc_type_id
             )
-            .where(self.model.sys_type_id == EditType.sys_type_id)
+            .where(self.model.edit_type_id == EditType.edit_type_id)
         )
         if from_date:
             statement = statement.where(self.model.period >= from_date)
