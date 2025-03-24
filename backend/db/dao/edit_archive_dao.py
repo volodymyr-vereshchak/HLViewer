@@ -24,19 +24,15 @@ class EditArchiveDao(BasicDao):
         to_date: datetime = None,
         line_id: list[int] = None,
     ):
-        statement = select(self.model, EditType).outerjoin(
-            EditType,
-            (
-                self.model.line.has(
-                    Line.gas_volume_calc.has(
-                        GasVolumeCalc.type.has(
-                            GasVolumeCalcType.type_id
-                            == EditType.gas_volume_calc_type_id
-                        )
-                    )
-                )
+        statement = (
+            select(self.model, EditType)
+            .outerjoin(Line, self.model.line_id == Line.id)
+            .outerjoin(GasVolumeCalc, Line.gas_volume_calc_id == GasVolumeCalc.id)
+            .outerjoin(GasVolumeCalcType, GasVolumeCalc.type_id == GasVolumeCalcType.id)
+            .outerjoin(
+                EditType, GasVolumeCalcType.type_id == EditType.gas_volume_calc_type_id
             )
-            & (self.model.edit_type_id == EditType.edit_type_id),
+            .where(self.model.sys_type_id == EditType.sys_type_id)
         )
         if from_date:
             statement = statement.where(self.model.period >= from_date)

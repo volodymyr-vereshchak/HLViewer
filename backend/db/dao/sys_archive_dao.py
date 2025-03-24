@@ -24,18 +24,15 @@ class SysArchiveDao(BasicDao):
         to_date: datetime = None,
         line_id: list[int] = None,
     ):
-        statement = select(self.model, SysType).outerjoin(
-            SysType,
-            (
-                self.model.line.has(
-                    Line.gas_volume_calc.has(
-                        GasVolumeCalc.type.has(
-                            GasVolumeCalcType.type_id == SysType.gas_volume_calc_type_id
-                        )
-                    )
-                )
+        statement = (
+            select(self.model, SysType)
+            .outerjoin(Line, self.model.line_id == Line.id)
+            .outerjoin(GasVolumeCalc, Line.gas_volume_calc_id == GasVolumeCalc.id)
+            .outerjoin(GasVolumeCalcType, GasVolumeCalc.type_id == GasVolumeCalcType.id)
+            .outerjoin(
+                SysType, GasVolumeCalcType.type_id == SysType.gas_volume_calc_type_id
             )
-            & (self.model.sys_type_id == SysType.sys_type_id),
+            .where(self.model.sys_type_id == SysType.sys_type_id)
         )
         if from_date:
             statement = statement.where(self.model.period >= from_date)
