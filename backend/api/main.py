@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI
+from fastapi.middleware.gzip import GZipMiddleware
 from backend.api.endpoints import (
     lumg_ep,
     root_ep,
@@ -73,6 +74,7 @@ async def lifespan(application: FastAPI):
 
 # run FastApi
 app = FastAPI(openapi_tags=tags_metadata, lifespan=lifespan)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 app.include_router(day_archive_ep.daily_router)
 app.include_router(hour_archive_ep.hourly_router)
