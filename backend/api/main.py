@@ -67,7 +67,7 @@ async def lifespan(application: FastAPI):
     # bot = TelegramBot()
     # asyncio.create_task(bot.run())
     scheduler = AsyncIOScheduler()
-    trigger = CronTrigger(hour="*/2", minute=30, timezone=timezone("Europe/Kyiv"))
+    trigger = CronTrigger(minute=30, timezone=timezone("Europe/Kyiv"))
     scheduler.add_job(HostlibUpdater().update_and_send_notification, trigger)
     scheduler.start()
     yield
