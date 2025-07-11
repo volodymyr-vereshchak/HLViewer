@@ -37,6 +37,14 @@ class LineRouter:
         self.router.add_api_route(
             path="/lines/{line_id}",
             tags=["lines"],
+            endpoint=self.get_line_by_id,
+            methods=["GET"],
+            response_model=LineList,
+            status_code=status.HTTP_200_OK,
+        )
+        self.router.add_api_route(
+            path="/lines/{line_id}",
+            tags=["lines"],
             endpoint=self.update_line,
             methods=["PATCH"],
             response_model=LineList,
@@ -56,6 +64,13 @@ class LineRouter:
             lines = await LineDao(session=session).get_line_by_lumg_id(lumg_id)
         return lines
 
+    async def get_line_by_id(self, line_id: int):
+        async with async_session_factory() as session:
+            line = await LineDao(session=session).get_by_id(line_id)
+        if not line:
+            raise HTTPException(status_code=404, detail="Line not found")
+        return line
+
     async def create_line(self, line: LineCreate):
         try:
             async with async_session_factory() as session:
@@ -68,14 +83,14 @@ class LineRouter:
         async with async_session_factory() as session:
             line_db = await LineDao(session=session).update_by_id(line_id, line)
         if not line_db:
-            raise HTTPException(status_code=404, detail="Gas volume calc not found")
+            raise HTTPException(status_code=404, detail="Line not found")
         return line_db
 
     async def delete_line(self, line_id: int):
         async with async_session_factory() as session:
             delete_line = await LineDao(session=session).delete_item(line_id)
         if not delete_line:
-            raise HTTPException(status_code=404, detail="Gas volume calc not found")
+            raise HTTPException(status_code=404, detail="Line not found")
         return {"ok": True}
 
 

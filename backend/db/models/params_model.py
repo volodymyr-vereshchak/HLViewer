@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from pydantic import field_validator
+from sqlalchemy import Column
 from sqlmodel import Field, UniqueConstraint, Relationship
 
 from .base_model import HlBaseModel

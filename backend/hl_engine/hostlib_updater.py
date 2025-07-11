@@ -52,7 +52,7 @@ class HostlibUpdater:
             volume = df_i.volume.sum()
             df_last = df_i.tail(1)
             p_out = df_last.pressure.sum()
-            if not line.meter:
+            if line and not line.meter:
                 p_out = p_out - df_last.w_volume_dp.sum() / 10_000
             p_out = (
                 p_out.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
@@ -61,13 +61,14 @@ class HostlibUpdater:
             )
             if df_len != 24:
                 message += attention_text
+            line_name = line.name if line else f"Линия {line_id}"
             if line_id not in high_p_lines:
                 message += "<b>{}</b>: {:,} м³; Pвых: {} кг/см²\n\n".format(
-                    line.name, round(volume, 3), round(p_out, 3)
+                    line_name, round(volume, 3), round(p_out, 3)
                 ).replace(",", " ")
             else:
                 message += "<b>{}</b>: {:,} м³; Pвх: {} кг/см²\n\n".format(
-                    line.name, round(volume, 3), round(p_out, 3)
+                    line_name, round(volume, 3), round(p_out, 3)
                 ).replace(",", " ")
 
         return message
@@ -108,7 +109,7 @@ class HostlibUpdater:
             volume = df_i.volume.sum()
             df_last = df_i.tail(1)
             p_out = df_last.pressure.sum()
-            if not line.meter:
+            if line and not line.meter:
                 p_out = p_out - df_last.w_volume_dp.sum() / 10_000
             p_out = (
                 p_out.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
@@ -118,10 +119,11 @@ class HostlibUpdater:
             if df_len != 24:
                 pass
             formated_volume = "{:,}".format(volume).replace(",", " ")
+            line_name = line.name if line else f"Линия {line_id}"
             if line_id not in high_p_lines:
                 message += f"""
                                 <tr>
-                                    <td><b>{line.name}</b></td>
+                                    <td><b>{line_name}</b></td>
                                     <td>{formated_volume}</td>
                                     <td>{p_out}</td>
                                 </tr>
@@ -129,7 +131,7 @@ class HostlibUpdater:
             else:
                 message += f"""
                                 <tr>
-                                    <td><b>{line.name}</b></td>
+                                    <td><b>{line_name}</b></td>
                                     <td>{formated_volume}</td>
                                     <td></td>
                                 </tr>

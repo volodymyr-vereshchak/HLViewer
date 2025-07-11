@@ -84,3 +84,8 @@ class LineDao(BasicDao):
         statement = select(self.model).where((self.model.id == id_line))
         result = await self.session.execute(statement)
         return result.scalars().first()
+
+    async def get_line_by_line_number(self, line_number: int):
+        statement = select(self.model).where(self.model.line == line_number)
+        result = await self.session.execute(statement)
+        return result.scalars().first()
