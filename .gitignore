@@ -6,6 +6,7 @@
 /packages/
 /back_repo/
 /hostlibs/
+/logs/
 
 # Python cache files
 *.pyc

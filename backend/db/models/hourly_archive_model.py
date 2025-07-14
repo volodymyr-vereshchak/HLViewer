@@ -2,7 +2,7 @@ from sqlmodel import Field, Relationship, UniqueConstraint
 from datetime import datetime
 from decimal import Decimal
 from pydantic import field_validator
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 from sqlalchemy import Index
 
 from .base_model import HlBaseModel
@@ -24,7 +24,7 @@ HOURLY_ARCHIVE_CONSTRAINT = ["line_id", "period", "volume"]
 
 
 class HourlyArchive(HourlyArchiveBase, table=True):
-    __tablename__ = "hourly_archive"
+    __tablename__: ClassVar[str] = "hourly_archive"
     __table_args__ = (
         UniqueConstraint(
             *HOURLY_ARCHIVE_CONSTRAINT, name="hour_calc_id_line_period_constraint"
@@ -47,7 +47,7 @@ class HourlyArchiveList(HourlyArchiveBase):
     line_id: int
 
     @field_validator("density")
-    def validate_density(cls, value: Decimal):
+    def validate_density(cls, value: float):
         if value > 1 or value < 0.5:
             value = 0
         return value
