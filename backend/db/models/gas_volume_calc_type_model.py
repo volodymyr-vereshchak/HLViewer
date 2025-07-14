@@ -1,5 +1,6 @@
 from sqlmodel import Field, Relationship
 from typing import TYPE_CHECKING
+from sqlalchemy import Index
 
 from .base_model import HlBaseModel
 
@@ -19,6 +20,12 @@ GAS_VOLUME_CALC_TYPE_CONSTRAINT = ["type_name"]
 
 class GasVolumeCalcType(GasVolumeCalcTypeBase, table=True):
     __tablename__ = "gas_vol_calc_type"
+    __table_args__ = (
+        # Индекс для поиска по type_id
+        Index("idx_gvct_type_id", "type_id"),
+        # Индекс для поиска по type_name
+        Index("idx_gvct_type_name", "type_name"),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     gas_volume_calcs: list["GasVolumeCalc"] = Relationship(

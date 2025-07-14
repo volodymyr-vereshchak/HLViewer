@@ -1,5 +1,6 @@
 from typing import TYPE_CHECKING
 from sqlmodel import Field, UniqueConstraint, Relationship
+from sqlalchemy import Index
 
 from .base_model import HlBaseModel
 
@@ -25,6 +26,15 @@ class Line(LineBase, table=True):
     __tablename__ = "gas_volume_line"
     __table_args__ = (
         UniqueConstraint(*LINE_CONSTRAINT, name="line_gas_volume_line_constraint"),
+        # Оптимизированные индексы для поиска по gas_volume_calc_id
+        Index("idx_line_gas_volume_calc", "gas_volume_calc_id"),
+        Index("idx_line_gas_volume_line", "gas_volume_calc_id", "line"),
+        # Индекс для поиска по номеру линии
+        Index("idx_line_number", "line"),
+        # Индекс для поиска по имени
+        Index("idx_line_name", "name"),
+        # Индекс для поиска по meter
+        Index("idx_line_meter", "meter"),
     )
 
     id: int | None = Field(default=None, primary_key=True)

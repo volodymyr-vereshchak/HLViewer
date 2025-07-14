@@ -1,6 +1,6 @@
 from sqlmodel import Field, Relationship
-
 from typing import TYPE_CHECKING
+from sqlalchemy import Index
 
 from .base_model import HlBaseModel
 
@@ -14,6 +14,10 @@ class LumgBase(HlBaseModel):
 
 class Lumg(LumgBase, table=True):
     __tablename__ = "lumg"
+    __table_args__ = (
+        # Индекс для поиска по имени
+        Index("idx_lumg_name", "name"),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     gas_volume_calcs: list["GasVolumeCalc"] = Relationship(
