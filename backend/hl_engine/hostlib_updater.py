@@ -4,7 +4,7 @@ from decimal import Decimal, ROUND_HALF_UP
 import pandas as pd
 import emoji
 
-from backend.api.endpoints.root_ep import RootRouter
+from backend.hl_engine.main import update_hostlibs as update_hostlibs_main
 from backend.db.dao.hourly_archive_dao import HourlyArchiveDao
 from backend.db.dao.line_dao import LineDao
 from backend.db.engine import async_session_factory
@@ -16,9 +16,8 @@ from backend.telegram_notifier.telegram_norifier import TelegramBot
 
 class HostlibUpdater:
     @staticmethod
-    async def update_hostlibs():
-        root = RootRouter()
-        await root.update_data()
+    async def update_hostlibs(session):
+        await update_hostlibs_main(session=session)
 
     @staticmethod
     async def send_telegram_message(message: str):
@@ -144,8 +143,8 @@ class HostlibUpdater:
         return message
 
     async def update_and_send_notification(self):
-        await self.update_hostlibs()
         async with async_session_factory() as session:
+            await self.update_hostlibs(session)
             end = await HourlyArchiveDao(session=session).get_last_period()
             start = end - timedelta(hours=23)
             result = await HourlyArchiveDao(session=session).get_range(
