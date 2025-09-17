@@ -1,6 +1,7 @@
 import glob
 import os
 import shutil
+import struct
 import zipfile
 from dataclasses import asdict
 
@@ -61,5 +62,9 @@ def read_archive_file(file, file_struct):
             data = archive_file.read(file_struct.size)
             if not data:
                 break
-            file_dict = asdict(file_struct.unpack(data))
-            yield file_dict
+            try:
+                file_dict = asdict(file_struct.unpack(data))
+                yield file_dict
+            except (struct.error, ValueError) as e:
+                # Skip invalid records and continue
+                continue

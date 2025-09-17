@@ -13,9 +13,9 @@ class EditStruct(BaseDataclass):
     minutes: int
     seconds: int
     edit_type_id: int
-    unknown: int
+    # unknown: int
     old_value: int
     new_value: float
 
-    format = "=8B2i"
+    format = "=6B1H2i"
     size = struct.calcsize(format)

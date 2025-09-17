@@ -1,5 +1,6 @@
 from sqlmodel import Field, Relationship, UniqueConstraint
 from typing import TYPE_CHECKING
+from sqlalchemy import Index
 
 from .base_model import HlBaseModel
 
@@ -20,6 +21,12 @@ class SysType(SysTypeBase, table=True):
     __tablename__ = "sys_type"
     __table_args__ = (
         UniqueConstraint(*SYS_TYPE_CONSTRAINT, name="sys_type_id_constraint"),
+        # Индекс для поиска по sys_type_id
+        Index("idx_sys_type_id", "sys_type_id"),
+        # Индекс для поиска по gas_volume_calc_type_id
+        Index("idx_sys_gas_volume_calc_type", "gas_volume_calc_type_id"),
+        # Индекс для поиска по sys_name
+        Index("idx_sys_name", "sys_name"),
     )
     id: int | None = Field(default=None, primary_key=True)
 

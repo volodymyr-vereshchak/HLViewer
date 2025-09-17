@@ -5,6 +5,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI
 from fastapi.middleware.gzip import GZipMiddleware
+from pytz import timezone
+
 from backend.api.endpoints import (
     lumg_ep,
     root_ep,
@@ -65,7 +67,7 @@ async def lifespan(application: FastAPI):
     # bot = TelegramBot()
     # asyncio.create_task(bot.run())
     scheduler = AsyncIOScheduler()
-    trigger = CronTrigger(hour="*/2", minute=30)
+    trigger = CronTrigger(minute=30, timezone=timezone("Europe/Kyiv"))
     scheduler.add_job(HostlibUpdater().update_and_send_notification, trigger)
     scheduler.start()
     yield

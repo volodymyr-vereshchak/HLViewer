@@ -6,7 +6,7 @@ from backend.db.models import SysArchiveEndpointList
 class SysArchiveRouter(BaseArchiveRouter):
     def __init__(self):
         super().__init__(
-            path="/sys_archive/",
+            path="/sys/",
             archive_list_class=SysArchiveEndpointList,
             tags=["sys"],
             archive_dao=SysArchiveDao,

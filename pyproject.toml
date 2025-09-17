@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hlviewer"
+version = "0.1.0"
+description = "HLViewer - Hostlib Viewer Application"
+requires-python = ">=3.8"
+
+[tool.pytest.ini_options]
+markers = [
+    "database: marks tests as database integration tests",
+    "asyncio: marks tests as async tests", 
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+    "slow: marks tests as slow running tests"
+]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--tb=short",
+    "--strict-markers"
+]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function" 

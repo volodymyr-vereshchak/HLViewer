@@ -4,7 +4,7 @@ from decimal import Decimal, ROUND_HALF_UP
 import pandas as pd
 import emoji
 
-from backend.api.endpoints.root_ep import RootRouter
+from backend.hl_engine.main import update_hostlibs as update_hostlibs_main
 from backend.db.dao.hourly_archive_dao import HourlyArchiveDao
 from backend.db.dao.line_dao import LineDao
 from backend.db.engine import async_session_factory
@@ -16,9 +16,8 @@ from backend.telegram_notifier.telegram_norifier import TelegramBot
 
 class HostlibUpdater:
     @staticmethod
-    async def update_hostlibs():
-        root = RootRouter()
-        await root.update_data()
+    async def update_hostlibs(session):
+        await update_hostlibs_main(session=session)
 
     @staticmethod
     async def send_telegram_message(message: str):
@@ -52,7 +51,7 @@ class HostlibUpdater:
             volume = df_i.volume.sum()
             df_last = df_i.tail(1)
             p_out = df_last.pressure.sum()
-            if not line.meter:
+            if line and not line.meter:
                 p_out = p_out - df_last.w_volume_dp.sum() / 10_000
             p_out = (
                 p_out.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
@@ -61,13 +60,14 @@ class HostlibUpdater:
             )
             if df_len != 24:
                 message += attention_text
+            line_name = line.name if line else f"Линия {line_id}"
             if line_id not in high_p_lines:
                 message += "<b>{}</b>: {:,} м³; Pвых: {} кг/см²\n\n".format(
-                    line.name, round(volume, 3), round(p_out, 3)
+                    line_name, round(volume, 3), round(p_out, 3)
                 ).replace(",", " ")
             else:
                 message += "<b>{}</b>: {:,} м³; Pвх: {} кг/см²\n\n".format(
-                    line.name, round(volume, 3), round(p_out, 3)
+                    line_name, round(volume, 3), round(p_out, 3)
                 ).replace(",", " ")
 
         return message
@@ -108,7 +108,7 @@ class HostlibUpdater:
             volume = df_i.volume.sum()
             df_last = df_i.tail(1)
             p_out = df_last.pressure.sum()
-            if not line.meter:
+            if line and not line.meter:
                 p_out = p_out - df_last.w_volume_dp.sum() / 10_000
             p_out = (
                 p_out.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
@@ -118,10 +118,11 @@ class HostlibUpdater:
             if df_len != 24:
                 pass
             formated_volume = "{:,}".format(volume).replace(",", " ")
+            line_name = line.name if line else f"Линия {line_id}"
             if line_id not in high_p_lines:
                 message += f"""
                                 <tr>
-                                    <td><b>{line.name}</b></td>
+                                    <td><b>{line_name}</b></td>
                                     <td>{formated_volume}</td>
                                     <td>{p_out}</td>
                                 </tr>
@@ -129,7 +130,7 @@ class HostlibUpdater:
             else:
                 message += f"""
                                 <tr>
-                                    <td><b>{line.name}</b></td>
+                                    <td><b>{line_name}</b></td>
                                     <td>{formated_volume}</td>
                                     <td></td>
                                 </tr>
@@ -142,8 +143,8 @@ class HostlibUpdater:
         return message
 
     async def update_and_send_notification(self):
-        await self.update_hostlibs()
         async with async_session_factory() as session:
+            await self.update_hostlibs(session)
             end = await HourlyArchiveDao(session=session).get_last_period()
             start = end - timedelta(hours=23)
             result = await HourlyArchiveDao(session=session).get_range(

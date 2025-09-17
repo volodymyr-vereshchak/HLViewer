@@ -12,7 +12,7 @@ class GasVolumeCalcRouter:
     def __init__(self):
         self.router = APIRouter()
         self.router.add_api_route(
-            path="/gas_volume_calcs/",
+            path="/gas-volume-calcs/",
             tags=["Gas volume calcs"],
             endpoint=self.get_gas_volume_calc,
             methods=["GET"],
@@ -20,7 +20,7 @@ class GasVolumeCalcRouter:
             status_code=status.HTTP_200_OK,
         )
         self.router.add_api_route(
-            path="/gas_volume_calcs/",
+            path="/gas-volume-calcs/",
             tags=["Gas volume calcs"],
             endpoint=self.create_gas_volume_calc,
             methods=["POST"],
@@ -28,7 +28,7 @@ class GasVolumeCalcRouter:
             status_code=status.HTTP_201_CREATED,
         )
         self.router.add_api_route(
-            path="/gas_volume_calcs/{gas_volume_calc_id}",
+            path="/gas-volume-calcs/{gas_volume_calc_id}",
             tags=["Gas volume calcs"],
             endpoint=self.update_gas_volume_calc,
             methods=["PATCH"],
@@ -37,7 +37,7 @@ class GasVolumeCalcRouter:
         )
 
         self.router.add_api_route(
-            path="/gas_volume_calcs/{gas_volume_calc_id}",
+            path="/gas-volume-calcs/{gas_volume_calc_id}",
             tags=["Gas volume calcs"],
             endpoint=self.delete_gas_volume_calc,
             methods=["DELETE"],

@@ -6,7 +6,7 @@ from backend.db.models import DailyArchiveList
 class DailyArchiveRouter(BaseArchiveRouter):
     def __init__(self):
         super().__init__(
-            path="/day_archive/",
+            path="/daily/",
             archive_list_class=DailyArchiveList,
             tags=["daily"],
             archive_dao=DailyArchiveDao,

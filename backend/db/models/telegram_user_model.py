@@ -1,4 +1,5 @@
 from sqlmodel import Field
+from sqlalchemy import Index
 
 from .base_model import HlBaseModel
 
@@ -10,6 +11,14 @@ class TelegramUserBase(HlBaseModel):
 
 class TelegramUser(TelegramUserBase, table=True):
     __tablename__ = "telegram_users"
+    __table_args__ = (
+        # Индекс для поиска по user_id
+        Index("idx_telegram_user_id", "user_id"),
+        # Индекс для поиска активных пользователей
+        Index("idx_telegram_active", "active"),
+        # Составной индекс для поиска активных пользователей по user_id
+        Index("idx_telegram_active_user", "active", "user_id"),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
 

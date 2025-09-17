@@ -6,7 +6,7 @@ from backend.db.models import HourlyArchiveList
 class HourlyArchiveRouter(BaseArchiveRouter):
     def __init__(self):
         super().__init__(
-            path="/hour_archive/",
+            path="/hourly/",
             archive_list_class=HourlyArchiveList,
             tags=["hourly"],
             archive_dao=HourlyArchiveDao,

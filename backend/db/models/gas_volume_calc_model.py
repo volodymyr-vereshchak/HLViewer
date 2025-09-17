@@ -1,5 +1,6 @@
 from sqlmodel import Field, Relationship, UniqueConstraint
 from typing import TYPE_CHECKING
+from sqlalchemy import Index
 
 from .base_model import HlBaseModel
 
@@ -22,6 +23,15 @@ class GasVolumeCalc(GasVolumeCalcBase, table=True):
     __tablename__ = "gas_volume_calc"
     __table_args__ = (
         UniqueConstraint(*GAS_VOLUME_CALC_CONSTRAINT, name="lumg_adress_constraint"),
+        # Оптимизированные индексы для поиска по lumg_id
+        Index("idx_gvc_lumg", "lumg_id"),
+        Index("idx_gvc_lumg_address", "lumg_id", "address"),
+        # Индекс для поиска по address
+        Index("idx_gvc_address", "address"),
+        # Индекс для поиска по type_id
+        Index("idx_gvc_type", "type_id"),
+        # Индекс для поиска по имени
+        Index("idx_gvc_name", "name"),
     )
 
     id: int | None = Field(default=None, primary_key=True)
