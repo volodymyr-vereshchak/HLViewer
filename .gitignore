@@ -5,3 +5,6 @@
 /.env
 /packages/
 /back_repo/
+logs/
+__pycache__/
+hostlibs/
