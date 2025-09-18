@@ -89,6 +89,7 @@ app.add_middleware(
         "http://localhost:8060",
         "http://127.0.0.1:8050",
         "http://grmu-zp-s-metr1:8050",
+        "http://10.130.8.141:8050",
     ],
     allow_credentials=True,
     allow_methods=["*"],
