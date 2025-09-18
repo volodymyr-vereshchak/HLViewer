@@ -79,10 +79,17 @@ async def lifespan(application: FastAPI):
 app = FastAPI(openapi_tags=tags_metadata, lifespan=lifespan)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
- # Add CORS middleware
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:8050", "http://127.0.0.1:8050", "http://grmu-zp-s-metr1:8050"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8050",
+        "http://localhost:8060",
+        "http://127.0.0.1:8050",
+        "http://grmu-zp-s-metr1:8050",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
