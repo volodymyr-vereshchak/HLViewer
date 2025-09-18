@@ -17,6 +17,6 @@ backend_settings = {
     "SENDER_EMAIL": "volodymyr.vereshchak@gmail.com",
     "EMAIL_PASSWORD": os.getenv("EMAIL_PASSWORD"),
     "EMAIL_RECEIVERS": ["v.vereshchak@zp.naftogaz.com"],
-    "LINES_IDS": [1, 4, 5, 21, 20, 19, 18, 16, 6, 8, 15, 17, 12, 10, 11],
-    "HIGH_P_LINES_IDS": [1, 6, 8, 12],
+    "LINES_IDS": [6, 9, 10, 26, 25, 24, 23, 21, 11, 13, 20, 22, 17, 15, 16],
+    "HIGH_P_LINES_IDS": [6, 11, 13, 17],
 }
