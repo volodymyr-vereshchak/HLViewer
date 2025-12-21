@@ -26,8 +26,8 @@ source venv/bin/activate
 
 #### Варіант А: Офлайн встановлення (без інтернету) - РЕКОМЕНДОВАНО
 ```bash
-# Встановити всі залежності з локальної папки packages
-pip install --no-index --find-links=packages/ pytest==8.4.1 httpx==0.28.1
+# Встановити всі тестові залежності з локальної папки packages
+pip install --no-index --find-links=packages/ pytest-asyncio pytest-cov pytest-mock httpx
 
 # Або встановити все з requirements.txt
 pip install --no-index --find-links=packages/ -r requirements.txt
@@ -35,7 +35,7 @@ pip install --no-index --find-links=packages/ -r requirements.txt
 
 #### Варіант Б: З інтернетом
 ```bash
-pip install pytest==8.4.1 httpx==0.28.1
+pip install pytest-asyncio pytest-cov pytest-mock httpx
 ```
 
 ### Крок 4: Запустити тести
@@ -163,11 +163,12 @@ pytest tests/test_enterprise_integration.py -v -x
 ### Структура папки packages/
 
 Папка `packages/` містить всі необхідні Python пакети для роботи:
-- **pytest 8.4.1** - фреймворк для тестування
+- **pytest 8.4.2** - фреймворк для тестування
+- **pytest-asyncio 0.23.5** - підтримка async тестів
 - **httpx 0.28.1** - HTTP клієнт для тестів
 - Всі залежності проекту з `requirements.txt`
 
-**Загальна кількість:** ~95 пакетів
+**Загальна кількість:** ~105 пакетів
 
 ### Як використовувати офлайн пакети:
 
@@ -184,11 +185,21 @@ pip list | grep -E "pytest|httpx"
 
 ### Список основних пакетів для тестування:
 
-- `pytest-8.4.1-py3-none-any.whl`
-- `httpx-0.28.1-py3-none-any.whl`
+**Основні тестові пакети:**
+- `pytest-8.4.2-py3-none-any.whl` - тестовий фреймворк
+- `pytest-asyncio-0.23.5-py3-none-any.whl` - підтримка async тестів
+- `pytest-cov-4.1.0-py3-none-any.whl` - покриття тестами
+- `pytest-mock-3.12.0-py3-none-any.whl` - мокування
+- `httpx-0.28.1-py3-none-any.whl` - HTTP клієнт
+
+**Залежності:**
 - `httpcore-1.0.7-py3-none-any.whl`
 - `anyio-4.7.0-py3-none-any.whl`
 - `h11-0.14.0-py3-none-any.whl`
+- `coverage-7.13.0-cp313-cp313-win_amd64.whl`
+- `factory-boy-3.3.0-py2.py3-none-any.whl`
+- `freezegun-1.4.0-py3-none-any.whl`
+- `faker-39.0.0-py3-none-any.whl`
 - `pluggy-1.6.0-py3-none-any.whl`
 - `iniconfig-2.3.0-py3-none-any.whl`
 - `packaging-25.0-py3-none-any.whl`
@@ -201,7 +212,7 @@ pip list | grep -E "pytest|httpx"
 pip download -r requirements.txt -d packages/
 
 # Завантажити тільки тестові залежності
-pip download pytest==8.4.1 httpx==0.28.1 -d packages/
+pip download pytest-asyncio pytest-cov pytest-mock httpx factory-boy freezegun -d packages/
 
 # Перевірити кількість пакетів
 ls packages/ | wc -l
