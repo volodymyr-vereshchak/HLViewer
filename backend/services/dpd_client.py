@@ -30,17 +30,7 @@ class DPDClient:
 
         self.access_token: Optional[str] = None
         self.refresh_token: Optional[str] = None
-
-        # Initialize tokens on creation
-        import asyncio
-        try:
-            asyncio.get_event_loop().run_until_complete(self._authenticate())
-        except RuntimeError:
-            # If no event loop is running, create new one
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(self._authenticate())
-            loop.close()
+        self._authenticated: bool = False
 
     async def _authenticate(self):
         """Authenticate with DPD API and get JWT tokens."""
@@ -53,7 +43,7 @@ class DPDClient:
         async with httpx.AsyncClient(
             verify=False,
             timeout=self.timeout,
-            proxies=None
+            trust_env=False  # Ignore HTTP_PROXY, HTTPS_PROXY env vars
         ) as client:
             try:
                 response = await client.post(self.auth_url, json=payload)
@@ -62,6 +52,7 @@ class DPDClient:
                 data = response.json()
                 self.access_token = data["access"]
                 self.refresh_token = data["refresh"]
+                self._authenticated = True
 
                 logger.info("DPD API authentication successful")
 
@@ -80,7 +71,7 @@ class DPDClient:
         async with httpx.AsyncClient(
             verify=False,
             timeout=self.timeout,
-            proxies=None
+            trust_env=False
         ) as client:
             try:
                 response = await client.post(refresh_url, headers=headers)
@@ -124,6 +115,10 @@ class DPDClient:
         Raises:
             httpx.HTTPError: If API request fails after retries
         """
+        # Lazy authentication on first call
+        if not self._authenticated:
+            await self._authenticate()
+
         if not devices:
             logger.warning("No devices provided to get_volumes")
             return []
@@ -143,7 +138,7 @@ class DPDClient:
                 async with httpx.AsyncClient(
                     verify=False,
                     timeout=self.timeout,
-                    proxies=None
+                    trust_env=False
                 ) as client:
                     response = await client.post(endpoint, headers=headers, params=params)
 
