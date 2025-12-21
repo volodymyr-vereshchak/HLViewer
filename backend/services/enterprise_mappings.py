@@ -50,13 +50,20 @@ def load_mappings(force_reload: bool = False) -> Optional[pd.DataFrame]:
 
     file_path = backend_settings["ENTERPRISE_MAPPINGS_PATH"]
 
-    # Check if file exists
-    if not os.path.exists(file_path):
-        logger.error(f"Enterprise mappings file not found: {file_path}")
-        raise FileNotFoundError(f"Enterprise mappings file not found: {file_path}")
+    # Check if file exists, try both .xlsx and .csv
+    xlsx_path = file_path
+    csv_path = file_path.replace('.xlsx', '.csv')
+
+    if os.path.exists(xlsx_path):
+        actual_file_path = xlsx_path
+    elif os.path.exists(csv_path):
+        actual_file_path = csv_path
+    else:
+        logger.error(f"Enterprise mappings file not found: {xlsx_path} or {csv_path}")
+        raise FileNotFoundError(f"Enterprise mappings file not found: {xlsx_path} or {csv_path}")
 
     # Get file modification time
-    file_mtime = os.path.getmtime(file_path)
+    file_mtime = os.path.getmtime(actual_file_path)
 
     # Check if cache is valid
     if not force_reload and _mappings_cache["data"] is not None:
@@ -68,9 +75,13 @@ def load_mappings(force_reload: bool = False) -> Optional[pd.DataFrame]:
 
     # Load from file
     try:
-        logger.info(f"Loading enterprise mappings from {file_path}")
+        logger.info(f"Loading enterprise mappings from {actual_file_path}")
 
-        df = pd.read_excel(file_path)
+        # Load Excel or CSV based on extension
+        if actual_file_path.endswith('.csv'):
+            df = pd.read_csv(actual_file_path)
+        else:
+            df = pd.read_excel(actual_file_path)
 
         # Validate required columns
         required_columns = ["line_id", "serNum", "mfDev", "typeDev", "chNum", "active"]
