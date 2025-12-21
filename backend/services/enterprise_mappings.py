@@ -77,11 +77,22 @@ def load_mappings(force_reload: bool = False) -> Optional[pd.DataFrame]:
     try:
         logger.info(f"Loading enterprise mappings from {actual_file_path}")
 
-        # Load Excel or CSV based on extension
+        # Try to load based on extension
         if actual_file_path.endswith('.csv'):
             df = pd.read_csv(actual_file_path)
         else:
-            df = pd.read_excel(actual_file_path)
+            # Try Excel first, fallback to CSV if fails
+            try:
+                df = pd.read_excel(actual_file_path)
+            except Exception as excel_error:
+                logger.warning(f"Failed to read Excel file: {excel_error}, trying CSV fallback")
+                csv_fallback = actual_file_path.replace('.xlsx', '.csv')
+                if os.path.exists(csv_fallback):
+                    logger.info(f"Using CSV fallback: {csv_fallback}")
+                    df = pd.read_csv(csv_fallback)
+                    actual_file_path = csv_fallback  # Update for cache
+                else:
+                    raise excel_error
 
         # Validate required columns
         required_columns = ["line_id", "serNum", "mfDev", "typeDev", "chNum", "active"]
