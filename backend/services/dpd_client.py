@@ -7,9 +7,13 @@ token management, and volume data fetching.
 
 import httpx
 import logging
+import warnings
 from datetime import datetime
 from typing import List, Dict, Optional
 from backend.settings import backend_settings
+
+# Disable SSL warnings (DPD API uses self-signed certificates)
+warnings.filterwarnings('ignore', message='Unverified HTTPS request')
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +49,12 @@ class DPDClient:
             "password": self.password
         }
 
-        async with httpx.AsyncClient(verify=False, timeout=self.timeout) as client:
+        # Disable proxy and SSL verification for corporate network
+        async with httpx.AsyncClient(
+            verify=False,
+            timeout=self.timeout,
+            proxies=None
+        ) as client:
             try:
                 response = await client.post(self.auth_url, json=payload)
                 response.raise_for_status()
@@ -68,7 +77,11 @@ class DPDClient:
         headers = {"Authorization": f"Bearer {self.refresh_token}"}
         refresh_url = f"{self.base_url}refreshToken"
 
-        async with httpx.AsyncClient(verify=False, timeout=self.timeout) as client:
+        async with httpx.AsyncClient(
+            verify=False,
+            timeout=self.timeout,
+            proxies=None
+        ) as client:
             try:
                 response = await client.post(refresh_url, headers=headers)
                 response.raise_for_status()
@@ -127,7 +140,11 @@ class DPDClient:
             try:
                 headers = {"Authorization": f"Bearer {self.access_token}"}
 
-                async with httpx.AsyncClient(verify=False, timeout=self.timeout) as client:
+                async with httpx.AsyncClient(
+                    verify=False,
+                    timeout=self.timeout,
+                    proxies=None
+                ) as client:
                     response = await client.post(endpoint, headers=headers, params=params)
 
                     if response.status_code == 200:
