@@ -26,7 +26,12 @@ TEST_DATE_TO = datetime.now().strftime("%Y-%m-%d")
 @pytest.fixture
 def client():
     """Create HTTP client for API testing."""
-    return httpx.Client(base_url=API_BASE_URL, timeout=30.0)
+    return httpx.Client(
+        base_url=API_BASE_URL,
+        timeout=30.0,
+        verify=False,
+        trust_env=False
+    )
 
 
 class TestEnterpriseAPI:
