@@ -2,10 +2,15 @@
 
 ## Як запустити тести на сервері
 
-### Крок 1: Перейти в гілку
+### Крок 1: Pull останні зміни
 ```bash
-git checkout feature/dpd-integration
-git pull
+# Backend
+cd /path/to/HLViewer
+git pull back_repo master --no-edit
+
+# Frontend
+cd /path/to/frontend
+git pull offline_repo master --no-edit
 ```
 
 ### Крок 2: Активувати віртуальне оточення
@@ -17,9 +22,20 @@ venv\Scripts\activate
 source venv/bin/activate
 ```
 
-### Крок 3: Встановити залежності (якщо потрібно)
+### Крок 3: Встановити залежності для тестування
+
+#### Варіант А: Офлайн встановлення (без інтернету) - РЕКОМЕНДОВАНО
 ```bash
-pip install pytest httpx
+# Встановити всі залежності з локальної папки packages
+pip install --no-index --find-links=packages/ pytest==8.4.1 httpx==0.28.1
+
+# Або встановити все з requirements.txt
+pip install --no-index --find-links=packages/ -r requirements.txt
+```
+
+#### Варіант Б: З інтернетом
+```bash
+pip install pytest==8.4.1 httpx==0.28.1
 ```
 
 ### Крок 4: Запустити тести
@@ -139,3 +155,61 @@ pytest tests/test_enterprise_integration.py -v -x
 - [ ] Логіка віднімання об'ємів коректна
 - [ ] Немає помилок в логах backend
 - [ ] Продуктивність прийнятна (< 5 секунд)
+
+---
+
+## Офлайн пакети (для серверів без інтернету)
+
+### Структура папки packages/
+
+Папка `packages/` містить всі необхідні Python пакети для роботи:
+- **pytest 8.4.1** - фреймворк для тестування
+- **httpx 0.28.1** - HTTP клієнт для тестів
+- Всі залежності проекту з `requirements.txt`
+
+**Загальна кількість:** ~95 пакетів
+
+### Як використовувати офлайн пакети:
+
+```bash
+# Встановити тільки тестові залежності
+pip install --no-index --find-links=packages/ pytest==8.4.1 httpx==0.28.1
+
+# Встановити всі залежності проекту
+pip install --no-index --find-links=packages/ -r requirements.txt
+
+# Перевірити що встановлено
+pip list | grep -E "pytest|httpx"
+```
+
+### Список основних пакетів для тестування:
+
+- `pytest-8.4.1-py3-none-any.whl`
+- `httpx-0.28.1-py3-none-any.whl`
+- `httpcore-1.0.7-py3-none-any.whl`
+- `anyio-4.7.0-py3-none-any.whl`
+- `h11-0.14.0-py3-none-any.whl`
+- `pluggy-1.6.0-py3-none-any.whl`
+- `iniconfig-2.3.0-py3-none-any.whl`
+- `packaging-25.0-py3-none-any.whl`
+- `pygments-2.19.2-py3-none-any.whl`
+
+### Оновлення пакетів (на машині з інтернетом):
+
+```bash
+# Завантажити всі пакети з requirements.txt
+pip download -r requirements.txt -d packages/
+
+# Завантажити тільки тестові залежності
+pip download pytest==8.4.1 httpx==0.28.1 -d packages/
+
+# Перевірити кількість пакетів
+ls packages/ | wc -l
+```
+
+### Примітки:
+
+- Папка `packages/` вже включена в репозиторій
+- Пакети сумісні з Python 3.13 на Windows
+- Для Linux може знадобитись інша версія деяких пакетів (з `-linux` суфіксом)
+- Розмір папки: ~150-200 MB
