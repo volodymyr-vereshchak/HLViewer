@@ -27,16 +27,17 @@ class TestDPDClientStandalone:
         except Exception as e:
             pytest.fail(f"DPDClient initialization failed: {e}")
 
-    def test_dpd_client_has_tokens_after_init(self):
-        """Test that DPDClient has tokens after initialization."""
+    def test_dpd_client_lazy_authentication(self):
+        """Test that DPDClient uses lazy authentication (no tokens until first call)."""
         client = DPDClient()
 
-        assert client.access_token is not None, "access_token should be set after init"
-        assert client.refresh_token is not None, "refresh_token should be set after init"
+        # Tokens should be None after init (lazy authentication)
+        assert client.access_token is None, "access_token should be None after init (lazy auth)"
+        assert client.refresh_token is None, "refresh_token should be None after init (lazy auth)"
+        assert client._authenticated is False, "_authenticated flag should be False"
 
-        print(f"✓ Tokens acquired successfully")
-        print(f"  Access token length: {len(client.access_token) if client.access_token else 0}")
-        print(f"  Refresh token length: {len(client.refresh_token) if client.refresh_token else 0}")
+        print(f"✓ Lazy authentication verified")
+        print(f"  Tokens not acquired until first API call (as expected)")
 
     @pytest.mark.asyncio
     async def test_dpd_authentication(self):
