@@ -19,7 +19,8 @@ from datetime import datetime, timedelta
 # Configuration
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 TEST_LINE_IDS = [1, 6, 10]
-TEST_DATE_FROM = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+# Use last 60 days to increase chances of finding real data
+TEST_DATE_FROM = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
 TEST_DATE_TO = datetime.now().strftime("%Y-%m-%d")
 
 

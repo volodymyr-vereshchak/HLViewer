@@ -80,7 +80,8 @@ class TestDPDClientStandalone:
             }
         ]
 
-        date_from = datetime.now() - timedelta(days=7)
+        # Request last 60 days to increase chances of finding data
+        date_from = datetime.now() - timedelta(days=60)
         date_to = datetime.now()
 
         try:
@@ -105,14 +106,15 @@ class TestDPDClientStandalone:
         """Test get_volumes with multiple test devices."""
         client = DPDClient()
 
-        # Use multiple test devices
+        # Use multiple REAL devices from all.csv
         test_devices = [
-            {"serNum": 8189, "mfDev": 1, "typeDev": 5, "chNum": 0},
-            {"serNum": 10456, "mfDev": 1, "typeDev": 5, "chNum": 0},
-            {"serNum": 10484, "mfDev": 1, "typeDev": 5, "chNum": 0}
+            {"serNum": 8189, "mfDev": 1, "typeDev": 5, "chNum": 0},   # Автосистем Дп ТОВ
+            {"serNum": 21390, "mfDev": 1, "typeDev": 15, "chNum": 0}, # Агрокомплекс-2012 ТОВ
+            {"serNum": 8480, "mfDev": 1, "typeDev": 5, "chNum": 0}    # Агрошляхбуд ТОВ
         ]
 
-        date_from = datetime.now() - timedelta(days=3)
+        # Request last 60 days to increase chances of finding data
+        date_from = datetime.now() - timedelta(days=60)
         date_to = datetime.now()
 
         try:
