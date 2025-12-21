@@ -80,8 +80,9 @@ class TestDPDClientStandalone:
             }
         ]
 
-        date_from = datetime.now() - timedelta(days=7)
-        date_to = datetime.now()
+        # Use fixed date range where data exists (August 2025)
+        date_from = datetime(2025, 8, 20)
+        date_to = datetime(2025, 8, 27)
 
         try:
             result = await client.get_volumes(test_devices, date_from, date_to)
@@ -105,15 +106,19 @@ class TestDPDClientStandalone:
         """Test get_volumes with multiple test devices."""
         client = DPDClient()
 
-        # Use multiple REAL devices from all.csv
+        # Use ALL 6 real devices from enterprise_mappings.csv
         test_devices = [
-            {"serNum": 8189, "mfDev": 1, "typeDev": 5, "chNum": 0},   # Автосистем Дп ТОВ
             {"serNum": 21390, "mfDev": 1, "typeDev": 15, "chNum": 0}, # Агрокомплекс-2012 ТОВ
-            {"serNum": 8480, "mfDev": 1, "typeDev": 5, "chNum": 0}    # Агрошляхбуд ТОВ
+            {"serNum": 8480, "mfDev": 1, "typeDev": 5, "chNum": 0},   # Агрошляхбуд ТОВ
+            {"serNum": 8189, "mfDev": 1, "typeDev": 5, "chNum": 0},   # Автосистем Дп ТОВ
+            {"serNum": 7559, "mfDev": 1, "typeDev": 5, "chNum": 0},   # Асканія Бевериджиз ТОВ
+            {"serNum": 5989, "mfDev": 1, "typeDev": 5, "chNum": 0},   # Асканія Бевериджиз ТОВ
+            {"serNum": 6437, "mfDev": 1, "typeDev": 5, "chNum": 0}    # Баском ПП
         ]
 
-        date_from = datetime.now() - timedelta(days=7)
-        date_to = datetime.now()
+        # Use fixed date range where data exists (August 2025)
+        date_from = datetime(2025, 8, 20)
+        date_to = datetime(2025, 8, 27)
 
         try:
             result = await client.get_volumes(test_devices, date_from, date_to)

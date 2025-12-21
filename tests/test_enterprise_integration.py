@@ -19,8 +19,9 @@ from datetime import datetime, timedelta
 # Configuration
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 TEST_LINE_IDS = [1, 6, 10]
-TEST_DATE_FROM = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
-TEST_DATE_TO = datetime.now().strftime("%Y-%m-%d")
+# Use fixed date range where DPD API has data (August 2025)
+TEST_DATE_FROM = "2025-08-20"
+TEST_DATE_TO = "2025-08-27"
 
 
 @pytest.fixture
