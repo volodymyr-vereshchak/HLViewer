@@ -80,8 +80,7 @@ class TestDPDClientStandalone:
             }
         ]
 
-        # Request last 60 days to increase chances of finding data
-        date_from = datetime.now() - timedelta(days=60)
+        date_from = datetime.now() - timedelta(days=7)
         date_to = datetime.now()
 
         try:
@@ -113,8 +112,7 @@ class TestDPDClientStandalone:
             {"serNum": 8480, "mfDev": 1, "typeDev": 5, "chNum": 0}    # Агрошляхбуд ТОВ
         ]
 
-        # Request last 60 days to increase chances of finding data
-        date_from = datetime.now() - timedelta(days=60)
+        date_from = datetime.now() - timedelta(days=7)
         date_to = datetime.now()
 
         try:
