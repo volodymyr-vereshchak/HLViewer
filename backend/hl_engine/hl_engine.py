@@ -69,6 +69,7 @@ class Hostlib:
                             file_dict["day"],
                             file_dict["hour"],
                             file_dict["minutes"],
+                            file_dict.get("seconds", 0),
                         )
                     file_dict["period"] = datetime_period
                     file_dict["line_id"] = line_id
