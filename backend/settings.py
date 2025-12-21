@@ -19,4 +19,14 @@ backend_settings = {
     "EMAIL_RECEIVERS": ["v.vereshchak@zp.naftogaz.com"],
     "LINES_IDS": [6, 9, 10, 26, 25, 24, 23, 21, 11, 13, 20, 22, 17, 15, 16],
     "HIGH_P_LINES_IDS": [6, 11, 13, 17],
+    # DPD API Configuration
+    "DPD_API_BASE_URL": "https://rest-direct.zp.iot.grmu.com.ua/api/v1/",
+    "DPD_AUTH_URL": "https://auth-direct.zp.iot.grmu.com.ua/auth/login",
+    "DPD_USERNAME": os.getenv("DPD_USERNAME", "zaporizhDirect"),
+    "DPD_PASSWORD": os.getenv("DPD_PASSWORD", "xTqYaRmlYQFY"),
+    "DPD_TIMEOUT": 30,
+    "ENTERPRISE_MAPPINGS_PATH": os.getenv(
+        "ENTERPRISE_MAPPINGS_PATH",
+        "backend/data/enterprise_mappings.xlsx"
+    ),
 }

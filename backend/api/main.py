@@ -17,6 +17,7 @@ from backend.api.endpoints import (
     edit_archive_ep,
     sys_archive_ep,
     param_ep,
+    enterprise_ep,
 )
 from backend.api.endpoints import gas_volume_calc_type_ep, day_archive_ep
 from backend.hl_engine.hostlib_updater import HostlibUpdater
@@ -58,6 +59,10 @@ tags_metadata = [
     {
         "name": "param",
         "description": "Operations with all params.",
+    },
+    {
+        "name": "enterprise",
+        "description": "Operations with enterprise volume data from DPD API.",
     },
 ]
 
@@ -106,3 +111,4 @@ app.include_router(gas_volume_calc_type_ep.gvct_router)
 app.include_router(gas_volume_calc_ep.gas_volume_calc_router)
 app.include_router(line_ep.line_router)
 app.include_router(param_ep.param_router)
+app.include_router(enterprise_ep.enterprise_router)
