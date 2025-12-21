@@ -39,6 +39,22 @@ pip install pytest-asyncio pytest-cov pytest-mock httpx
 ```
 
 ### Крок 4: Запустити тести
+
+#### Варіант А: Тест DPD клієнта (БЕЗ backend API) - РЕКОМЕНДОВАНО СПОЧАТКУ
+```bash
+# Тестує тільки DPD API клієнт без залежності від backend
+pytest tests/test_dpd_client.py -v -s
+
+# Запустити один тест
+pytest tests/test_dpd_client.py::TestDPDClientStandalone::test_dpd_client_initialization -v -s
+```
+
+**Переваги:**
+- Не потрібно запускати backend API
+- Швидша діагностика проблем з DPD API
+- Показує детальний вивід (токени, кількість записів)
+
+#### Варіант Б: Повні інтеграційні тести (потрібен backend API)
 ```bash
 # Запустити всі тести з детальним виводом
 pytest tests/test_enterprise_integration.py -v
@@ -50,11 +66,26 @@ pytest tests/test_enterprise_integration.py::TestEnterpriseAPI -v
 pytest tests/test_enterprise_integration.py -v -x
 ```
 
+**Примітка:** Для інтеграційних тестів backend API повинен бути запущений:
+```bash
+uvicorn backend.api.main:app --reload
+```
+
 ---
 
 ## Що перевіряють тести
 
-### TestEnterpriseAPI (основні тести)
+### TestDPDClientStandalone (тести DPD клієнта)
+- ✅ Ініціалізація DPDClient
+- ✅ Отримання JWT токенів
+- ✅ Аутентифікація в DPD API
+- ✅ Запит порожнього списку пристроїв
+- ✅ Запит об'ємів для одного пристрою
+- ✅ Запит об'ємів для кількох пристроїв
+- ✅ Оновлення токенів
+- ✅ Обробка невалідного діапазону дат
+
+### TestEnterpriseAPI (інтеграційні тести)
 - ✅ API запущено і доступне
 - ✅ Enterprise endpoint зареєстровано
 - ✅ Запит з валідними параметрами працює
