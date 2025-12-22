@@ -64,21 +64,27 @@ class EnterpriseRouter:
         self,
         line_id: List[int] = Query(..., description="Line IDs to fetch volumes for"),
         from_date: str = Query(..., description="Start date (YYYY-MM-DD)"),
-        to_date: str = Query(..., description="End date (YYYY-MM-DD)")
+        to_date: str = Query(..., description="End date (YYYY-MM-DD)"),
+        period_type: str = Query(
+            default="daily",
+            pattern="^(daily|hourly)$",
+            description="Data granularity: 'daily' or 'hourly'"
+        )
     ) -> List[EnterpriseVolumeResponse]:
         """
-        Get enterprise volume data aggregated by line_id and date.
+        Get enterprise volume data aggregated by line_id and time period.
 
         Args:
             line_id: List of line IDs to fetch volumes for
             from_date: Start date in YYYY-MM-DD format
             to_date: End date in YYYY-MM-DD format
+            period_type: Data granularity - 'daily' (default) or 'hourly'
 
         Returns:
             List of EnterpriseVolumeResponse objects, each containing:
                 - line_id: Gas line ID
-                - period: Date of measurement
-                - total_volume: Sum of all device volumes for this line and date
+                - period: Date (daily) or datetime (hourly) of measurement
+                - total_volume: Sum of all device volumes for this line and period
                 - device_count: Number of devices contributing
                 - devices: List of individual device volumes
 
@@ -87,7 +93,7 @@ class EnterpriseRouter:
         """
         logger.info(
             f"Fetching enterprise volumes for lines {line_id}, "
-            f"period {from_date} to {to_date}"
+            f"period {from_date} to {to_date}, granularity: {period_type}"
         )
 
         # Validate and parse dates
@@ -142,7 +148,9 @@ class EnterpriseRouter:
         # Fetch volumes from DPD API
         try:
             client = DPDClient()
-            volumes_data = await client.get_volumes(devices, date_from, date_to)
+            volumes_data = await client.get_volumes(
+                devices, date_from, date_to, type_request=period_type
+            )
         except Exception as e:
             logger.error(f"DPD API error: {e}")
             raise HTTPException(

@@ -194,5 +194,65 @@ class TestDPDDiagnostic:
                 print(f"Error: {response.text}")
 
 
+    @pytest.mark.asyncio
+    async def test_hourly_data_request(self):
+        """Test hourly data request to verify API supports typeRequest=hourly."""
+        client = DPDClient()
+
+        await client._authenticate()
+
+        test_device = {"serNum": 8189, "mfDev": 1, "typeDev": 5, "chNum": 0}
+        date_from = datetime(2025, 8, 20)
+        date_to = datetime(2025, 8, 21)  # Just 2 days to limit data
+
+        endpoint = f"{client.base_url}indications"
+        params = {
+            "from": date_from.strftime("%Y-%m-%d"),
+            "to": date_to.strftime("%Y-%m-%d"),
+            "serNUM": test_device["serNum"],
+            "mfDEV": test_device["mfDev"],
+            "typeDEV": test_device["typeDev"],
+            "chNUM": test_device["chNum"],
+            "typeRequest": "hourly"  # ← Testing hourly!
+        }
+
+        print("\n" + "=" * 80)
+        print("RAW DPD API REQUEST (hourly data):")
+        print("=" * 80)
+        print(f"URL: {endpoint}")
+        print(f"Method: GET")
+        print(f"Params: {params}")
+
+        import httpx
+
+        headers = {"Authorization": f"Bearer {client.access_token}"}
+
+        async with httpx.AsyncClient(verify=False, timeout=30.0, trust_env=False) as http_client:
+            response = await http_client.get(endpoint, headers=headers, params=params)
+
+            print(f"\nRESPONSE:")
+            print(f"Status: {response.status_code}")
+
+            if response.status_code == 200:
+                data = response.json()
+                table_data = data.get("table", {}).get("data", [])
+                print(f"  table.data length: {len(table_data)}")
+
+                if table_data:
+                    print(f"\n  First hourly record:")
+                    print(f"    {table_data[0]}")
+
+                    # Check if datetime field exists (hourly should have time component)
+                    first_date = table_data[0].get("date")
+                    print(f"\n  Date field format: {first_date}")
+                    print(f"  Has time component: {'T' in str(first_date) if first_date else 'N/A'}")
+
+                    print(f"\n  Total records (should be ~48 for 2 days hourly): {len(table_data)}")
+                else:
+                    print(f"  No hourly data available")
+            else:
+                print(f"Error: {response.text}")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

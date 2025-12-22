@@ -257,6 +257,67 @@ class TestEnterpriseAPI:
                 )
 
 
+    def test_hourly_data_request(self, client):
+        """Test fetching hourly data with period_type=hourly parameter."""
+        params = {
+            "line_id": [1],
+            "from_date": TEST_DATE_FROM,
+            "to_date": "2025-08-21",  # Just 2 days for hourly test
+            "period_type": "hourly"
+        }
+        response = client.get("/enterprise/volumes/", params=params)
+
+        assert response.status_code == 200, f"Hourly request should succeed, got {response.status_code}"
+        data = response.json()
+        assert isinstance(data, list), "Response should be a list"
+
+        # Hourly data should return more records than daily
+        # For 2 days, expect up to 48 hourly records per device (24h * 2 days)
+        if data:
+            print(f"\nHourly data test:")
+            print(f"  Total records: {len(data)}")
+            print(f"  First record period: {data[0].get('period')}")
+            print(f"  Sample: line_id={data[0].get('line_id')}, volume={data[0].get('total_volume')}")
+
+    def test_daily_vs_hourly_default(self, client):
+        """Test that daily is the default when period_type is not specified."""
+        params_without_type = {
+            "line_id": [1],
+            "from_date": TEST_DATE_FROM,
+            "to_date": "2025-08-21"
+        }
+        params_with_daily = {
+            "line_id": [1],
+            "from_date": TEST_DATE_FROM,
+            "to_date": "2025-08-21",
+            "period_type": "daily"
+        }
+
+        response1 = client.get("/enterprise/volumes/", params=params_without_type)
+        response2 = client.get("/enterprise/volumes/", params=params_with_daily)
+
+        assert response1.status_code == 200, "Request without period_type should succeed"
+        assert response2.status_code == 200, "Request with period_type=daily should succeed"
+
+        # Both should return same data (daily is default)
+        data1 = response1.json()
+        data2 = response2.json()
+        assert len(data1) == len(data2), "Default should be daily"
+
+    def test_invalid_period_type(self, client):
+        """Test that API rejects invalid period_type values."""
+        params = {
+            "line_id": [1],
+            "from_date": TEST_DATE_FROM,
+            "to_date": TEST_DATE_TO,
+            "period_type": "invalid"
+        }
+        response = client.get("/enterprise/volumes/", params=params)
+
+        # Should return 422 for invalid enum value
+        assert response.status_code == 422, "API should reject invalid period_type"
+
+
 class TestEnterpriseMappings:
     """Test suite for enterprise mappings file."""
 

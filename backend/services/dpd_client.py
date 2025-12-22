@@ -93,23 +93,25 @@ class DPDClient:
         device: Dict,
         date_from: datetime,
         date_to: datetime,
+        type_request: str = "daily",
         max_retries: int = 3
     ) -> List[Dict]:
         """
-        Fetch daily indications for a single device from DPD API.
+        Fetch indications for a single device from DPD API.
 
         Args:
             device: Device dict with keys: serNum, mfDev, typeDev, chNum
             date_from: Start date for data range
             date_to: End date for data range
+            type_request: Request type - "daily" or "hourly"
             max_retries: Maximum number of retry attempts
 
         Returns:
             List of indication records for this device.
             Each record contains:
-                - date (str): Date in YYYY-MM-DD format
-                - dvstAlwrk (float or None): Daily standard volume
-                - dvwrkAlwrk (float or None): Daily work volume
+                - date (str): Date in YYYY-MM-DD format (daily) or datetime (hourly)
+                - dvstAlwrk (float or None): Daily/hourly standard volume
+                - dvwrkAlwrk (float or None): Daily/hourly work volume
                 - pressure (float): Pressure reading
                 - temperature (float): Temperature reading
                 - serNum, mfDev, typeDev, chNum (device identifiers)
@@ -124,7 +126,7 @@ class DPDClient:
             "mfDEV": device["mfDev"],
             "typeDEV": device["typeDev"],
             "chNUM": device["chNum"],
-            "typeRequest": "daily"
+            "typeRequest": type_request
         }
 
         for attempt in range(1, max_retries + 1):
@@ -196,6 +198,7 @@ class DPDClient:
         devices: List[Dict],
         date_from: datetime,
         date_to: datetime,
+        type_request: str = "daily",
         max_retries: int = 3
     ) -> List[Dict]:
         """
@@ -208,14 +211,15 @@ class DPDClient:
             devices: List of device dicts with keys: serNum, mfDev, typeDev, chNum
             date_from: Start date for data range
             date_to: End date for data range
+            type_request: Request type - "daily" (default) or "hourly"
             max_retries: Maximum number of retry attempts per device
 
         Returns:
             List of dicts with volume data, each containing:
                 - serNum, mfDev, typeDev, chNum (device identifiers)
-                - date (str): Date in YYYY-MM-DD format
-                - dvstAlwrk (float or None): Daily standard volume
-                - dvwrkAlwrk (float or None): Daily work volume
+                - date (str): Date (daily) or datetime (hourly) in YYYY-MM-DD format
+                - dvstAlwrk (float or None): Daily/hourly standard volume
+                - dvwrkAlwrk (float or None): Daily/hourly work volume
                 - pressure (float): Pressure reading
                 - temperature (float): Temperature reading
 
@@ -223,6 +227,7 @@ class DPDClient:
             - Uses indications endpoint (GET) instead of devices/volumes (POST)
             - Makes one request per device in parallel using asyncio.gather()
             - Returns partial results if some devices fail (no exception raised)
+            - Supports both daily and hourly data via type_request parameter
         """
         # Lazy authentication on first call
         if not self._authenticated:
@@ -233,13 +238,13 @@ class DPDClient:
             return []
 
         logger.info(
-            f"Fetching volumes for {len(devices)} devices "
+            f"Fetching {type_request} volumes for {len(devices)} devices "
             f"from {date_from.strftime('%Y-%m-%d')} to {date_to.strftime('%Y-%m-%d')}"
         )
 
         # Create parallel tasks for each device
         tasks = [
-            self._get_device_indications(device, date_from, date_to, max_retries)
+            self._get_device_indications(device, date_from, date_to, type_request, max_retries)
             for device in devices
         ]
 
