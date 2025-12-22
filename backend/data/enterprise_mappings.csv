@@ -5,4 +5,4 @@ line_id,serNum,mfDev,typeDev,chNum,enterprise_name,active
 1,7559,1,5,0,Асканія Бевериджиз ТОВ,TRUE
 1,5989,1,5,0,Асканія Бевериджиз ТОВ,TRUE
 1,6437,1,5,0,Баском ПП,TRUE
-1,22999,5,15,0,ДСС
+1,22999,5,15,0,ДСС,FALSE
