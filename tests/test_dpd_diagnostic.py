@@ -111,36 +111,39 @@ class TestDPDDiagnostic:
 
     @pytest.mark.asyncio
     async def test_raw_api_response(self):
-        """Test to see the raw API response structure."""
+        """Test to see the raw API response structure from indications endpoint."""
         client = DPDClient()
 
         await client._authenticate()
 
-        test_device = [{"serNum": 8189, "mfDev": 1, "typeDev": 5, "chNum": 0}]
+        test_device = {"serNum": 8189, "mfDev": 1, "typeDev": 5, "chNum": 0}
         date_from = datetime(2025, 8, 20)
         date_to = datetime(2025, 8, 27)
 
-        endpoint = f"{client.base_url}devices/volumes"
+        endpoint = f"{client.base_url}indications"
         params = {
             "from": date_from.strftime("%Y-%m-%d"),
             "to": date_to.strftime("%Y-%m-%d"),
-            "page": 0,
-            "size": 6000
+            "serNUM": test_device["serNum"],
+            "mfDEV": test_device["mfDev"],
+            "typeDEV": test_device["typeDev"],
+            "chNUM": test_device["chNum"],
+            "typeRequest": "daily"
         }
 
         print("\n" + "=" * 80)
-        print("RAW DPD API REQUEST:")
+        print("RAW DPD API REQUEST (indications endpoint):")
         print("=" * 80)
         print(f"URL: {endpoint}")
+        print(f"Method: GET")
         print(f"Params: {params}")
-        print(f"Devices: {test_device}")
 
         import httpx
 
         headers = {"Authorization": f"Bearer {client.access_token}"}
 
         async with httpx.AsyncClient(verify=False, timeout=30.0, trust_env=False) as http_client:
-            response = await http_client.post(endpoint, headers=headers, params=params, json=test_device)
+            response = await http_client.get(endpoint, headers=headers, params=params)
 
             print(f"\nRESPONSE:")
             print(f"Status: {response.status_code}")
@@ -153,14 +156,19 @@ class TestDPDDiagnostic:
                 print(f"  Keys: {list(data.keys()) if isinstance(data, dict) else 'N/A'}")
 
                 if isinstance(data, dict):
-                    content = data.get("content", [])
-                    print(f"  Content length: {len(content)}")
+                    # indications endpoint returns {"table": {"data": [...]}}
+                    table_data = data.get("table", {}).get("data", [])
+                    print(f"  table.data length: {len(table_data)}")
 
-                    if content:
+                    if table_data:
                         print(f"\n  First record:")
-                        print(f"    {content[0]}")
+                        print(f"    {table_data[0]}")
+
+                        # Check for None values in dvstAlwrk
+                        none_count = sum(1 for r in table_data if r.get("dvstAlwrk") is None)
+                        print(f"\n  Records with dvstAlwrk=None: {none_count}/{len(table_data)}")
                     else:
-                        print(f"\n  Content is empty!")
+                        print(f"\n  table.data is empty!")
                         print(f"\n  Full response:")
                         print(f"    {data}")
                 else:

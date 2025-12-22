@@ -5,6 +5,7 @@ This module provides async client for DPD API with JWT authentication,
 token management, and volume data fetching.
 """
 
+import asyncio
 import httpx
 import logging
 import warnings
@@ -87,48 +88,43 @@ class DPDClient:
                 logger.warning(f"Token refresh failed, re-authenticating: {e}")
                 await self._authenticate()
 
-    async def get_volumes(
+    async def _get_device_indications(
         self,
-        devices: List[Dict],
+        device: Dict,
         date_from: datetime,
         date_to: datetime,
         max_retries: int = 3
     ) -> List[Dict]:
         """
-        Fetch volume data for multiple devices from DPD API.
+        Fetch daily indications for a single device from DPD API.
 
         Args:
-            devices: List of device dicts with keys: serNum, mfDev, typeDev, chNum
+            device: Device dict with keys: serNum, mfDev, typeDev, chNum
             date_from: Start date for data range
             date_to: End date for data range
             max_retries: Maximum number of retry attempts
 
         Returns:
-            List of dicts with volume data, each containing:
-                - serNum, mfDev, typeDev, chNum (device identifiers)
+            List of indication records for this device.
+            Each record contains:
                 - date (str): Date in YYYY-MM-DD format
-                - dvstAlwrk (float): Daily standard volume
-                - dvwrkAlwrk (float): Daily work volume
+                - dvstAlwrk (float or None): Daily standard volume
+                - dvwrkAlwrk (float or None): Daily work volume
                 - pressure (float): Pressure reading
                 - temperature (float): Temperature reading
+                - serNum, mfDev, typeDev, chNum (device identifiers)
 
-        Raises:
-            httpx.HTTPError: If API request fails after retries
+            Returns empty list if device request fails after retries.
         """
-        # Lazy authentication on first call
-        if not self._authenticated:
-            await self._authenticate()
-
-        if not devices:
-            logger.warning("No devices provided to get_volumes")
-            return []
-
-        endpoint = f"{self.base_url}devices/volumes"
+        endpoint = f"{self.base_url}indications"
         params = {
             "from": date_from.strftime("%Y-%m-%d"),
             "to": date_to.strftime("%Y-%m-%d"),
-            "page": 0,
-            "size": 6000
+            "serNUM": device["serNum"],
+            "mfDEV": device["mfDev"],
+            "typeDEV": device["typeDev"],
+            "chNUM": device["chNum"],
+            "typeRequest": "daily"
         }
 
         for attempt in range(1, max_retries + 1):
@@ -140,56 +136,137 @@ class DPDClient:
                     timeout=self.timeout,
                     trust_env=False
                 ) as client:
-                    response = await client.post(endpoint, headers=headers, params=params)
+                    response = await client.get(endpoint, headers=headers, params=params)
 
                     if response.status_code == 200:
                         data = response.json()
-                        content = data.get("content", [])
+                        result = data.get("table", {}).get("data", [])
 
-                        # Filter only devices we requested
-                        device_set = {
-                            (d["serNum"], d["mfDev"], d["typeDev"], d["chNum"])
-                            for d in devices
-                        }
-
-                        filtered_data = [
-                            record for record in content
-                            if (
-                                record.get("serNum"),
-                                record.get("mfDev"),
-                                record.get("typeDev"),
-                                record.get("chNum")
-                            ) in device_set
-                        ]
-
-                        logger.info(
-                            f"Fetched {len(filtered_data)} volume records "
-                            f"for {len(devices)} devices (attempt {attempt})"
+                        logger.debug(
+                            f"Device {device['serNum']}: {len(result)} records "
+                            f"(attempt {attempt})"
                         )
-                        return filtered_data
+
+                        return result
 
                     elif response.status_code in (401, 403):
-                        logger.warning(f"Authentication failed (attempt {attempt}), refreshing tokens")
+                        logger.warning(
+                            f"Auth failed for device {device['serNum']} "
+                            f"(attempt {attempt}), refreshing tokens"
+                        )
                         await self._refresh_tokens()
                         continue
 
                     else:
                         logger.error(
-                            f"DPD API returned {response.status_code}: {response.text}"
+                            f"DPD API error for device {device['serNum']}: "
+                            f"{response.status_code} - {response.text}"
                         )
                         if attempt == max_retries:
-                            raise httpx.HTTPStatusError(
-                                f"DPD API error: {response.status_code}",
-                                request=response.request,
-                                response=response
+                            logger.warning(
+                                f"Failed to fetch data for device {device['serNum']} "
+                                f"after {max_retries} attempts"
                             )
+                            return []
 
             except httpx.RequestError as e:
-                logger.error(f"DPD API request error (attempt {attempt}): {e}")
+                logger.error(
+                    f"Request error for device {device['serNum']} "
+                    f"(attempt {attempt}): {e}"
+                )
                 if attempt == max_retries:
-                    raise
+                    logger.warning(
+                        f"Failed to fetch data for device {device['serNum']} "
+                        f"after {max_retries} attempts due to network error"
+                    )
+                    return []
 
         return []
+
+    async def get_volumes(
+        self,
+        devices: List[Dict],
+        date_from: datetime,
+        date_to: datetime,
+        max_retries: int = 3
+    ) -> List[Dict]:
+        """
+        Fetch volume data for multiple devices from DPD API.
+
+        Uses parallel requests to the indications endpoint, one per device.
+        Returns all records including those where dvstAlwrk is None.
+
+        Args:
+            devices: List of device dicts with keys: serNum, mfDev, typeDev, chNum
+            date_from: Start date for data range
+            date_to: End date for data range
+            max_retries: Maximum number of retry attempts per device
+
+        Returns:
+            List of dicts with volume data, each containing:
+                - serNum, mfDev, typeDev, chNum (device identifiers)
+                - date (str): Date in YYYY-MM-DD format
+                - dvstAlwrk (float or None): Daily standard volume
+                - dvwrkAlwrk (float or None): Daily work volume
+                - pressure (float): Pressure reading
+                - temperature (float): Temperature reading
+
+        Notes:
+            - Uses indications endpoint (GET) instead of devices/volumes (POST)
+            - Makes one request per device in parallel using asyncio.gather()
+            - Returns partial results if some devices fail (no exception raised)
+        """
+        # Lazy authentication on first call
+        if not self._authenticated:
+            await self._authenticate()
+
+        if not devices:
+            logger.warning("No devices provided to get_volumes")
+            return []
+
+        logger.info(
+            f"Fetching volumes for {len(devices)} devices "
+            f"from {date_from.strftime('%Y-%m-%d')} to {date_to.strftime('%Y-%m-%d')}"
+        )
+
+        # Create parallel tasks for each device
+        tasks = [
+            self._get_device_indications(device, date_from, date_to, max_retries)
+            for device in devices
+        ]
+
+        # Execute all requests in parallel
+        # return_exceptions=True prevents one failure from stopping others
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Aggregate results from all devices
+        all_records = []
+        successful_devices = 0
+        failed_devices = 0
+
+        for device, result in zip(devices, results):
+            if isinstance(result, Exception):
+                # This shouldn't happen due to error handling in _get_device_indications,
+                # but handle it just in case
+                logger.error(
+                    f"Unexpected exception for device {device['serNum']}: {result}"
+                )
+                failed_devices += 1
+                continue
+
+            if result:
+                all_records.extend(result)
+                successful_devices += 1
+            else:
+                # Empty result - device had no data or request failed
+                failed_devices += 1
+
+        logger.info(
+            f"Fetched {len(all_records)} volume records total: "
+            f"{successful_devices} devices succeeded, {failed_devices} failed/empty"
+        )
+
+        return all_records
 
     async def close(self):
         """Close any resources (for cleanup)."""
