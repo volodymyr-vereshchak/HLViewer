@@ -142,6 +142,14 @@ class DPDClient:
                         data = response.json()
                         result = data.get("table", {}).get("data", [])
 
+                        # Add device identifiers to each record for aggregation
+                        # API doesn't return device info, so we add it from request
+                        for record in result:
+                            record["serNum"] = device["serNum"]
+                            record["mfDev"] = device["mfDev"]
+                            record["typeDev"] = device["typeDev"]
+                            record["chNum"] = device["chNum"]
+
                         logger.debug(
                             f"Device {device['serNum']}: {len(result)} records "
                             f"(attempt {attempt})"

@@ -56,8 +56,17 @@ class TestDPDDiagnostic:
                     sample = result[0]
                     print(f"  Sample record:")
                     print(f"    Date: {sample.get('date')}")
+                    print(f"    serNum: {sample.get('serNum')} (added by client)")
                     print(f"    dvstAlwrk: {sample.get('dvstAlwrk')}")
                     print(f"    dvwrkAlwrk: {sample.get('dvwrkAlwrk')}")
+
+                    # Verify device fields are present for aggregation
+                    required_fields = ["serNum", "mfDev", "typeDev", "chNum", "date"]
+                    missing_fields = [f for f in required_fields if f not in sample]
+                    if missing_fields:
+                        print(f"  ⚠️ Missing fields for aggregation: {missing_fields}")
+                    else:
+                        print(f"  ✓ All device fields present for aggregation")
                 else:
                     print(f"  ⚠️ No data for this device in this period")
 
@@ -161,12 +170,19 @@ class TestDPDDiagnostic:
                     print(f"  table.data length: {len(table_data)}")
 
                     if table_data:
-                        print(f"\n  First record:")
+                        print(f"\n  First record (raw from API):")
                         print(f"    {table_data[0]}")
 
                         # Check for None values in dvstAlwrk
                         none_count = sum(1 for r in table_data if r.get("dvstAlwrk") is None)
                         print(f"\n  Records with dvstAlwrk=None: {none_count}/{len(table_data)}")
+
+                        # Note: Device identifiers NOT in raw API response
+                        has_device_fields = all(
+                            field in table_data[0]
+                            for field in ["serNum", "mfDev", "typeDev", "chNum"]
+                        )
+                        print(f"  Device fields in raw response: {has_device_fields}")
                     else:
                         print(f"\n  table.data is empty!")
                         print(f"\n  Full response:")
