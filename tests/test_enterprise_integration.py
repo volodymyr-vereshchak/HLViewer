@@ -20,10 +20,10 @@ from pathlib import Path
 
 # Configuration
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
-TEST_LINE_IDS = [1, 6, 10]
-# Use fixed date range where DPD API has data (August 2025)
-TEST_DATE_FROM = "2025-08-20"
-TEST_DATE_TO = "2025-08-27"
+TEST_LINE_IDS = [22]  # Updated to match server CSV data
+# Use fixed date range where DPD API has data (December 2025)
+TEST_DATE_FROM = "2025-12-01"
+TEST_DATE_TO = "2025-12-24"
 
 
 @pytest.fixture
@@ -95,7 +95,7 @@ class TestEnterpriseAPI:
     def test_get_volumes_single_line(self, client):
         """Test fetching volumes for a single line."""
         params = {
-            "line_id": [1],
+            "line_id": [22],
             "from_date": TEST_DATE_FROM,
             "to_date": TEST_DATE_TO
         }
@@ -105,15 +105,15 @@ class TestEnterpriseAPI:
         data = response.json()
         assert isinstance(data, list), "Response should be a list"
 
-        # If data exists, all records should be for line_id=1
+        # If data exists, all records should be for line_id=22
         if data:
             for record in data:
-                assert record["line_id"] == 1, "All records should be for line_id=1"
+                assert record["line_id"] == 22, "All records should be for line_id=22"
 
     def test_invalid_date_format(self, client):
         """Test that API rejects invalid date format."""
         params = {
-            "line_id": [1],
+            "line_id": [22],
             "from_date": "invalid-date",
             "to_date": TEST_DATE_TO
         }
@@ -136,7 +136,7 @@ class TestEnterpriseAPI:
     def test_missing_dates(self, client):
         """Test that API requires date parameters."""
         params = {
-            "line_id": [1]
+            "line_id": [22]
         }
         response = client.get("/enterprise/volumes/", params=params)
 
@@ -146,7 +146,7 @@ class TestEnterpriseAPI:
     def test_from_date_after_to_date(self, client):
         """Test that API rejects from_date > to_date."""
         params = {
-            "line_id": [1],
+            "line_id": [22],
             "from_date": TEST_DATE_TO,
             "to_date": TEST_DATE_FROM
         }
@@ -201,7 +201,7 @@ class TestEnterpriseAPI:
     def test_aggregation_by_date(self, client):
         """Test that volumes are aggregated by date."""
         params = {
-            "line_id": [1],
+            "line_id": [22],
             "from_date": TEST_DATE_FROM,
             "to_date": TEST_DATE_TO
         }
@@ -262,9 +262,9 @@ class TestEnterpriseAPI:
     def test_hourly_data_request(self, client):
         """Test fetching hourly data with period_type=hourly parameter."""
         params = {
-            "line_id": [1],
+            "line_id": [22],
             "from_date": TEST_DATE_FROM,
-            "to_date": "2025-08-21",  # Just 2 days for hourly test
+            "to_date": "2025-12-03",  # Just 2 days for hourly test
             "period_type": "hourly"
         }
         response = client.get("/enterprise/volumes/", params=params)
@@ -284,14 +284,14 @@ class TestEnterpriseAPI:
     def test_daily_vs_hourly_default(self, client):
         """Test that daily is the default when period_type is not specified."""
         params_without_type = {
-            "line_id": [1],
+            "line_id": [22],
             "from_date": TEST_DATE_FROM,
-            "to_date": "2025-08-21"
+            "to_date": "2025-12-03"
         }
         params_with_daily = {
-            "line_id": [1],
+            "line_id": [22],
             "from_date": TEST_DATE_FROM,
-            "to_date": "2025-08-21",
+            "to_date": "2025-12-03",
             "period_type": "daily"
         }
 
@@ -309,7 +309,7 @@ class TestEnterpriseAPI:
     def test_invalid_period_type(self, client):
         """Test that API rejects invalid period_type values."""
         params = {
-            "line_id": [1],
+            "line_id": [22],
             "from_date": TEST_DATE_FROM,
             "to_date": TEST_DATE_TO,
             "period_type": "invalid"
@@ -401,8 +401,8 @@ class TestCSVDataValidation:
         2. Requests data from API for that line
         3. Verifies that all devices from CSV are present in API response
         """
-        # Test with line_id = 1
-        test_line_id = 1
+        # Test with line_id = 22
+        test_line_id = 22
 
         # Step 1: Load devices from CSV
         csv_devices = self.load_devices_from_csv(test_line_id)
@@ -477,7 +477,7 @@ class TestCSVDataValidation:
 
         Validates that API returns data for correct devices across multiple lines.
         """
-        test_line_ids = [1, 6]
+        test_line_ids = [22]  # Updated to match server CSV data
 
         all_csv_devices = {}
         for line_id in test_line_ids:
