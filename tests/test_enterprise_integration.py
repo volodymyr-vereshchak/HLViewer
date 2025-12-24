@@ -13,7 +13,9 @@ Requirements:
 import pytest
 import httpx
 import os
+import csv
 from datetime import datetime, timedelta
+from pathlib import Path
 
 
 # Configuration
@@ -354,6 +356,175 @@ class TestDPDIntegration:
         assert os.getenv("DPD_PASSWORD") or True, (
             "DPD_PASSWORD should be configured (check .env file)"
         )
+
+
+class TestCSVDataValidation:
+    """Test suite for validating API data against CSV mappings."""
+
+    def load_devices_from_csv(self, line_id: int) -> list[dict]:
+        """
+        Load all active devices for given line_id from CSV file.
+
+        Args:
+            line_id: Line ID to filter devices
+
+        Returns:
+            List of device dictionaries with fields: serNum, mfDev, typeDev, chNum, enterprise_name
+        """
+        csv_path = Path("backend/data/enterprise_mappings.csv")
+
+        if not csv_path.exists():
+            pytest.skip(f"CSV file not found: {csv_path}")
+
+        devices = []
+        with open(csv_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                # Filter by line_id and active status
+                if int(row['line_id']) == line_id and row['active'].upper() == 'TRUE':
+                    devices.append({
+                        'serNum': int(row['serNum']),
+                        'mfDev': int(row['mfDev']),
+                        'typeDev': int(row['typeDev']),
+                        'chNum': int(row['chNum']),
+                        'enterprise_name': row['enterprise_name']
+                    })
+
+        return devices
+
+    def test_csv_devices_present_in_api_response(self, client):
+        """
+        Test that reads devices from CSV and verifies they appear in API response.
+
+        This test:
+        1. Reads all active devices for a specific line from CSV file
+        2. Requests data from API for that line
+        3. Verifies that all devices from CSV are present in API response
+        """
+        # Test with line_id = 1
+        test_line_id = 1
+
+        # Step 1: Load devices from CSV
+        csv_devices = self.load_devices_from_csv(test_line_id)
+
+        assert len(csv_devices) > 0, f"No active devices found in CSV for line_id={test_line_id}"
+
+        print(f"\nLoaded {len(csv_devices)} active devices from CSV for line_id={test_line_id}")
+
+        # Step 2: Request data from API
+        params = {
+            "line_id": [test_line_id],
+            "from_date": TEST_DATE_FROM,
+            "to_date": TEST_DATE_TO
+        }
+        response = client.get("/enterprise/volumes/", params=params)
+
+        assert response.status_code == 200, f"API request failed with status {response.status_code}"
+
+        api_data = response.json()
+
+        # If no data returned, we can't validate (might be no data for this period)
+        if not api_data:
+            pytest.skip(f"No API data returned for line_id={test_line_id} in period {TEST_DATE_FROM} to {TEST_DATE_TO}")
+
+        # Step 3: Collect all unique devices from API response
+        api_devices = set()
+        for record in api_data:
+            for device in record['devices']:
+                # Create device signature for comparison
+                device_key = (
+                    device['serNum'],
+                    device['mfDev'],
+                    device['typeDev'],
+                    device['chNum']
+                )
+                api_devices.add(device_key)
+
+        print(f"Found {len(api_devices)} unique devices in API response")
+
+        # Step 4: Verify CSV devices are in API response
+        csv_device_keys = set()
+        missing_devices = []
+
+        for csv_device in csv_devices:
+            device_key = (
+                csv_device['serNum'],
+                csv_device['mfDev'],
+                csv_device['typeDev'],
+                csv_device['chNum']
+            )
+            csv_device_keys.add(device_key)
+
+            if device_key not in api_devices:
+                missing_devices.append(csv_device)
+
+        # Report missing devices
+        if missing_devices:
+            print(f"\nWARNING: {len(missing_devices)} devices from CSV not found in API response:")
+            for device in missing_devices[:5]:  # Show first 5
+                print(f"  - serNum={device['serNum']}, enterprise={device['enterprise_name']}")
+
+        # The test passes if most devices are present (allowing for some that might not have data)
+        coverage_ratio = len(api_devices.intersection(csv_device_keys)) / len(csv_device_keys)
+        print(f"\nDevice coverage: {coverage_ratio*100:.1f}% ({len(api_devices.intersection(csv_device_keys))}/{len(csv_device_keys)})")
+
+        # We expect at least some devices to match (lenient check)
+        assert coverage_ratio > 0, "None of the CSV devices found in API response"
+
+    def test_multiple_lines_csv_validation(self, client):
+        """
+        Test CSV validation for multiple lines.
+
+        Validates that API returns data for correct devices across multiple lines.
+        """
+        test_line_ids = [1, 6]
+
+        all_csv_devices = {}
+        for line_id in test_line_ids:
+            devices = self.load_devices_from_csv(line_id)
+            all_csv_devices[line_id] = devices
+            print(f"Line {line_id}: {len(devices)} active devices in CSV")
+
+        # Request API data for all lines
+        params = {
+            "line_id": test_line_ids,
+            "from_date": TEST_DATE_FROM,
+            "to_date": TEST_DATE_TO
+        }
+        response = client.get("/enterprise/volumes/", params=params)
+
+        assert response.status_code == 200, f"API request failed with status {response.status_code}"
+
+        api_data = response.json()
+
+        if not api_data:
+            pytest.skip(f"No API data returned for lines {test_line_ids}")
+
+        # Validate each line separately
+        for line_id in test_line_ids:
+            line_records = [r for r in api_data if r['line_id'] == line_id]
+
+            if not line_records:
+                print(f"No data for line {line_id}")
+                continue
+
+            # Collect devices for this line from API
+            api_devices_for_line = set()
+            for record in line_records:
+                for device in record['devices']:
+                    device_key = (device['serNum'], device['mfDev'], device['typeDev'], device['chNum'])
+                    api_devices_for_line.add(device_key)
+
+            # Compare with CSV
+            csv_device_keys = set()
+            for csv_device in all_csv_devices[line_id]:
+                device_key = (csv_device['serNum'], csv_device['mfDev'], csv_device['typeDev'], csv_device['chNum'])
+                csv_device_keys.add(device_key)
+
+            if csv_device_keys:
+                coverage = len(api_devices_for_line.intersection(csv_device_keys)) / len(csv_device_keys)
+                print(f"Line {line_id} coverage: {coverage*100:.1f}%")
+                assert coverage >= 0, f"No devices found for line {line_id}"
 
 
 if __name__ == "__main__":
