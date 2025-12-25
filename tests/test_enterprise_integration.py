@@ -542,9 +542,9 @@ class TestHourlyArchive:
         """
         test_line_id = 22
 
-        # Use a single day for hourly test (2025-12-25)
-        from_datetime = "2025-12-25T00:00:00"
-        to_datetime = "2025-12-25T23:59:59"
+        # Use first day of test period where data exists (2025-12-01)
+        from_datetime = "2025-12-01T00:00:00"
+        to_datetime = "2025-12-01T23:59:59"
 
         # Step 1: Load device from CSV
         csv_path = Path("backend/data/enterprise_mappings.csv")
