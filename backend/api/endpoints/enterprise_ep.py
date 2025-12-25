@@ -203,11 +203,16 @@ class EnterpriseRouter:
                 if period_type == 'hourly':
                     # Parse as datetime and preserve it
                     if isinstance(record_date_str, str):
-                        # DPD API returns datetime in format "YYYY-MM-DDTHH:MM:SS"
-                        record_period = datetime.strptime(
-                            record_date_str.split(".")[0],  # Remove microseconds if present
-                            "%Y-%m-%dT%H:%M:%S"
-                        )
+                        # DPD API returns datetime in format "YYYY-MM-DDTHH:MM" or "YYYY-MM-DDTHH:MM:SS"
+                        # Remove microseconds if present
+                        clean_str = record_date_str.split(".")[0]
+
+                        # Try parsing with seconds first, then without
+                        try:
+                            record_period = datetime.strptime(clean_str, "%Y-%m-%dT%H:%M:%S")
+                        except ValueError:
+                            # Try without seconds (format: "2025-12-01T07:00")
+                            record_period = datetime.strptime(clean_str, "%Y-%m-%dT%H:%M")
                     elif isinstance(record_date_str, datetime):
                         record_period = record_date_str
                     else:
