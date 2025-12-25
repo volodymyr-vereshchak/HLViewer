@@ -63,8 +63,8 @@ class EnterpriseRouter:
     async def get_enterprise_volumes(
         self,
         line_id: List[int] = Query(..., description="Line IDs to fetch volumes for"),
-        from_date: str = Query(..., description="Start date (YYYY-MM-DD) or datetime (YYYY-MM-DDTHH:MM:SS)"),
-        to_date: str = Query(..., description="End date (YYYY-MM-DD) or datetime (YYYY-MM-DDTHH:MM:SS)"),
+        from_date: str = Query(..., description="Start date (YYYY-MM-DD)"),
+        to_date: str = Query(..., description="End date (YYYY-MM-DD)"),
         period_type: str = Query(
             default="daily",
             pattern="^(daily|hourly)$",
@@ -76,8 +76,8 @@ class EnterpriseRouter:
 
         Args:
             line_id: List of line IDs to fetch volumes for
-            from_date: Start date in YYYY-MM-DD format or datetime in YYYY-MM-DDTHH:MM:SS format
-            to_date: End date in YYYY-MM-DD format or datetime in YYYY-MM-DDTHH:MM:SS format
+            from_date: Start date in YYYY-MM-DD format
+            to_date: End date in YYYY-MM-DD format
             period_type: Data granularity - 'daily' (default) or 'hourly'
 
         Returns:
@@ -97,18 +97,9 @@ class EnterpriseRouter:
         )
 
         # Validate and parse dates
-        # Support both date-only (YYYY-MM-DD) and datetime (YYYY-MM-DDTHH:MM:SS) formats
         try:
-            # Try parsing as datetime first (for hourly archive)
-            if 'T' in from_date:
-                date_from = datetime.strptime(from_date.split('.')[0], "%Y-%m-%dT%H:%M:%S")
-            else:
-                date_from = datetime.strptime(from_date, "%Y-%m-%d")
-
-            if 'T' in to_date:
-                date_to = datetime.strptime(to_date.split('.')[0], "%Y-%m-%dT%H:%M:%S")
-            else:
-                date_to = datetime.strptime(to_date, "%Y-%m-%d")
+            date_from = datetime.strptime(from_date, "%Y-%m-%d")
+            date_to = datetime.strptime(to_date, "%Y-%m-%d")
 
             if date_from > date_to:
                 raise ValueError("from_date must be <= to_date")
@@ -117,7 +108,7 @@ class EnterpriseRouter:
             logger.error(f"Invalid date parameters: {e}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid date format: {e}. Use YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS format."
+                detail=f"Invalid date format: {e}. Use YYYY-MM-DD format."
             )
 
         # Validate line_ids
