@@ -120,14 +120,10 @@ class DPDClient:
         """
         endpoint = f"{self.base_url}indications"
 
-        # Format dates based on request type
-        # For hourly requests, send full datetime; for daily, send date only
-        if type_request == "hourly":
-            date_from_str = date_from.strftime("%Y-%m-%dT%H:%M:%S")
-            date_to_str = date_to.strftime("%Y-%m-%dT%H:%M:%S")
-        else:
-            date_from_str = date_from.strftime("%Y-%m-%d")
-            date_to_str = date_to.strftime("%Y-%m-%d")
+        # Format dates - DPD API accepts only date format (YYYY-MM-DD) for both daily and hourly
+        # The typeRequest parameter determines the granularity, not the date format
+        date_from_str = date_from.strftime("%Y-%m-%d")
+        date_to_str = date_to.strftime("%Y-%m-%d")
 
         params = {
             "from": date_from_str,
@@ -247,14 +243,9 @@ class DPDClient:
             logger.warning("No devices provided to get_volumes")
             return []
 
-        # Format log message based on request type
-        if type_request == "hourly":
-            date_range = f"{date_from.strftime('%Y-%m-%d %H:%M:%S')} to {date_to.strftime('%Y-%m-%d %H:%M:%S')}"
-        else:
-            date_range = f"{date_from.strftime('%Y-%m-%d')} to {date_to.strftime('%Y-%m-%d')}"
-
         logger.info(
-            f"Fetching {type_request} volumes for {len(devices)} devices from {date_range}"
+            f"Fetching {type_request} volumes for {len(devices)} devices "
+            f"from {date_from.strftime('%Y-%m-%d')} to {date_to.strftime('%Y-%m-%d')}"
         )
 
         # Create parallel tasks for each device
