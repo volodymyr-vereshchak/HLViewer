@@ -219,6 +219,9 @@ class EnterpriseRouter:
                         record_period = datetime.strptime(
                             record_date_str.split("T")[0], "%Y-%m-%d"
                         ).date()
+                    elif isinstance(record_date_str, datetime):
+                        # If DPD returns datetime object, extract date only
+                        record_period = record_date_str.date()
                     elif isinstance(record_date_str, date):
                         record_period = record_date_str
                     else:
