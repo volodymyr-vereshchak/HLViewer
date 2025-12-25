@@ -5,8 +5,8 @@ These models define the structure of data returned by the enterprise volumes end
 """
 
 from pydantic import BaseModel, Field, ConfigDict
-from datetime import date
-from typing import List, Optional
+from datetime import date, datetime
+from typing import List, Optional, Union
 
 
 class DeviceVolume(BaseModel):
@@ -66,7 +66,7 @@ class EnterpriseVolumeResponse(BaseModel):
     )
 
     line_id: int = Field(description="Gas line ID")
-    period: date = Field(description="Date of the measurement")
+    period: Union[date, datetime] = Field(description="Date (daily) or datetime (hourly) of the measurement")
     total_volume: float = Field(ge=0, description="Total volume for all devices on this line")
     device_count: int = Field(ge=0, description="Number of devices contributing to total")
     devices: List[DeviceVolume] = Field(description="Individual device volumes")

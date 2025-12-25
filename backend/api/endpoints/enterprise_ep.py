@@ -191,7 +191,7 @@ class EnterpriseRouter:
             if volume is None:
                 volume = 0.0
 
-            # Parse date from record
+            # Parse period from record based on type
             # DPD API might return "date" or "period" field
             record_date_str = record.get("date") or record.get("period")
             if not record_date_str:
@@ -199,22 +199,37 @@ class EnterpriseRouter:
                 continue
 
             try:
-                # Handle both date and datetime formats
-                if isinstance(record_date_str, str):
-                    record_date = datetime.strptime(
-                        record_date_str.split("T")[0], "%Y-%m-%d"
-                    ).date()
-                elif isinstance(record_date_str, date):
-                    record_date = record_date_str
+                # For hourly data, preserve full datetime; for daily, use date only
+                if period_type == 'hourly':
+                    # Parse as datetime and preserve it
+                    if isinstance(record_date_str, str):
+                        # DPD API returns datetime in format "YYYY-MM-DDTHH:MM:SS"
+                        record_period = datetime.strptime(
+                            record_date_str.split(".")[0],  # Remove microseconds if present
+                            "%Y-%m-%dT%H:%M:%S"
+                        )
+                    elif isinstance(record_date_str, datetime):
+                        record_period = record_date_str
+                    else:
+                        logger.warning(f"Invalid datetime format: {record_date_str}")
+                        continue
                 else:
-                    logger.warning(f"Invalid date format: {record_date_str}")
-                    continue
+                    # Daily data - use date only
+                    if isinstance(record_date_str, str):
+                        record_period = datetime.strptime(
+                            record_date_str.split("T")[0], "%Y-%m-%d"
+                        ).date()
+                    elif isinstance(record_date_str, date):
+                        record_period = record_date_str
+                    else:
+                        logger.warning(f"Invalid date format: {record_date_str}")
+                        continue
             except Exception as e:
-                logger.warning(f"Error parsing date {record_date_str}: {e}")
+                logger.warning(f"Error parsing period {record_date_str}: {e}")
                 continue
 
-            # Aggregate by line_id and date
-            key = (device_info["line_id"], record_date)
+            # Aggregate by line_id and period (date or datetime depending on type)
+            key = (device_info["line_id"], record_period)
 
             aggregated[key]["total"] += volume
             aggregated[key]["devices"].append(
