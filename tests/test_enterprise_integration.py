@@ -542,9 +542,10 @@ class TestHourlyArchive:
         """
         test_line_id = 22
 
-        # Use first day of test period where data exists (2025-12-01)
-        from_datetime = "2025-12-01T00:00:00"
-        to_datetime = "2025-12-01T23:59:59"
+        # Use date range where data exists (2025-12-01)
+        # API accepts only YYYY-MM-DD format for both daily and hourly
+        from_date = "2025-12-01"
+        to_date = "2025-12-01"
 
         # Step 1: Load device from CSV
         csv_path = Path("backend/data/enterprise_mappings.csv")
@@ -569,10 +570,11 @@ class TestHourlyArchive:
         print(f"\nFound device in CSV: serNum={csv_device['serNum']}, enterprise={csv_device['enterprise_name']}")
 
         # Step 2: Request hourly data from our API
+        # API accepts YYYY-MM-DD format, period_type determines granularity
         params = {
             "line_id": [test_line_id],
-            "from_date": from_datetime,
-            "to_date": to_datetime,
+            "from_date": from_date,
+            "to_date": to_date,
             "period_type": "hourly"
         }
         response = client.get("/enterprise/volumes/", params=params)
@@ -598,9 +600,9 @@ class TestHourlyArchive:
         async def fetch_dpd_data():
             client = DPDClient()
             devices = [csv_device]
-            # Convert datetime strings to datetime objects
-            from_dt = datetime.strptime(from_datetime, "%Y-%m-%dT%H:%M:%S")
-            to_dt = datetime.strptime(to_datetime, "%Y-%m-%dT%H:%M:%S")
+            # Convert date strings to datetime objects
+            from_dt = datetime.strptime(from_date, "%Y-%m-%d")
+            to_dt = datetime.strptime(to_date, "%Y-%m-%d")
 
             dpd_data = await client.get_volumes(
                 devices=devices,
