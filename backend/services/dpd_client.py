@@ -119,9 +119,19 @@ class DPDClient:
             Returns empty list if device request fails after retries.
         """
         endpoint = f"{self.base_url}indications"
+
+        # Format dates based on request type
+        # For hourly requests, send full datetime; for daily, send date only
+        if type_request == "hourly":
+            date_from_str = date_from.strftime("%Y-%m-%dT%H:%M:%S")
+            date_to_str = date_to.strftime("%Y-%m-%dT%H:%M:%S")
+        else:
+            date_from_str = date_from.strftime("%Y-%m-%d")
+            date_to_str = date_to.strftime("%Y-%m-%d")
+
         params = {
-            "from": date_from.strftime("%Y-%m-%d"),
-            "to": date_to.strftime("%Y-%m-%d"),
+            "from": date_from_str,
+            "to": date_to_str,
             "serNUM": device["serNum"],
             "mfDEV": device["mfDev"],
             "typeDEV": device["typeDev"],
@@ -237,9 +247,14 @@ class DPDClient:
             logger.warning("No devices provided to get_volumes")
             return []
 
+        # Format log message based on request type
+        if type_request == "hourly":
+            date_range = f"{date_from.strftime('%Y-%m-%d %H:%M:%S')} to {date_to.strftime('%Y-%m-%d %H:%M:%S')}"
+        else:
+            date_range = f"{date_from.strftime('%Y-%m-%d')} to {date_to.strftime('%Y-%m-%d')}"
+
         logger.info(
-            f"Fetching {type_request} volumes for {len(devices)} devices "
-            f"from {date_from.strftime('%Y-%m-%d')} to {date_to.strftime('%Y-%m-%d')}"
+            f"Fetching {type_request} volumes for {len(devices)} devices from {date_range}"
         )
 
         # Create parallel tasks for each device
