@@ -527,6 +527,150 @@ class TestCSVDataValidation:
                 assert coverage >= 0, f"No devices found for line {line_id}"
 
 
+class TestHourlyArchive:
+    """Test suite for hourly archive enterprise data."""
+
+    def test_hourly_archive_line_22(self, client):
+        """
+        Test hourly archive for line 22 - compares our API with DPD API directly.
+
+        This test:
+        1. Reads device for line 22 from CSV
+        2. Requests hourly data from our API
+        3. Requests hourly data from DPD API directly
+        4. Compares results
+        """
+        test_line_id = 22
+
+        # Use a single day for hourly test (2025-12-25)
+        from_datetime = "2025-12-25T00:00:00"
+        to_datetime = "2025-12-25T23:59:59"
+
+        # Step 1: Load device from CSV
+        csv_path = Path("backend/data/enterprise_mappings.csv")
+        if not csv_path.exists():
+            pytest.skip(f"CSV file not found: {csv_path}")
+
+        csv_device = None
+        with open(csv_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if int(row['line_id']) == test_line_id and row['active'].upper() == 'TRUE':
+                    csv_device = {
+                        'serNum': int(row['serNum']),
+                        'mfDev': int(row['mfDev']),
+                        'typeDev': int(row['typeDev']),
+                        'chNum': int(row['chNum']),
+                        'enterprise_name': row['enterprise_name']
+                    }
+                    break
+
+        assert csv_device is not None, f"No active device found in CSV for line_id={test_line_id}"
+        print(f"\nFound device in CSV: serNum={csv_device['serNum']}, enterprise={csv_device['enterprise_name']}")
+
+        # Step 2: Request hourly data from our API
+        params = {
+            "line_id": [test_line_id],
+            "from_date": from_datetime,
+            "to_date": to_datetime,
+            "period_type": "hourly"
+        }
+        response = client.get("/enterprise/volumes/", params=params)
+
+        assert response.status_code == 200, f"Our API request failed with status {response.status_code}"
+
+        our_api_data = response.json()
+        print(f"Our API returned {len(our_api_data)} hourly records")
+
+        if not our_api_data:
+            pytest.skip(f"No hourly data returned from our API for line_id={test_line_id}")
+
+        # Verify period format contains datetime (not just date)
+        for record in our_api_data[:3]:  # Check first 3 records
+            period = record['period']
+            assert 'T' in period, f"Hourly period should contain datetime, got: {period}"
+            print(f"  Period: {period}, Volume: {record['total_volume']}")
+
+        # Step 3: Request hourly data from DPD API directly
+        from backend.services.dpd_client import DPDClient
+        import asyncio
+
+        async def fetch_dpd_data():
+            client = DPDClient()
+            devices = [csv_device]
+            # Convert datetime strings to datetime objects
+            from_dt = datetime.strptime(from_datetime, "%Y-%m-%dT%H:%M:%S")
+            to_dt = datetime.strptime(to_datetime, "%Y-%m-%dT%H:%M:%S")
+
+            dpd_data = await client.get_volumes(
+                devices=devices,
+                date_from=from_dt,
+                date_to=to_dt,
+                type_request="hourly"
+            )
+            return dpd_data
+
+        dpd_data = asyncio.run(fetch_dpd_data())
+        print(f"DPD API returned {len(dpd_data)} hourly records")
+
+        if not dpd_data:
+            pytest.skip(f"No hourly data returned from DPD API for device {csv_device['serNum']}")
+
+        # Step 4: Compare results
+        # Create mapping of periods from our API
+        our_periods = {}
+        for record in our_api_data:
+            period = record['period']
+            # Extract datetime part (may include timezone info)
+            if 'T' in period:
+                period_dt = period.split('.')[0]  # Remove microseconds if present
+            else:
+                period_dt = period
+            our_periods[period_dt] = record['total_volume']
+
+        # Check DPD data periods
+        dpd_periods = {}
+        for record in dpd_data:
+            period = record.get('date') or record.get('period')
+            if period:
+                # Normalize period format
+                if 'T' in str(period):
+                    period_dt = str(period).split('.')[0]
+                else:
+                    period_dt = str(period)
+
+                volume = record.get('dvstAlwrk', 0) or 0
+                dpd_periods[period_dt] = dpd_periods.get(period_dt, 0) + volume
+
+        print(f"\nOur API periods: {len(our_periods)}")
+        print(f"DPD API periods: {len(dpd_periods)}")
+
+        # Find matching periods
+        matching_periods = set(our_periods.keys()) & set(dpd_periods.keys())
+        print(f"Matching periods: {len(matching_periods)}")
+
+        if matching_periods:
+            # Compare volumes for matching periods
+            for period in list(matching_periods)[:5]:  # Show first 5 matches
+                our_vol = our_periods[period]
+                dpd_vol = dpd_periods[period]
+                diff = abs(our_vol - dpd_vol)
+                print(f"  {period}: Our={our_vol:.2f}, DPD={dpd_vol:.2f}, Diff={diff:.2f}")
+
+                # Allow small floating point difference
+                assert diff < 0.1, f"Volume mismatch for {period}: {our_vol} vs {dpd_vol}"
+
+        # We should have at least some matching periods
+        assert len(matching_periods) > 0, "No matching periods found between our API and DPD API"
+
+        # Coverage check
+        coverage = len(matching_periods) / max(len(our_periods), 1) * 100
+        print(f"\nCoverage: {coverage:.1f}% ({len(matching_periods)}/{len(our_periods)} periods)")
+
+        # We expect at least 50% coverage (some hours might have no data)
+        assert coverage >= 50, f"Low coverage: {coverage:.1f}% - expected at least 50%"
+
+
 if __name__ == "__main__":
     # Run tests with pytest
     pytest.main([__file__, "-v", "--tb=short"])
