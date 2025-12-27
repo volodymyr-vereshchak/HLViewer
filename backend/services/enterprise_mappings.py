@@ -158,8 +158,8 @@ def load_mappings(force_reload: bool = False) -> Optional[pd.DataFrame]:
         # line_id: Get through sector mapping
         df["line_id"] = df["Точка обліку.Сектор"].map(sector_to_line)
 
-        # active: Set TRUE for all records
-        df["active"] = True
+        # active: Get from Active column (1 = active, 0 = inactive)
+        df["active"] = df["Active"] == 1
 
         # Data cleaning - remove rows without line_id mapping
         missing_line_count = df["line_id"].isna().sum()
