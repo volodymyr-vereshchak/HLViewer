@@ -14,6 +14,48 @@ from backend.settings import backend_settings
 
 logger = logging.getLogger(__name__)
 
+# Manufacturer device mapping (from DPD loader.py)
+MF_DEV_MAPPING = {
+    "РадмирТех ТОВ СП, м. Харків": 1,
+    "Укргазтех ДП, м.Київ": 5,
+    "ГРЕМПІС ТОВ НВП, м. Вінниця": 3,
+    "Тандем ПП НВФ, м.Вінниця": 4,
+}
+
+# Type device mapping (from DPD loader.py)
+TYPE_DEV_MAPPING = {
+    1: {  # РадмирТех
+        "ВЕГА-1.01": 5,
+        "ВЕГА-1.01Н": 15,
+        "КПЛГ-2.01Р": 4,
+        "КПЛГ-1.02Р": 2,
+        "КПЛГ-1.01Р": 2,
+        "КПЛГ-1.02РВ": 3,
+        "ВЕГА-2.01": 8,
+        "ВЕГА-2.01Н": 16,
+        "ВЕГА-1.02": 7,
+        "КВР-1.01": 11,
+        "КВР-1.02": 12,
+    },
+    5: {  # Укргазтех
+        "ФЛОУТЕК-ТМ-2-3-4-Т": 12,
+        "ФЛОУТЕК-ТМ-2-3-4": 12,
+        "ФЛОУТЕК-ТМ-2-3-6": 12,
+        "ФЛОУТЕК-ТМ": 15,
+        "ФЛОУТЕК-ТМ-2": 15,
+        "ФЛОУТЕК-ТМ-1-3-1": 15,
+        "ФЛОУТЕК-ТМ-1": 9,
+        "ФЛОУТЕК-ТМ-3": 2
+    },
+    3: {  # ГРЕМПІС
+        "Універсал-02": 2,
+        "Універсал-01": 1,
+    },
+    4: {  # Тандем
+        "ТАНДЕМ-ТР": 1,
+    },
+}
+
 # Cache for loaded mappings
 _mappings_cache = {
     "data": None,
@@ -27,10 +69,14 @@ CACHE_DURATION = timedelta(minutes=5)
 
 def load_mappings(force_reload: bool = False) -> Optional[pd.DataFrame]:
     """
-    Load enterprise mappings from Excel file with caching.
+    Load enterprise mappings from source Excel files with caching.
+
+    Data sources:
+    - backend/data/enterprise.xlsx - enterprise and device data
+    - backend/data/line_id.xlsx - sector to line_id mapping
 
     Args:
-        force_reload: Force reload from file, ignoring cache
+        force_reload: Force reload from files, ignoring cache
 
     Returns:
         pandas DataFrame with columns:
@@ -39,102 +85,126 @@ def load_mappings(force_reload: bool = False) -> Optional[pd.DataFrame]:
             - mfDev (int)
             - typeDev (int)
             - chNum (int)
-            - enterprise_name (str, optional)
+            - enterprise_name (str)
             - active (bool)
 
     Raises:
-        FileNotFoundError: If Excel file doesn't exist
-        ValueError: If Excel file has invalid structure
+        FileNotFoundError: If source files don't exist
+        ValueError: If file structure is invalid
     """
     global _mappings_cache
 
-    file_path = backend_settings["ENTERPRISE_MAPPINGS_PATH"]
+    # Define paths to source files
+    data_dir = os.path.dirname(backend_settings["ENTERPRISE_MAPPINGS_PATH"])
+    enterprise_path = os.path.join(data_dir, "enterprise.xlsx")
+    line_id_path = os.path.join(data_dir, "line_id.xlsx")
 
-    # Check if file exists, try both .xlsx and .csv
-    xlsx_path = file_path
-    csv_path = file_path.replace('.xlsx', '.csv')
+    # Check if both files exist
+    if not os.path.exists(enterprise_path):
+        logger.error(f"Enterprise file not found: {enterprise_path}")
+        raise FileNotFoundError(f"Enterprise file not found: {enterprise_path}")
 
-    if os.path.exists(xlsx_path):
-        actual_file_path = xlsx_path
-    elif os.path.exists(csv_path):
-        actual_file_path = csv_path
-    else:
-        logger.error(f"Enterprise mappings file not found: {xlsx_path} or {csv_path}")
-        raise FileNotFoundError(f"Enterprise mappings file not found: {xlsx_path} or {csv_path}")
+    if not os.path.exists(line_id_path):
+        logger.error(f"Line ID file not found: {line_id_path}")
+        raise FileNotFoundError(f"Line ID file not found: {line_id_path}")
 
-    # Get file modification time
-    file_mtime = os.path.getmtime(actual_file_path)
+    # Get file modification times
+    enterprise_mtime = os.path.getmtime(enterprise_path)
+    line_id_mtime = os.path.getmtime(line_id_path)
+    combined_mtime = (enterprise_mtime, line_id_mtime)
 
     # Check if cache is valid
     if not force_reload and _mappings_cache["data"] is not None:
         cache_age = datetime.now() - _mappings_cache["loaded_at"]
 
-        if cache_age < CACHE_DURATION and _mappings_cache["file_mtime"] == file_mtime:
+        if cache_age < CACHE_DURATION and _mappings_cache["file_mtime"] == combined_mtime:
             logger.debug("Using cached enterprise mappings")
             return _mappings_cache["data"]
 
-    # Load from file
+    # Load from files
     try:
-        logger.info(f"Loading enterprise mappings from {actual_file_path}")
+        logger.info(f"Loading enterprise mappings from {enterprise_path} and {line_id_path}")
 
-        # Try to load based on extension
-        if actual_file_path.endswith('.csv'):
-            df = pd.read_csv(actual_file_path)
-        else:
-            # Try Excel first, fallback to CSV if fails
-            try:
-                df = pd.read_excel(actual_file_path)
-            except Exception as excel_error:
-                logger.warning(f"Failed to read Excel file: {excel_error}, trying CSV fallback")
-                csv_fallback = actual_file_path.replace('.xlsx', '.csv')
-                if os.path.exists(csv_fallback):
-                    logger.info(f"Using CSV fallback: {csv_fallback}")
-                    df = pd.read_csv(csv_fallback)
-                    actual_file_path = csv_fallback  # Update for cache
-                else:
-                    raise excel_error
+        # Load source files
+        enterprise_df = pd.read_excel(enterprise_path, skiprows=3)
+        line_id_df = pd.read_excel(line_id_path, header=None)  # No header row in line_id.xlsx
 
-        # Validate required columns
-        required_columns = ["line_id", "serNum", "mfDev", "typeDev", "chNum", "active"]
-        missing_columns = set(required_columns) - set(df.columns)
+        # Process line_id.xlsx - create sector to line_id mapping
+        line_id_df.columns = ["sector_name", "line_id"]
+        sector_to_line = line_id_df.set_index("sector_name")["line_id"].to_dict()
 
-        if missing_columns:
-            raise ValueError(
-                f"Excel file missing required columns: {missing_columns}. "
-                f"Required: {required_columns}"
-            )
+        # Transform enterprise.xlsx data
+        df = enterprise_df.copy()
 
-        # Ensure correct data types
-        df["line_id"] = df["line_id"].astype(int)
-        df["serNum"] = df["serNum"].astype(int)
-        df["mfDev"] = df["mfDev"].astype(int)
-        df["typeDev"] = df["typeDev"].astype(int)
-        df["chNum"] = df["chNum"].astype(int)
+        # serNum: Clean from "-" and remove leading zeros
+        df["serNum"] = df["Прилад обліку.Номер приладу"].astype(str).str.replace("-", "", regex=False).str.lstrip("0")
 
-        # Convert active to boolean (handle TRUE/FALSE strings)
-        if df["active"].dtype == "object":
-            df["active"] = df["active"].map({
-                "TRUE": True, "True": True, "true": True, 1: True,
-                "FALSE": False, "False": False, "false": False, 0: False
-            })
-        else:
-            df["active"] = df["active"].astype(bool)
+        # mfDev: Get from MF_DEV_MAPPING by manufacturer
+        df["mfDev"] = df["Прилад обліку.Тип приладу обліку.Виробник"].map(MF_DEV_MAPPING)
 
-        # Add enterprise_name column if missing
-        if "enterprise_name" not in df.columns:
-            df["enterprise_name"] = ""
-
-        # Update cache
-        _mappings_cache["data"] = df
-        _mappings_cache["loaded_at"] = datetime.now()
-        _mappings_cache["file_mtime"] = file_mtime
-
-        logger.info(
-            f"Loaded {len(df)} enterprise mappings "
-            f"({len(df[df['active']])} active)"
+        # typeDev: Get from TYPE_DEV_MAPPING using mfDev and device type
+        df["typeDev"] = df.apply(
+            lambda row: TYPE_DEV_MAPPING.get(row["mfDev"], {}).get(row["Прилад обліку.Тип приладу обліку"])
+            if pd.notna(row["mfDev"]) else None,
+            axis=1
         )
 
-        return df
+        # chNum: Subtract 1 from channel number (0-based indexing, like in loader.py)
+        df["chNum"] = df["Прилад обліку.Номер каналу (нумерація з 1)"] - 1
+
+        # enterprise_name: Get enterprise name
+        df["enterprise_name"] = df["Точка обліку"]
+
+        # line_id: Get through sector mapping
+        df["line_id"] = df["Точка обліку.Сектор"].map(sector_to_line)
+
+        # active: Set TRUE for all records
+        df["active"] = True
+
+        # Data cleaning - remove rows without line_id mapping
+        missing_line_count = df["line_id"].isna().sum()
+        if missing_line_count > 0:
+            logger.warning(f"Skipped {missing_line_count} records without line_id mapping")
+            missing_enterprises = df[df["line_id"].isna()]["enterprise_name"].unique()
+            logger.debug(f"Enterprises without line_id: {', '.join(missing_enterprises[:10])}")
+
+        df = df.dropna(subset=["line_id"])
+
+        # Remove rows without mfDev or typeDev
+        invalid_mapping = df[df["mfDev"].isna() | df["typeDev"].isna()]
+        if len(invalid_mapping) > 0:
+            logger.warning(f"Skipped {len(invalid_mapping)} records with unknown mfDev/typeDev")
+            for _, row in invalid_mapping.head(5).iterrows():
+                logger.debug(
+                    f"Unknown mapping for {row['enterprise_name']}: "
+                    f"manufacturer={row.get('Прилад обліку.Тип приладу обліку.Виробник')}, "
+                    f"device={row.get('Прилад обліку.Тип приладу обліку')}"
+                )
+
+        df = df.dropna(subset=["mfDev", "typeDev"])
+
+        # Select and order columns
+        result_df = df[["line_id", "serNum", "mfDev", "typeDev", "chNum", "enterprise_name", "active"]].copy()
+
+        # Convert data types
+        result_df["line_id"] = result_df["line_id"].astype(int)
+        result_df["serNum"] = result_df["serNum"].astype(int)
+        result_df["mfDev"] = result_df["mfDev"].astype(int)
+        result_df["typeDev"] = result_df["typeDev"].astype(int)
+        result_df["chNum"] = result_df["chNum"].astype(int)
+        result_df["active"] = result_df["active"].astype(bool)
+
+        # Update cache
+        _mappings_cache["data"] = result_df
+        _mappings_cache["loaded_at"] = datetime.now()
+        _mappings_cache["file_mtime"] = combined_mtime
+
+        logger.info(
+            f"Loaded {len(result_df)} enterprise mappings from source files "
+            f"({len(result_df[result_df['active']])} active)"
+        )
+
+        return result_df
 
     except Exception as e:
         logger.error(f"Error loading enterprise mappings: {e}")
