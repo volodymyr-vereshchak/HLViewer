@@ -10,6 +10,12 @@
 
 ## Встановлення
 
+### Окремий пакет (наприклад, openpyxl):
+```bash
+cd packages
+pip install --no-index --find-links=. openpyxl==3.1.5
+```
+
 ### Тільки тестові залежності:
 ```bash
 pip install --no-index --find-links=. pytest==8.4.1 httpx==0.28.1
