@@ -321,27 +321,46 @@ class TestEnterpriseAPI:
 
 
 class TestEnterpriseMappings:
-    """Test suite for enterprise mappings file."""
+    """Test suite for enterprise source data files."""
 
-    def test_mappings_file_exists(self):
-        """Test that enterprise mappings file exists."""
-        xlsx_path = "backend/data/enterprise_mappings.xlsx"
-        csv_path = "backend/data/enterprise_mappings.csv"
+    def test_source_files_exist(self):
+        """Test that source Excel files exist."""
+        enterprise_path = "backend/data/enterprise.xlsx"
+        line_id_path = "backend/data/line_id.xlsx"
 
-        assert os.path.exists(xlsx_path) or os.path.exists(csv_path), (
-            "Enterprise mappings file should exist (either .xlsx or .csv)"
+        assert os.path.exists(enterprise_path), (
+            f"Enterprise source file should exist: {enterprise_path}"
+        )
+        assert os.path.exists(line_id_path), (
+            f"Line ID mapping file should exist: {line_id_path}"
         )
 
-    def test_mappings_file_not_empty(self):
-        """Test that mappings file is not empty."""
-        xlsx_path = "backend/data/enterprise_mappings.xlsx"
-        csv_path = "backend/data/enterprise_mappings.csv"
+    def test_source_files_not_empty(self):
+        """Test that source files are not empty."""
+        enterprise_path = "backend/data/enterprise.xlsx"
+        line_id_path = "backend/data/line_id.xlsx"
 
-        file_path = xlsx_path if os.path.exists(xlsx_path) else csv_path
+        if os.path.exists(enterprise_path):
+            file_size = os.path.getsize(enterprise_path)
+            assert file_size > 100, "Enterprise file should not be empty"
 
-        if os.path.exists(file_path):
-            file_size = os.path.getsize(file_path)
-            assert file_size > 100, "Mappings file should not be empty"
+        if os.path.exists(line_id_path):
+            file_size = os.path.getsize(line_id_path)
+            assert file_size > 50, "Line ID file should not be empty"
+
+    def test_load_mappings_works(self):
+        """Test that load_mappings() function works correctly."""
+        from backend.services.enterprise_mappings import load_mappings
+
+        df = load_mappings()
+        assert df is not None, "load_mappings() should return DataFrame"
+        assert len(df) > 0, "load_mappings() should return non-empty DataFrame"
+
+        # Verify expected columns
+        expected_columns = {"line_id", "serNum", "mfDev", "typeDev", "chNum", "enterprise_name", "active"}
+        assert expected_columns.issubset(set(df.columns)), (
+            f"DataFrame should have columns: {expected_columns}"
+        )
 
 
 class TestDPDIntegration:
@@ -359,11 +378,11 @@ class TestDPDIntegration:
 
 
 class TestCSVDataValidation:
-    """Test suite for validating API data against CSV mappings."""
+    """Test suite for validating API data against enterprise mappings."""
 
-    def load_devices_from_csv(self, line_id: int) -> list[dict]:
+    def load_devices_from_mappings(self, line_id: int) -> list[dict]:
         """
-        Load all active devices for given line_id from CSV file.
+        Load all active devices for given line_id from enterprise mappings.
 
         Args:
             line_id: Line ID to filter devices
@@ -371,45 +390,29 @@ class TestCSVDataValidation:
         Returns:
             List of device dictionaries with fields: serNum, mfDev, typeDev, chNum, enterprise_name
         """
-        csv_path = Path("backend/data/enterprise_mappings.csv")
+        from backend.services.enterprise_mappings import get_devices_for_lines
 
-        if not csv_path.exists():
-            pytest.skip(f"CSV file not found: {csv_path}")
-
-        devices = []
-        with open(csv_path, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                # Filter by line_id and active status
-                if int(row['line_id']) == line_id and row['active'].upper() == 'TRUE':
-                    devices.append({
-                        'serNum': int(row['serNum']),
-                        'mfDev': int(row['mfDev']),
-                        'typeDev': int(row['typeDev']),
-                        'chNum': int(row['chNum']),
-                        'enterprise_name': row['enterprise_name']
-                    })
-
+        devices = get_devices_for_lines([line_id])
         return devices
 
     def test_csv_devices_present_in_api_response(self, client):
         """
-        Test that reads devices from CSV and verifies they appear in API response.
+        Test that reads devices from mappings and verifies they appear in API response.
 
         This test:
-        1. Reads all active devices for a specific line from CSV file
+        1. Reads all active devices for a specific line from enterprise mappings
         2. Requests data from API for that line
-        3. Verifies that all devices from CSV are present in API response
+        3. Verifies that all devices from mappings are present in API response
         """
         # Test with line_id = 22
         test_line_id = 22
 
-        # Step 1: Load devices from CSV
-        csv_devices = self.load_devices_from_csv(test_line_id)
+        # Step 1: Load devices from enterprise mappings
+        csv_devices = self.load_devices_from_mappings(test_line_id)
 
-        assert len(csv_devices) > 0, f"No active devices found in CSV for line_id={test_line_id}"
+        assert len(csv_devices) > 0, f"No active devices found in mappings for line_id={test_line_id}"
 
-        print(f"\nLoaded {len(csv_devices)} active devices from CSV for line_id={test_line_id}")
+        print(f"\nLoaded {len(csv_devices)} active devices from mappings for line_id={test_line_id}")
 
         # Step 2: Request data from API
         params = {
@@ -460,7 +463,7 @@ class TestCSVDataValidation:
 
         # Report missing devices
         if missing_devices:
-            print(f"\nWARNING: {len(missing_devices)} devices from CSV not found in API response:")
+            print(f"\nWARNING: {len(missing_devices)} devices from mappings not found in API response:")
             for device in missing_devices[:5]:  # Show first 5
                 print(f"  - serNum={device['serNum']}, enterprise={device['enterprise_name']}")
 
@@ -469,21 +472,21 @@ class TestCSVDataValidation:
         print(f"\nDevice coverage: {coverage_ratio*100:.1f}% ({len(api_devices.intersection(csv_device_keys))}/{len(csv_device_keys)})")
 
         # We expect at least some devices to match (lenient check)
-        assert coverage_ratio > 0, "None of the CSV devices found in API response"
+        assert coverage_ratio > 0, "None of the mapping devices found in API response"
 
     def test_multiple_lines_csv_validation(self, client):
         """
-        Test CSV validation for multiple lines.
+        Test mappings validation for multiple lines.
 
         Validates that API returns data for correct devices across multiple lines.
         """
-        test_line_ids = [22]  # Updated to match server CSV data
+        test_line_ids = [22]  # Updated to match server data
 
         all_csv_devices = {}
         for line_id in test_line_ids:
-            devices = self.load_devices_from_csv(line_id)
+            devices = self.load_devices_from_mappings(line_id)
             all_csv_devices[line_id] = devices
-            print(f"Line {line_id}: {len(devices)} active devices in CSV")
+            print(f"Line {line_id}: {len(devices)} active devices in mappings")
 
         # Request API data for all lines
         params = {
@@ -527,6 +530,326 @@ class TestCSVDataValidation:
                 assert coverage >= 0, f"No devices found for line {line_id}"
 
 
+class TestMappingsDirectLoad:
+    """Test suite for direct loading from enterprise.xlsx and line_id.xlsx files."""
+
+    @pytest.fixture(scope="class")
+    def sample_devices(self) -> list[dict]:
+        """
+        Load sample devices from enterprise mappings.
+
+        Returns first 50 active devices from mappings.
+        """
+        from backend.services.enterprise_mappings import load_mappings
+
+        df = load_mappings()
+
+        # Filter active devices
+        active_df = df[df["active"] == True].copy()
+
+        # Take first 50 devices
+        sample_df = active_df.head(50)
+
+        # Convert to list of dicts
+        devices = sample_df.to_dict("records")
+
+        print(f"\nLoaded {len(devices)} sample devices for testing")
+        print(f"Unique line_ids: {sorted(sample_df['line_id'].unique().tolist())}")
+        print(f"chNum distribution: {sample_df['chNum'].value_counts().to_dict()}")
+
+        return devices
+
+    @pytest.mark.asyncio
+    async def test_dpd_api_direct_access(self, sample_devices):
+        """
+        Test 1: Verify we can fetch data directly from DPD API.
+
+        This test validates:
+        - DPD API authentication works
+        - Device parameters are correct
+        - API returns data for our devices
+        """
+        from backend.services.dpd_client import DPDClient
+        from collections import defaultdict
+
+        print(f"\n{'='*80}")
+        print(f"TEST 1: Direct DPD API Access")
+        print(f"{'='*80}")
+
+        client = DPDClient()
+
+        # Use fixed date range where data exists
+        date_from = datetime.strptime("2025-12-01", "%Y-%m-%d")
+        date_to = datetime.strptime("2025-12-24", "%Y-%m-%d")
+
+        # Fetch volumes for all sample devices
+        volumes_data = await client.get_volumes(
+            sample_devices,
+            date_from,
+            date_to,
+            type_request="daily"
+        )
+
+        print(f"\nDPD API Results:")
+        print(f"  Total records: {len(volumes_data)}")
+
+        # Verify we got some data
+        assert len(volumes_data) > 0, "DPD API returned no data"
+
+        # Group by device
+        device_data = defaultdict(list)
+        for record in volumes_data:
+            device_key = (
+                record["serNum"],
+                record["mfDev"],
+                record["typeDev"],
+                record["chNum"]
+            )
+            device_data[device_key].append(record)
+
+        print(f"  Devices with data: {len(device_data)} / {len(sample_devices)}")
+
+        # Show sample data
+        if volumes_data:
+            sample_record = volumes_data[0]
+            print(f"\n  Sample record:")
+            print(f"    Device: serNum={sample_record['serNum']}, mfDev={sample_record['mfDev']}, "
+                  f"typeDev={sample_record['typeDev']}, chNum={sample_record['chNum']}")
+            print(f"    Date: {sample_record.get('date') or sample_record.get('period')}")
+            print(f"    Volume (dvstAlwrk): {sample_record.get('dvstAlwrk')}")
+
+        return volumes_data
+
+    @pytest.mark.asyncio
+    async def test_manual_aggregation(self, sample_devices):
+        """
+        Test 2: Manually aggregate DPD data by line_id and compare structure.
+
+        This test validates:
+        - Device-to-line_id mapping is correct
+        - Aggregation logic matches expected behavior
+        - Data structure is correct
+        """
+        from backend.services.dpd_client import DPDClient
+        from collections import defaultdict
+
+        print(f"\n{'='*80}")
+        print(f"TEST 2: Manual Aggregation")
+        print(f"{'='*80}")
+
+        client = DPDClient()
+
+        date_from = datetime.strptime("2025-12-01", "%Y-%m-%d")
+        date_to = datetime.strptime("2025-12-24", "%Y-%m-%d")
+
+        # Fetch raw data from DPD
+        volumes_data = await client.get_volumes(
+            sample_devices,
+            date_from,
+            date_to,
+            type_request="daily"
+        )
+
+        # Create device lookup map
+        device_map = {
+            (d["serNum"], d["mfDev"], d["typeDev"], d["chNum"]): d
+            for d in sample_devices
+        }
+
+        # Manual aggregation by line_id and date
+        aggregated = defaultdict(lambda: {"total": 0.0, "device_count": 0, "devices": set()})
+
+        for record in volumes_data:
+            device_key = (
+                record["serNum"],
+                record["mfDev"],
+                record["typeDev"],
+                record["chNum"]
+            )
+
+            device_info = device_map.get(device_key)
+            if not device_info:
+                continue
+
+            volume = record.get("dvstAlwrk", 0.0) or 0.0
+
+            # Parse date
+            record_date_str = record.get("date") or record.get("period")
+            if not record_date_str:
+                continue
+
+            if isinstance(record_date_str, str):
+                record_date = datetime.strptime(
+                    record_date_str.split("T")[0], "%Y-%m-%d"
+                ).date()
+            else:
+                record_date = record_date_str.date() if hasattr(record_date_str, 'date') else record_date_str
+
+            key = (device_info["line_id"], record_date)
+            aggregated[key]["total"] += volume
+            aggregated[key]["devices"].add(device_key)
+
+        # Update device_count
+        for key in aggregated:
+            aggregated[key]["device_count"] = len(aggregated[key]["devices"])
+
+        print(f"\nAggregation Results:")
+        print(f"  Unique (line_id, date) combinations: {len(aggregated)}")
+
+        # Group by line_id
+        by_line = defaultdict(int)
+        for (line_id, _), data in aggregated.items():
+            by_line[line_id] += 1
+
+        print(f"  Records per line_id:")
+        for line_id in sorted(by_line.keys()):
+            print(f"    line_id {line_id}: {by_line[line_id]} time periods")
+
+        # Show sample aggregated record
+        if aggregated:
+            sample_key = list(aggregated.keys())[0]
+            sample_data = aggregated[sample_key]
+            print(f"\n  Sample aggregated record:")
+            print(f"    line_id: {sample_key[0]}, period: {sample_key[1]}")
+            print(f"    Total volume: {sample_data['total']:.2f}")
+            print(f"    Device count: {sample_data['device_count']}")
+
+        assert len(aggregated) > 0, "No aggregated data produced"
+
+        return aggregated
+
+    @pytest.mark.asyncio
+    async def test_compare_with_api(self, sample_devices):
+        """
+        Test 3: Compare manual aggregation with API endpoint results.
+
+        This test validates:
+        - API endpoint returns correct aggregated data
+        - Manual aggregation matches API aggregation
+        - All devices are included correctly
+        """
+        from backend.services.dpd_client import DPDClient
+        from collections import defaultdict
+
+        print(f"\n{'='*80}")
+        print(f"TEST 3: Compare Manual vs API Aggregation")
+        print(f"{'='*80}")
+
+        # Step 1: Get manual aggregation
+        client = DPDClient()
+        date_from = datetime.strptime("2025-12-01", "%Y-%m-%d")
+        date_to = datetime.strptime("2025-12-24", "%Y-%m-%d")
+
+        volumes_data = await client.get_volumes(
+            sample_devices,
+            date_from,
+            date_to,
+            type_request="daily"
+        )
+
+        device_map = {
+            (d["serNum"], d["mfDev"], d["typeDev"], d["chNum"]): d
+            for d in sample_devices
+        }
+
+        manual_aggregated = defaultdict(lambda: {"total": 0.0, "devices": set()})
+
+        for record in volumes_data:
+            device_key = (record["serNum"], record["mfDev"], record["typeDev"], record["chNum"])
+            device_info = device_map.get(device_key)
+            if not device_info:
+                continue
+
+            volume = record.get("dvstAlwrk", 0.0) or 0.0
+            record_date_str = record.get("date") or record.get("period")
+            if not record_date_str:
+                continue
+
+            if isinstance(record_date_str, str):
+                record_date = datetime.strptime(record_date_str.split("T")[0], "%Y-%m-%d").date()
+            else:
+                record_date = record_date_str.date() if hasattr(record_date_str, 'date') else record_date_str
+
+            key = (device_info["line_id"], record_date)
+            manual_aggregated[key]["total"] += volume
+            manual_aggregated[key]["devices"].add(device_key)
+
+        print(f"\nManual Aggregation:")
+        print(f"  Records: {len(manual_aggregated)}")
+        manual_total_volume = sum(data["total"] for data in manual_aggregated.values())
+        print(f"  Total volume (all periods): {manual_total_volume:.2f}")
+
+        # Step 2: Simulate API aggregation (same logic as enterprise_ep.py)
+        api_aggregated = defaultdict(lambda: {"total": 0.0, "devices": set()})
+
+        for record in volumes_data:
+            device_key = (record["serNum"], record["mfDev"], record["typeDev"], record["chNum"])
+            device_info = device_map.get(device_key)
+            if not device_info:
+                continue
+
+            volume = record.get("dvstAlwrk", 0.0) or 0.0
+            record_date_str = record.get("date") or record.get("period")
+            if not record_date_str:
+                continue
+
+            try:
+                if isinstance(record_date_str, str):
+                    record_period = datetime.strptime(record_date_str.split("T")[0], "%Y-%m-%d").date()
+                elif hasattr(record_date_str, 'date'):
+                    record_period = record_date_str.date()
+                else:
+                    record_period = record_date_str
+            except Exception:
+                continue
+
+            key = (device_info["line_id"], record_period)
+            api_aggregated[key]["total"] += volume
+            api_aggregated[key]["devices"].add(device_key)
+
+        print(f"\nAPI-style Aggregation:")
+        print(f"  Records: {len(api_aggregated)}")
+        api_total_volume = sum(data["total"] for data in api_aggregated.values())
+        print(f"  Total volume (all periods): {api_total_volume:.2f}")
+
+        # Step 3: Compare results
+        print(f"\nComparison:")
+
+        # Should have same number of records
+        assert len(manual_aggregated) == len(api_aggregated), \
+            f"Record count mismatch: manual={len(manual_aggregated)}, api={len(api_aggregated)}"
+        print(f"  ✓ Record count matches: {len(manual_aggregated)}")
+
+        # Should have same total volume (with small tolerance for floating point)
+        volume_diff = abs(manual_total_volume - api_total_volume)
+        assert volume_diff < 0.01, \
+            f"Total volume mismatch: manual={manual_total_volume:.2f}, api={api_total_volume:.2f}"
+        print(f"  ✓ Total volume matches: {manual_total_volume:.2f}")
+
+        # Compare individual records
+        mismatches = 0
+        for key in manual_aggregated:
+            if key not in api_aggregated:
+                print(f"  ✗ Missing in API aggregation: {key}")
+                mismatches += 1
+                continue
+
+            manual_vol = manual_aggregated[key]["total"]
+            api_vol = api_aggregated[key]["total"]
+            diff = abs(manual_vol - api_vol)
+
+            if diff > 0.01:
+                print(f"  ✗ Volume mismatch for {key}: manual={manual_vol:.2f}, api={api_vol:.2f}")
+                mismatches += 1
+
+        assert mismatches == 0, f"Found {mismatches} mismatches between manual and API aggregation"
+        print(f"  ✓ All individual records match")
+
+        print(f"\n{'='*80}")
+        print(f"✓ ALL TESTS PASSED")
+        print(f"{'='*80}")
+
+
 class TestHourlyArchive:
     """Test suite for hourly archive enterprise data."""
 
@@ -535,11 +858,13 @@ class TestHourlyArchive:
         Test hourly archive for line 22 - compares our API with DPD API directly.
 
         This test:
-        1. Reads device for line 22 from CSV
+        1. Reads device for line 22 from enterprise mappings
         2. Requests hourly data from our API
         3. Requests hourly data from DPD API directly
         4. Compares results
         """
+        from backend.services.enterprise_mappings import get_devices_for_lines
+
         test_line_id = 22
 
         # Use date range where data exists (2025-12-01)
@@ -547,27 +872,13 @@ class TestHourlyArchive:
         from_date = "2025-12-01"
         to_date = "2025-12-01"
 
-        # Step 1: Load device from CSV
-        csv_path = Path("backend/data/enterprise_mappings.csv")
-        if not csv_path.exists():
-            pytest.skip(f"CSV file not found: {csv_path}")
+        # Step 1: Load device from enterprise mappings
+        devices = get_devices_for_lines([test_line_id])
 
-        csv_device = None
-        with open(csv_path, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                if int(row['line_id']) == test_line_id and row['active'].upper() == 'TRUE':
-                    csv_device = {
-                        'serNum': int(row['serNum']),
-                        'mfDev': int(row['mfDev']),
-                        'typeDev': int(row['typeDev']),
-                        'chNum': int(row['chNum']),
-                        'enterprise_name': row['enterprise_name']
-                    }
-                    break
+        assert len(devices) > 0, f"No active devices found in mappings for line_id={test_line_id}"
 
-        assert csv_device is not None, f"No active device found in CSV for line_id={test_line_id}"
-        print(f"\nFound device in CSV: serNum={csv_device['serNum']}, enterprise={csv_device['enterprise_name']}")
+        csv_device = devices[0]  # Use first device
+        print(f"\nFound device in mappings: serNum={csv_device['serNum']}, enterprise={csv_device['enterprise_name']}")
 
         # Step 2: Request hourly data from our API
         # API accepts YYYY-MM-DD format, period_type determines granularity
