@@ -22,7 +22,12 @@ def test_volumes_by_enterprise_line_4():
 
     Группирует данные по предприятиям и выводит объемы по дням.
     """
-    client = httpx.Client(base_url=API_BASE_URL, timeout=30.0)
+    client = httpx.Client(
+        base_url=API_BASE_URL,
+        timeout=30.0,
+        verify=False,
+        trust_env=False
+    )
 
     # Запрос данных
     params = {
