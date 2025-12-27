@@ -18,6 +18,9 @@ from backend.api.endpoints import (
     sys_archive_ep,
     param_ep,
     enterprise_ep,
+    virtual_lines_ep,
+    hourly_virtual_ep,
+    daily_virtual_ep,
 )
 from backend.api.endpoints import gas_volume_calc_type_ep, day_archive_ep
 from backend.hl_engine.hostlib_updater import HostlibUpdater
@@ -63,6 +66,18 @@ tags_metadata = [
     {
         "name": "enterprise",
         "description": "Operations with enterprise volume data from DPD API.",
+    },
+    {
+        "name": "virtual_lines",
+        "description": "Operations with virtual lines (rings).",
+    },
+    {
+        "name": "hourly_virtual",
+        "description": "Operations with hourly archives supporting virtual lines.",
+    },
+    {
+        "name": "daily_virtual",
+        "description": "Operations with daily archives supporting virtual lines.",
     },
 ]
 
@@ -112,3 +127,6 @@ app.include_router(gas_volume_calc_ep.gas_volume_calc_router)
 app.include_router(line_ep.line_router)
 app.include_router(param_ep.param_router)
 app.include_router(enterprise_ep.enterprise_router)
+app.include_router(virtual_lines_ep.virtual_lines_router)
+app.include_router(hourly_virtual_ep.hourly_virtual_router)
+app.include_router(daily_virtual_ep.daily_virtual_router)
