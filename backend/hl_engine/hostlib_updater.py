@@ -12,9 +12,57 @@ from backend.db.models import HourlyArchiveList
 from backend.settings import backend_settings
 from backend.telegram_notifier.email_notifier import EmailNotifier
 from backend.telegram_notifier.telegram_norifier import TelegramBot
+from backend.services.virtual_lines_config import get_active_virtual_lines
 
 
 class HostlibUpdater:
+    @staticmethod
+    def aggregate_virtual_lines(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Aggregate physical lines into virtual lines in DataFrame.
+
+        For virtual lines (id >= 1000):
+        - Sum volumes from constituent physical lines
+        - Average pressure and temperature
+        - Use max density
+
+        Args:
+            df: DataFrame with hourly archive data (physical lines)
+
+        Returns:
+            DataFrame with aggregated data for virtual lines
+        """
+        virtual_lines = get_active_virtual_lines()
+
+        result_rows = []
+        for vline_id_str, vline_data in virtual_lines.items():
+            vline_id = int(vline_id_str)
+            physical_line_ids = vline_data["physical_line_ids"]
+
+            # Filter data for physical lines in this virtual line
+            df_physical = df[df['line_id'].isin(physical_line_ids)]
+
+            if df_physical.empty:
+                continue
+
+            # Group by period and aggregate
+            for period, group in df_physical.groupby('period'):
+                aggregated = {
+                    'period': period,
+                    'line_id': vline_id,
+                    'volume': group['volume'].sum(),
+                    'w_volume_dp': group['w_volume_dp'].mean(),  # Average
+                    'pressure': group['pressure'].mean(),  # Average
+                    'temperature': group['temperature'].mean(),  # Average
+                    'density': group['density'].max(),  # Max
+                    'created_at': group['created_at'].max(),
+                    'updated_at': group['updated_at'].max(),
+                    'id': None  # Virtual line doesn't have DB id
+                }
+                result_rows.append(aggregated)
+
+        return pd.DataFrame(result_rows)
+
     @staticmethod
     async def update_hostlibs(session):
         await update_hostlibs_main(session=session)
@@ -28,6 +76,22 @@ class HostlibUpdater:
     @staticmethod
     def send_email_message(message: str):
         EmailNotifier().send_message(message=message)
+
+    @staticmethod
+    async def get_line_name(line_id: int) -> str:
+        """Get line name for physical or virtual line."""
+        # Check if virtual line
+        if line_id >= 1000:
+            virtual_lines = get_active_virtual_lines()
+            vline_data = virtual_lines.get(str(line_id))
+            if vline_data:
+                return vline_data["name"]
+            return f"Виртуальная линия {line_id}"
+
+        # Physical line - get from database
+        async with async_session_factory() as session:
+            line = await LineDao(session=session).get_line_name_by_id(line_id)
+            return line.name if line else f"Линия {line_id}"
 
     @staticmethod
     async def create_message(df: pd.DataFrame):
@@ -46,13 +110,21 @@ class HostlibUpdater:
         for line_id in lines:
             df_i = df[df.line_id == line_id]
             df_len = df_i.shape[0]
-            async with async_session_factory() as session:
-                line = await LineDao(session=session).get_line_name_by_id(line_id)
+
+            # Get line name (works for both physical and virtual lines)
+            line_name = await HostlibUpdater.get_line_name(line_id)
+
             volume = df_i.volume.sum()
             df_last = df_i.tail(1)
             p_out = df_last.pressure.sum()
-            if line and not line.meter:
-                p_out = p_out - df_last.w_volume_dp.sum() / 10_000
+
+            # Only apply meter correction for physical lines
+            if line_id < 1000:
+                async with async_session_factory() as session:
+                    line = await LineDao(session=session).get_line_name_by_id(line_id)
+                    if line and not line.meter:
+                        p_out = p_out - df_last.w_volume_dp.sum() / 10_000
+
             p_out = (
                 p_out.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
                 if type(p_out) is Decimal
@@ -60,7 +132,6 @@ class HostlibUpdater:
             )
             if df_len != 24:
                 message += attention_text
-            line_name = line.name if line else f"Линия {line_id}"
             if line_id not in high_p_lines:
                 message += "<b>{}</b>: {:,} м³; Pвых: {} кг/см²\n\n".format(
                     line_name, round(volume, 3), round(p_out, 3)
@@ -103,13 +174,21 @@ class HostlibUpdater:
         for line_id in lines:
             df_i = df[df.line_id == line_id]
             df_len = df_i.shape[0]
-            async with async_session_factory() as session:
-                line = await LineDao(session=session).get_line_name_by_id(line_id)
+
+            # Get line name (works for both physical and virtual lines)
+            line_name = await HostlibUpdater.get_line_name(line_id)
+
             volume = df_i.volume.sum()
             df_last = df_i.tail(1)
             p_out = df_last.pressure.sum()
-            if line and not line.meter:
-                p_out = p_out - df_last.w_volume_dp.sum() / 10_000
+
+            # Only apply meter correction for physical lines
+            if line_id < 1000:
+                async with async_session_factory() as session:
+                    line = await LineDao(session=session).get_line_name_by_id(line_id)
+                    if line and not line.meter:
+                        p_out = p_out - df_last.w_volume_dp.sum() / 10_000
+
             p_out = (
                 p_out.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
                 if type(p_out) is not int
@@ -118,7 +197,6 @@ class HostlibUpdater:
             if df_len != 24:
                 pass
             formated_volume = "{:,}".format(volume).replace(",", " ")
-            line_name = line.name if line else f"Линия {line_id}"
             if line_id not in high_p_lines:
                 message += f"""
                                 <tr>
@@ -153,7 +231,22 @@ class HostlibUpdater:
         extracted_data = [
             HourlyArchiveList(**vars(item)).model_dump() for item in result
         ]
-        df = pd.DataFrame(extracted_data).sort_values("period")
+        df_physical = pd.DataFrame(extracted_data).sort_values("period")
+
+        # Aggregate virtual lines and combine with physical lines
+        df_virtual = self.aggregate_virtual_lines(df_physical)
+
+        # Get physical lines that are NOT in virtual lines
+        virtual_lines = get_active_virtual_lines()
+        physical_in_virtual = set()
+        for vline_data in virtual_lines.values():
+            physical_in_virtual.update(vline_data["physical_line_ids"])
+
+        df_physical_filtered = df_physical[~df_physical['line_id'].isin(physical_in_virtual)]
+
+        # Combine physical (not in virtual) + virtual lines
+        df = pd.concat([df_physical_filtered, df_virtual], ignore_index=True).sort_values("period")
+
         message = await self.create_message(df)
         await self.send_telegram_message(message)
         # message = await self.create_email_message(df)

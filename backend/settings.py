@@ -17,8 +17,9 @@ backend_settings = {
     "SENDER_EMAIL": "volodymyr.vereshchak@gmail.com",
     "EMAIL_PASSWORD": os.getenv("EMAIL_PASSWORD"),
     "EMAIL_RECEIVERS": ["v.vereshchak@zp.naftogaz.com"],
-    "LINES_IDS": [6, 9, 10, 26, 25, 24, 23, 21, 11, 13, 20, 22, 17, 15, 16],
-    "HIGH_P_LINES_IDS": [6, 11, 13, 17],
+    # GRS lines for reports: virtual lines (1001-1004) + physical lines not in rings
+    "LINES_IDS": [6, 11, 16, 17, 18, 19, 20, 21, 1001, 1002, 1003, 1004],
+    "HIGH_P_LINES_IDS": [6, 1002],  # Updated: 1002 (Кольцо Быт) instead of individual lines
     # DPD API Configuration
     "DPD_API_BASE_URL": "https://rest-direct.zp.iot.grmu.com.ua/api/v1/",
     "DPD_AUTH_URL": "https://auth-direct.zp.iot.grmu.com.ua/auth/login",
