@@ -14,10 +14,11 @@ from fastapi import APIRouter, Query, status, HTTPException
 from backend.db.models.enterprise_models import (
     EnterpriseVolumeResponse,
     DeviceVolume,
-    EnterpriseVolumeError
+    EnterpriseVolumeError,
+    EnterpriseMapping
 )
 from backend.services.dpd_client import DPDClient
-from backend.services.enterprise_mappings import get_devices_for_lines
+from backend.services.enterprise_mappings import get_devices_for_lines, load_mappings
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,29 @@ class EnterpriseRouter:
                 },
                 503: {
                     "description": "DPD API unavailable",
+                    "model": EnterpriseVolumeError
+                }
+            }
+        )
+        self.router.add_api_route(
+            path="/enterprise/mappings/",
+            tags=["enterprise"],
+            endpoint=self.get_all_enterprises,
+            methods=["GET"],
+            response_model=List[EnterpriseMapping],
+            status_code=status.HTTP_200_OK,
+            summary="Get all enterprise mappings",
+            description=(
+                "Returns list of all enterprises from mappings with their device "
+                "information and active status."
+            ),
+            responses={
+                200: {
+                    "description": "Successfully retrieved enterprise mappings",
+                    "model": List[EnterpriseMapping]
+                },
+                500: {
+                    "description": "Server error (e.g., mappings file not found)",
                     "model": EnterpriseVolumeError
                 }
             }
@@ -239,6 +263,10 @@ class EnterpriseRouter:
             # Aggregate by line_id and period (date or datetime depending on type)
             key = (device_info["line_id"], record_period)
 
+            # Extract temperature and pressure from record
+            temperature = record.get("temperature")
+            pressure = record.get("pressure")
+
             aggregated[key]["total"] += volume
             aggregated[key]["devices"].append(
                 DeviceVolume(
@@ -247,7 +275,9 @@ class EnterpriseRouter:
                     typeDev=device_info["typeDev"],
                     chNum=device_info["chNum"],
                     enterprise_name=device_info.get("enterprise_name", ""),
-                    volume=volume
+                    volume=volume,
+                    temperature=temperature,
+                    pressure=pressure
                 )
             )
 
@@ -271,6 +301,66 @@ class EnterpriseRouter:
             f"Returning {len(result)} aggregated enterprise volume records "
             f"for {len(devices)} devices"
         )
+
+        return result
+
+    async def get_all_enterprises(self) -> List[EnterpriseMapping]:
+        """
+        Get all enterprise mappings from Excel files.
+
+        Returns:
+            List of EnterpriseMapping objects containing:
+                - line_id: Gas line ID
+                - serNum: Device serial number
+                - mfDev: Manufacturer device code
+                - typeDev: Device type code
+                - chNum: Channel number
+                - enterprise_name: Enterprise name
+                - active: Whether the enterprise is active
+
+        Raises:
+            HTTPException: With appropriate status code and error message
+        """
+        logger.info("Fetching all enterprise mappings")
+
+        try:
+            df = load_mappings()
+        except FileNotFoundError as e:
+            logger.error(f"Enterprise mappings file not found: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(e)
+            )
+        except Exception as e:
+            logger.error(f"Error loading enterprise mappings: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error loading enterprise mappings: {e}"
+            )
+
+        if df is None or df.empty:
+            logger.warning("No enterprise mappings available")
+            return []
+
+        # Convert DataFrame to list of EnterpriseMapping objects
+        result = []
+        for _, row in df.iterrows():
+            result.append(
+                EnterpriseMapping(
+                    line_id=int(row["line_id"]),
+                    serNum=int(row["serNum"]),
+                    mfDev=int(row["mfDev"]),
+                    typeDev=int(row["typeDev"]),
+                    chNum=int(row["chNum"]),
+                    enterprise_name=str(row["enterprise_name"]),
+                    active=bool(row["active"])
+                )
+            )
+
+        # Sort by line_id and enterprise_name
+        result.sort(key=lambda x: (x.line_id, x.enterprise_name))
+
+        logger.info(f"Returning {len(result)} enterprise mappings")
 
         return result
 

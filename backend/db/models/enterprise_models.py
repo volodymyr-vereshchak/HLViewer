@@ -20,7 +20,9 @@ class DeviceVolume(BaseModel):
                 "typeDev": 1,
                 "chNum": 1,
                 "enterprise_name": "ТОВ Завод №1",
-                "volume": 1234.56
+                "volume": 1234.56,
+                "temperature": 15.5,
+                "pressure": 3.2
             }
         }
     )
@@ -31,6 +33,8 @@ class DeviceVolume(BaseModel):
     chNum: int = Field(description="Channel number")
     enterprise_name: str = Field(description="Enterprise name")
     volume: float = Field(ge=0, description="Daily standard volume (dvstAlwrk)")
+    temperature: Optional[float] = Field(None, description="Temperature reading")
+    pressure: Optional[float] = Field(None, description="Pressure reading")
 
 
 class EnterpriseVolumeResponse(BaseModel):
@@ -86,3 +90,29 @@ class EnterpriseVolumeError(BaseModel):
 
     error: str = Field(description="Error message")
     details: Optional[str] = Field(None, description="Additional error details")
+
+
+class EnterpriseMapping(BaseModel):
+    """Enterprise mapping data from Excel files."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "line_id": 1,
+                "serNum": 123456,
+                "mfDev": 16,
+                "typeDev": 1,
+                "chNum": 1,
+                "enterprise_name": "ТОВ Завод №1",
+                "active": True
+            }
+        }
+    )
+
+    line_id: int = Field(description="Gas line ID")
+    serNum: int = Field(description="Device serial number")
+    mfDev: int = Field(description="Manufacturer device code")
+    typeDev: int = Field(description="Device type code")
+    chNum: int = Field(description="Channel number")
+    enterprise_name: str = Field(description="Enterprise name")
+    active: bool = Field(description="Whether the enterprise is active")
