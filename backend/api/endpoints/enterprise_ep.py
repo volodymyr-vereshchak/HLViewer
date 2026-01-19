@@ -7,7 +7,7 @@ and aggregating by line_id and date.
 
 import logging
 from datetime import datetime, date
-from typing import List
+from typing import List, Optional
 from collections import defaultdict
 from fastapi import APIRouter, Query, status, HTTPException
 
@@ -93,7 +93,9 @@ class EnterpriseRouter:
             default="daily",
             pattern="^(daily|hourly)$",
             description="Data granularity: 'daily' or 'hourly'"
-        )
+        ),
+        serNum: Optional[int] = Query(None, description="Optional: Filter by device serial number"),
+        chNum: Optional[int] = Query(None, description="Optional: Filter by device channel number"),
     ) -> List[EnterpriseVolumeResponse]:
         """
         Get enterprise volume data aggregated by line_id and time period.
@@ -168,6 +170,12 @@ class EnterpriseRouter:
         if not devices:
             logger.info(f"No enterprise mappings found for lines {line_id}")
             return []
+        # Filter to specific device if serNum and chNum provided
+        if serNum is not None and chNum is not None:
+            devices = [d for d in devices if d["serNum"] == serNum and d["chNum"] == chNum]
+            if not devices:
+                logger.warning(f"No device found with serNum={serNum}, chNum={chNum}")
+                return []
 
         # Fetch volumes from DPD API
         try:
@@ -264,8 +272,8 @@ class EnterpriseRouter:
             key = (device_info["line_id"], record_period)
 
             # Extract temperature and pressure from record
-            temperature = record.get("temperature")
-            pressure = record.get("pressure")
+            temperature = record.get("temper")
+            pressure = record.get("press")
 
             aggregated[key]["total"] += volume
             aggregated[key]["devices"].append(

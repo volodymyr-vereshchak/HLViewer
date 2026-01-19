@@ -112,8 +112,8 @@ class DPDClient:
                 - date (str): Date in YYYY-MM-DD format (daily) or datetime (hourly)
                 - dvstAlwrk (float or None): Daily/hourly standard volume
                 - dvwrkAlwrk (float or None): Daily/hourly work volume
-                - pressure (float): Pressure reading
-                - temperature (float): Temperature reading
+                - press (float): Pressure reading
+                - temper (float): Temperature reading
                 - serNum, mfDev, typeDev, chNum (device identifiers)
 
             Returns empty list if device request fails after retries.
@@ -226,8 +226,8 @@ class DPDClient:
                 - date (str): Date (daily) or datetime (hourly) in YYYY-MM-DD format
                 - dvstAlwrk (float or None): Daily/hourly standard volume
                 - dvwrkAlwrk (float or None): Daily/hourly work volume
-                - pressure (float): Pressure reading
-                - temperature (float): Temperature reading
+                - press (float): Pressure reading (mapped to pressure in internal API)
+                - temper (float): Temperature reading (mapped to temperature in internal API)
 
         Notes:
             - Uses indications endpoint (GET) instead of devices/volumes (POST)
