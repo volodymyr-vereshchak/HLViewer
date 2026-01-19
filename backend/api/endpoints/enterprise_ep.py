@@ -219,9 +219,8 @@ class EnterpriseRouter:
                 continue
 
             # Extract volume (dvstAlwrk = standard volume)
-            volume = record.get("dvstAlwrk", 0.0)
-            if volume is None:
-                volume = 0.0
+            # Keep None as None to indicate missing data
+            volume = record.get("dvstAlwrk")
 
             # Parse period from record based on type
             # DPD API might return "date" or "period" field
@@ -275,7 +274,9 @@ class EnterpriseRouter:
             temperature = record.get("temper")
             pressure = record.get("press")
 
-            aggregated[key]["total"] += volume
+            # Only add to total if volume is not None
+            if volume is not None:
+                aggregated[key]["total"] += volume
             aggregated[key]["devices"].append(
                 DeviceVolume(
                     serNum=device_info["serNum"],

@@ -32,7 +32,7 @@ class DeviceVolume(BaseModel):
     typeDev: int = Field(description="Device type code")
     chNum: int = Field(description="Channel number")
     enterprise_name: str = Field(description="Enterprise name")
-    volume: float = Field(ge=0, description="Daily standard volume (dvstAlwrk)")
+    volume: Optional[float] = Field(None, ge=0, description="Daily standard volume (dvstAlwrk), None if no data")
     temperature: Optional[float] = Field(None, description="Temperature reading")
     pressure: Optional[float] = Field(None, description="Pressure reading")
 
