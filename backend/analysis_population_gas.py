@@ -521,8 +521,131 @@ for lid in sorted(analysis['line_id'].unique()):
     print(f'{lineid_to_grs.get(lid, lid)} (line_id={lid}): R²_train={r2_train_grs:.4f}, R²_test={r2_test_grs:.4f}, MAE={mae_grs:.2f} м³')
 
 reg_df = pd.DataFrame(reg_results)
-print('\n=== Таблиця результатів для кожної ГРС ===')
+print('\n=== Таблиця результатів для кожної ГРС (базова модель) ===')
 print(reg_df)
+
+# ============================================================================
+# Блок 8.5 — Two-Stage Model: Корректирующие модели для каждой ГРС
+# ============================================================================
+
+print('\n' + '='*80)
+print('STAGE 2: Навчання корректуючих моделей для кожної ГРС')
+print('='*80)
+
+# Упрощенный набор фич для коррекции (только температурные и временные)
+CORRECTION_COLS = ['temperature', 'temp_ma7', 'day_of_week']
+
+correction_models = {}
+reg_results_corrected = []
+models_corrected = {}
+
+for lid in sorted(analysis['line_id'].unique()):
+    train_grs = train[train['line_id'] == lid]
+    test_grs = test[test['line_id'] == lid]
+
+    if len(test_grs) < 1:
+        continue
+
+    X_train_grs = train_grs[FEATURE_COLS].values
+    y_train_grs = train_grs['population_volume'].values
+    X_test_grs = test_grs[FEATURE_COLS].values
+    y_test_grs = test_grs['population_volume'].values
+
+    # Базовый прогноз от основной модели
+    y_pred_train_base = model.predict(X_train_grs)
+    y_pred_test_base = model.predict(X_test_grs)
+
+    # Вычисляем residuals (ошибки) на тренировочной выборке
+    residuals_train = y_train_grs - y_pred_train_base
+
+    # Обучаем корректирующую модель на residuals
+    X_train_correction = train_grs[CORRECTION_COLS].values
+    X_test_correction = test_grs[CORRECTION_COLS].values
+
+    # Используем Ridge с меньшей регуляризацией для коррекции
+    correction_model = Ridge(alpha=0.1)
+    correction_model.fit(X_train_correction, residuals_train)
+
+    # Прогноз коррекции
+    correction_train = correction_model.predict(X_train_correction)
+    correction_test = correction_model.predict(X_test_correction)
+
+    # Финальный прогноз = базовый + коррекция
+    y_pred_train_final = y_pred_train_base + correction_train
+    y_pred_test_final = y_pred_test_base + correction_test
+
+    # Метрики с коррекцией
+    mae_grs_corrected = mean_absolute_error(y_test_grs, y_pred_test_final)
+    r2_train_grs_corrected = r2_score(y_train_grs, y_pred_train_final)
+    r2_test_grs_corrected = r2_score(y_test_grs, y_pred_test_final)
+
+    # Улучшение R²
+    r2_improvement = r2_test_grs_corrected - reg_df[reg_df['line_id'] == lid].iloc[0]['R2_test']
+
+    reg_results_corrected.append({
+        'line_id': lid,
+        'GRS': lineid_to_grs.get(lid, '?'),
+        'MAE_test_base': reg_df[reg_df['line_id'] == lid].iloc[0]['MAE_test'],
+        'MAE_test_corrected': round(mae_grs_corrected, 2),
+        'R2_test_base': reg_df[reg_df['line_id'] == lid].iloc[0]['R2_test'],
+        'R2_test_corrected': round(r2_test_grs_corrected, 4),
+        'R2_improvement': round(r2_improvement, 4),
+        'R2_train_corrected': round(r2_train_grs_corrected, 4),
+        'N_train': len(train_grs),
+        'N_test': len(test_grs),
+    })
+
+    correction_models[lid] = correction_model
+    models_corrected[lid] = (model, correction_model, train_grs, test_grs,
+                             X_train_grs, X_test_grs, y_train_grs, y_test_grs,
+                             y_pred_test_final)
+
+    print(f'{lineid_to_grs.get(lid, lid)} (line_id={lid}):')
+    print(f'  Base:      R²_test={reg_df[reg_df["line_id"] == lid].iloc[0]["R2_test"]:.4f}, MAE={reg_df[reg_df["line_id"] == lid].iloc[0]["MAE_test"]:.2f}')
+    print(f'  Corrected: R²_test={r2_test_grs_corrected:.4f}, MAE={mae_grs_corrected:.2f}')
+    print(f'  Improvement: ΔR² = {r2_improvement:+.4f}')
+
+reg_df_corrected = pd.DataFrame(reg_results_corrected)
+print('\n=== Таблиця результатів з коррекцією ===')
+print(reg_df_corrected)
+
+# Загальні метрики з коррекцией
+print('\n=== ЗАГАЛЬНЕ ПОРІВНЯННЯ: базова модель vs з коррекцією ===')
+print(f'{"Модель":<30} {"R²_test":<10} {"MAE_test":<10}')
+print('-' * 50)
+print(f'{"Базова (Ridge unified)":<30} {r2_test_overall:.4f}    {mae_test_overall:.2f}')
+
+# Вычисляем общие метрики для модели с коррекцией
+all_y_test = []
+all_y_pred_corrected = []
+for lid in models_corrected.keys():
+    _, _, _, test_grs, _, _, _, y_test_grs, y_pred_final = models_corrected[lid]
+    all_y_test.extend(y_test_grs)
+    all_y_pred_corrected.extend(y_pred_final)
+
+r2_test_overall_corrected = r2_score(all_y_test, all_y_pred_corrected)
+mae_test_overall_corrected = mean_absolute_error(all_y_test, all_y_pred_corrected)
+
+print(f'{"З коррекцією (Two-Stage)":<30} {r2_test_overall_corrected:.4f}    {mae_test_overall_corrected:.2f}')
+print(f'{"Покращення":<30} {r2_test_overall_corrected - r2_test_overall:+.4f}   {mae_test_overall_corrected - mae_test_overall:+.2f}')
+print()
+
+# Статистика: скільки ГРС покращилось
+improved = (reg_df_corrected['R2_improvement'] > 0).sum()
+worsened = (reg_df_corrected['R2_improvement'] < 0).sum()
+print(f'ГРС з покращенням R²: {improved}/{len(reg_df_corrected)}')
+print(f'ГРС з погіршенням R²: {worsened}/{len(reg_df_corrected)}')
+print(f'Середнє покращення R²: {reg_df_corrected["R2_improvement"].mean():+.4f}')
+print()
+
+# Сколько ГРС достигли R² > 0.75
+good_grs = (reg_df_corrected['R2_test_corrected'] >= 0.75).sum()
+print(f'ГРС з R²_test ≥ 0.75: {good_grs}/{len(reg_df_corrected)}')
+bad_grs = reg_df_corrected[reg_df_corrected['R2_test_corrected'] < 0.75]
+if len(bad_grs) > 0:
+    print(f'ГРС з R²_test < 0.75:')
+    for _, row in bad_grs.iterrows():
+        print(f'  - {row["GRS"]}: R²={row["R2_test_corrected"]:.4f}')
 
 # Графік важливості фіч (глобальная модель)
 print('\n=== Створення графіка важливості фіч ===')
@@ -543,41 +666,57 @@ plt.close()
 # Графіки: actual vs predicted для грудня (Test) + загальний графік
 print('\n=== Створення графіків actual vs predicted ===')
 
-# 1. Загальний графік для всіх ГРС
-fig, ax = plt.subplots(figsize=(12, 6))
-ax.scatter(y_test, y_pred_test, alpha=0.5, s=20, edgecolors='k', linewidths=0.5)
-ax.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--', lw=2, label='Ідеальний прогноз')
-ax.set_xlabel('Фактичний об\'єм (м³)')
-ax.set_ylabel('Прогнозований об\'єм (м³)')
-ax.set_title(f'Actual vs Predicted (всі ГРС, грудень 2025)\nR²={r2_test_overall:.4f}, MAE={mae_test_overall:.0f} м³')
-ax.legend()
-ax.grid(alpha=0.3)
+# 1. Загальний графік для всіх ГРС - порівняння базової та скорректованої моделі
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+
+# Базова модель
+ax1.scatter(y_test, y_pred_test, alpha=0.5, s=20, edgecolors='k', linewidths=0.5, color='red', label='Base model')
+ax1.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--', lw=2, label='Ідеальний прогноз')
+ax1.set_xlabel('Фактичний об\'єм (м³)')
+ax1.set_ylabel('Прогнозований об\'єм (м³)')
+ax1.set_title(f'Базова модель (грудень 2025)\nR²={r2_test_overall:.4f}, MAE={mae_test_overall:.0f} м³')
+ax1.legend()
+ax1.grid(alpha=0.3)
+
+# Модель з коррекцією
+ax2.scatter(all_y_test, all_y_pred_corrected, alpha=0.5, s=20, edgecolors='k', linewidths=0.5, color='green', label='Two-stage model')
+ax2.plot([min(all_y_test), max(all_y_test)], [min(all_y_test), max(all_y_test)], 'r--', lw=2, label='Ідеальний прогноз')
+ax2.set_xlabel('Фактичний об\'єм (м³)')
+ax2.set_ylabel('Прогнозований об\'єм (м³)')
+ax2.set_title(f'З коррекцією (грудень 2025)\nR²={r2_test_overall_corrected:.4f}, MAE={mae_test_overall_corrected:.0f} м³')
+ax2.legend()
+ax2.grid(alpha=0.3)
+
 plt.tight_layout()
 plt.savefig(OUTPUT_DIR / 'actual_vs_predicted_overall.png', dpi=150, bbox_inches='tight')
 print(f'Збережено графік: {OUTPUT_DIR / "actual_vs_predicted_overall.png"}')
 plt.close()
 
-# 2. Графіки для кожної ГРС окремо
-n_models = len(models)
+# 2. Графіки для кожної ГРС окремо (з коррекцією)
+n_models = len(models_corrected)
 ncols = 2
 nrows = (n_models + ncols - 1) // ncols
 
 fig, axes = plt.subplots(nrows, ncols, figsize=(14, 4 * nrows))
 axes = axes.flatten()
 
-for i, (lid, (model, train_grs, test_grs, X_train, X_test, y_train, y_test)) in enumerate(sorted(models.items())):
+for i, (lid, (base_model, corr_model, train_grs, test_grs, X_train, X_test, y_train, y_test, y_pred_final)) in enumerate(sorted(models_corrected.items())):
     ax = axes[i]
 
-    y_pred = model.predict(X_test)
     dates = test_grs['date'].values
 
-    ax.plot(dates, y_test, 'b-o', markersize=3, label='Actual')
-    ax.plot(dates, y_pred, 'r--s', markersize=3, label='Predicted')
+    # Базовый прогноз
+    y_pred_base = base_model.predict(X_test)
 
-    r2_test_val = reg_df[reg_df['line_id'] == lid].iloc[0]['R2_test']
-    mae_test_val = reg_df[reg_df['line_id'] == lid].iloc[0]['MAE_test']
+    ax.plot(dates, y_test, 'b-o', markersize=4, linewidth=2, label='Actual', zorder=3)
+    ax.plot(dates, y_pred_base, 'r--s', markersize=3, alpha=0.5, label='Base model', zorder=1)
+    ax.plot(dates, y_pred_final, 'g-^', markersize=3, linewidth=1.5, label='Two-stage', zorder=2)
 
-    ax.set_title(f'{lineid_to_grs.get(lid, lid)} — Грудень 2025 (єдина модель)\nR²={r2_test_val:.4f}, MAE={mae_test_val:.0f}')
+    r2_test_val = reg_df_corrected[reg_df_corrected['line_id'] == lid].iloc[0]['R2_test_corrected']
+    mae_test_val = reg_df_corrected[reg_df_corrected['line_id'] == lid].iloc[0]['MAE_test_corrected']
+    improvement = reg_df_corrected[reg_df_corrected['line_id'] == lid].iloc[0]['R2_improvement']
+
+    ax.set_title(f'{lineid_to_grs.get(lid, lid)} — Грудень 2025 (Two-Stage)\nR²={r2_test_val:.4f} (Δ={improvement:+.4f}), MAE={mae_test_val:.0f}')
     ax.set_xlabel('Дата')
     ax.set_ylabel('Об\'єм населення (м³)')
     ax.legend(fontsize=8)
@@ -606,12 +745,19 @@ for lid, (model, train, test, X_train, X_test, y_train, y_test) in sorted(models
 # Блок 9 — Зведені результати
 # ============================================================================
 
-# Фінальна таблиця: GRS, Pearson r, p-value, MAE, R² test
+# Фінальна таблиця: GRS, Pearson r, p-value, MAE, R² test (з коррекцією)
 final = corr_df[['line_id', 'GRS', 'Pearson_r', 'p_value', 'Significant']].merge(
-    reg_df[['line_id', 'MAE_test', 'R2_train', 'R2_test']],
+    reg_df_corrected[['line_id', 'MAE_test_base', 'MAE_test_corrected', 'R2_test_base', 'R2_test_corrected', 'R2_improvement', 'R2_train_corrected']],
     on='line_id',
     how='left'
-)
+).rename(columns={
+    'MAE_test_base': 'MAE_test_base',
+    'MAE_test_corrected': 'MAE_test',
+    'R2_test_base': 'R2_test_base',
+    'R2_test_corrected': 'R2_test',
+    'R2_train_corrected': 'R2_train',
+    'R2_improvement': 'R2_improvement'
+})
 
 print('\n' + '=' * 100)
 print('ЗВЕДЕНА ТАБЛИЦЯ: Кореляція та регресія — температура vs об\'єм газу населення')
@@ -649,7 +795,11 @@ for _, row in final.iterrows():
         r2 = row['R2_test']
         mae = row['MAE_test']
         r2_train = row['R2_train']
-        print(f'  Регресія (єдина модель): R²_test={r2:.4f}, R²_train={r2_train:.4f}, MAE_test={mae:.2f} м³')
+        r2_base = row.get('R2_test_base', 'N/A')
+        improvement = row.get('R2_improvement', 0)
+        print(f'  Регресія (Two-Stage): R²_test={r2:.4f}, R²_train={r2_train:.4f}, MAE_test={mae:.2f} м³')
+        if pd.notna(r2_base):
+            print(f'  Покращення: Base R²={r2_base:.4f} → Corrected R²={r2:.4f} (Δ={improvement:+.4f})')
     print()
 
 # Експорт у Excel
@@ -663,27 +813,43 @@ feature_imp_df = pd.DataFrame([
 
 # Додаткові загальні метрики
 overall_metrics_df = pd.DataFrame([{
-    'Metric': 'Overall R²_train',
+    'Metric': 'Base Model - R²_train',
     'Value': round(r2_train_overall, 4)
 }, {
-    'Metric': 'Overall R²_test',
+    'Metric': 'Base Model - R²_test',
     'Value': round(r2_test_overall, 4)
 }, {
-    'Metric': 'Overall MAE_test',
+    'Metric': 'Base Model - MAE_test',
     'Value': round(mae_test_overall, 2)
+}, {
+    'Metric': 'Two-Stage - R²_test',
+    'Value': round(r2_test_overall_corrected, 4)
+}, {
+    'Metric': 'Two-Stage - MAE_test',
+    'Value': round(mae_test_overall_corrected, 2)
+}, {
+    'Metric': 'Improvement - ΔR²',
+    'Value': round(r2_test_overall_corrected - r2_test_overall, 4)
+}, {
+    'Metric': 'Improvement - ΔMAE',
+    'Value': round(mae_test_overall_corrected - mae_test_overall, 2)
 }, {
     'Metric': 'Train samples',
     'Value': len(train)
 }, {
     'Metric': 'Test samples',
     'Value': len(test)
+}, {
+    'Metric': 'GRS with R² ≥ 0.75',
+    'Value': good_grs
 }])
 
 with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
     final.to_excel(writer, sheet_name='Summary', index=False)
     overall_metrics_df.to_excel(writer, sheet_name='Overall_Metrics', index=False)
     corr_df.to_excel(writer, sheet_name='Correlation', index=False)
-    reg_df.to_excel(writer, sheet_name='Regression', index=False)
+    reg_df.to_excel(writer, sheet_name='Regression_Base', index=False)
+    reg_df_corrected.to_excel(writer, sheet_name='Regression_TwoStage', index=False)
     feature_imp_df.to_excel(writer, sheet_name='Feature_Importance', index=False)
     enterprise_daily.to_excel(writer, sheet_name='Enterprise_Daily', index=False)
 
@@ -692,17 +858,25 @@ print(f'Результати збережено у {output_file}')
 print(f'Графіки збережено у директорії {OUTPUT_DIR}/')
 print(f'  - scatter_temp_vs_population.png')
 print(f'  - correlation_heatmap.png')
-print(f'  - feature_importance.png (важливість фіч єдиної моделі)')
-print(f'  - actual_vs_predicted_overall.png (НОВИЙ - загальний графік для всіх ГРС)')
-print(f'  - actual_vs_predicted.png (графіки для кожної ГРС)')
+print(f'  - feature_importance.png (важливість фіч базової моделі)')
+print(f'  - actual_vs_predicted_overall.png (порівняння: базова vs Two-Stage)')
+print(f'  - actual_vs_predicted.png (графіки для кожної ГРС з коррекцією)')
 print(f'{"="*80}')
 print(f'\n=== ПІДСУМОК ===')
-print(f'Використано ЄДИНУ модель Ridge регресії для всіх {len(models)} ГРС')
-print(f'Навчальна вибірка: {len(train)} сэмплов')
-print(f'Тестова вибірка: {len(test)} сэмплов')
-print(f'Кількість фіч: {len(FEATURE_COLS)}')
+print(f'Використано TWO-STAGE модель:')
+print(f'  Stage 1: Єдина Ridge модель для всіх {len(models_corrected)} ГРС')
+print(f'  Stage 2: Індивідуальні корректуючі моделі для кожної ГРС')
+print(f'\nДані:')
+print(f'  Навчальна вибірка: {len(train)} сэмплов')
+print(f'  Тестова вибірка: {len(test)} сэмплов')
+print(f'  Базова модель - фіч: {len(FEATURE_COLS)}')
+print(f'  Коррекція - фіч: {len(CORRECTION_COLS)}')
 print(f'\nЗагальні метрики:')
-print(f'  R²_test:  {r2_test_overall:.4f}')
-print(f'  MAE_test: {mae_test_overall:.2f} м³')
-print(f'  Переобучення (R²_train - R²_test): {r2_train_overall - r2_test_overall:.4f}')
+print(f'  Базова модель:    R²={r2_test_overall:.4f}, MAE={mae_test_overall:.2f} м³')
+print(f'  Two-Stage модель: R²={r2_test_overall_corrected:.4f}, MAE={mae_test_overall_corrected:.2f} м³')
+print(f'  Покращення:       ΔR²={r2_test_overall_corrected - r2_test_overall:+.4f}, ΔMAE={mae_test_overall_corrected - mae_test_overall:+.2f} м³')
+print(f'\nДосягнуто цілі:')
+print(f'  ГРС з R²_test ≥ 0.75: {good_grs}/{len(reg_df_corrected)}')
+if len(bad_grs) > 0:
+    print(f'  Проблемні ГРС (R² < 0.75): {", ".join(bad_grs["GRS"].tolist())}')
 print(f'\nАналіз завершено успішно!')
