@@ -24,17 +24,21 @@ pd.set_option('display.max_columns', 20)
 pd.set_option('display.width', 200)
 
 # === Конфігурація ===
+# Шляхи відносно розташування скрипта
+SCRIPT_DIR = Path(__file__).parent
+DATA_DIR = SCRIPT_DIR / 'data'
+OUTPUT_DIR = DATA_DIR / 'analysis_output'
+
 DB_URL = 'postgresql+psycopg2://postgres:assembler@localhost:5432/hostlib_db'
-LINE_ID_FILE = 'data/line_id_2025.xlsx'
-VOLUME_FILE = 'data/volume_2025.xlsx'
-OUTPUT_DIR = 'data/analysis_output'
+LINE_ID_FILE = DATA_DIR / 'line_id_2025.xlsx'
+VOLUME_FILE = DATA_DIR / 'volume_2025.xlsx'
 
 TEMPERATURE_LINE_ID = 19
 TRAIN_MONTHS = list(range(1, 12))  # січень–листопад
 TEST_MONTH = 12                     # грудень
 
 # Створити директорію для виводу
-Path(OUTPUT_DIR).mkdir(exist_ok=True)
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 engine = create_engine(DB_URL)
 print('DB engine створено:', engine.url)
@@ -302,8 +306,8 @@ for j in range(i + 1, len(axes)):
     axes[j].set_visible(False)
 
 plt.tight_layout()
-plt.savefig(f'{OUTPUT_DIR}/scatter_temp_vs_population.png', dpi=150, bbox_inches='tight')
-print(f'\nЗбережено графік: {OUTPUT_DIR}/scatter_temp_vs_population.png')
+plt.savefig(OUTPUT_DIR / 'scatter_temp_vs_population.png', dpi=150, bbox_inches='tight')
+print(f'\nЗбережено графік: {OUTPUT_DIR / "scatter_temp_vs_population.png"}')
 plt.close()
 
 # Heatmap кореляцій
@@ -317,8 +321,8 @@ ax.axvline(x=0, color='black', linewidth=0.5)
 for bar, val in zip(bars, corr_pivot.values):
     ax.text(val, bar.get_y() + bar.get_height() / 2, f' {val:.3f}', va='center', fontsize=9)
 plt.tight_layout()
-plt.savefig(f'{OUTPUT_DIR}/correlation_heatmap.png', dpi=150, bbox_inches='tight')
-print(f'Збережено графік: {OUTPUT_DIR}/correlation_heatmap.png')
+plt.savefig(OUTPUT_DIR / 'correlation_heatmap.png', dpi=150, bbox_inches='tight')
+print(f'Збережено графік: {OUTPUT_DIR / "correlation_heatmap.png"}')
 plt.close()
 
 # ============================================================================
@@ -410,8 +414,8 @@ for j in range(i + 1, len(axes)):
     axes[j].set_visible(False)
 
 plt.tight_layout()
-plt.savefig(f'{OUTPUT_DIR}/regression_lines.png', dpi=150, bbox_inches='tight')
-print(f'\nЗбережено графік: {OUTPUT_DIR}/regression_lines.png')
+plt.savefig(OUTPUT_DIR / 'regression_lines.png', dpi=150, bbox_inches='tight')
+print(f'\nЗбережено графік: {OUTPUT_DIR / "regression_lines.png"}')
 plt.close()
 
 # Графіки: actual vs predicted для грудня (Test)
@@ -440,8 +444,8 @@ for j in range(i + 1, len(axes)):
     axes[j].set_visible(False)
 
 plt.tight_layout()
-plt.savefig(f'{OUTPUT_DIR}/actual_vs_predicted.png', dpi=150, bbox_inches='tight')
-print(f'Збережено графік: {OUTPUT_DIR}/actual_vs_predicted.png')
+plt.savefig(OUTPUT_DIR / 'actual_vs_predicted.png', dpi=150, bbox_inches='tight')
+print(f'Збережено графік: {OUTPUT_DIR / "actual_vs_predicted.png"}')
 plt.close()
 
 # Діагностика: розподіл помилок на тесті
@@ -507,7 +511,7 @@ for _, row in final.iterrows():
     print()
 
 # Експорт у Excel
-output_file = 'data/analysis_population_gas_results.xlsx'
+output_file = DATA_DIR / 'analysis_population_gas_results.xlsx'
 with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
     final.to_excel(writer, sheet_name='Summary', index=False)
     corr_df.to_excel(writer, sheet_name='Correlation', index=False)
