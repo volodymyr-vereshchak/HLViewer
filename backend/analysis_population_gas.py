@@ -18,6 +18,8 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, r2_score
 import warnings
 from pathlib import Path
+import os
+from dotenv import load_dotenv
 
 warnings.filterwarnings('ignore')
 pd.set_option('display.max_columns', 20)
@@ -26,10 +28,20 @@ pd.set_option('display.width', 200)
 # === Конфігурація ===
 # Шляхи відносно розташування скрипта
 SCRIPT_DIR = Path(__file__).parent
+PROJECT_ROOT = SCRIPT_DIR.parent
 DATA_DIR = SCRIPT_DIR / 'data'
 OUTPUT_DIR = DATA_DIR / 'analysis_output'
 
-DB_URL = 'postgresql+psycopg2://postgres:assembler@localhost:5432/hostlib_db'
+# Завантажити змінні з .env файлу
+load_dotenv(PROJECT_ROOT / '.env')
+
+# Побудувати DB_URL з змінних оточення
+DB_USER = os.getenv('POSTGRES_USER', 'postgres')
+DB_PASSWORD = os.getenv('POSTGRES_PASSWORD', 'assembler')
+DB_HOST = os.getenv('DB_HOST', 'localhost')
+DB_PORT = os.getenv('DB_PORT', '5432')
+DB_NAME = os.getenv('POSTGRES_DB', 'hostlib_db')
+DB_URL = f'postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}'
 LINE_ID_FILE = DATA_DIR / 'line_id_2025.xlsx'
 VOLUME_FILE = DATA_DIR / 'volume_2025.xlsx'
 
