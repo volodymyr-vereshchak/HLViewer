@@ -319,6 +319,16 @@ analysis['temp_diff'] = analysis['temp_diff'].fillna(0)
 analysis['pop_volume_lag7'] = analysis['pop_volume_lag7'].fillna(analysis['population_volume'])
 analysis['pop_volume_ma7'] = analysis['pop_volume_ma7'].fillna(analysis['population_volume'])
 
+# ============================================================================
+# ГРС-специфічні фічі для єдиної моделі
+# ============================================================================
+# Середній об'єм для кожної ГРС (нормалізація)
+grs_avg = analysis.groupby('line_id')['population_volume'].transform('mean')
+analysis['grs_avg_volume'] = grs_avg
+
+# line_id як категоріальну фічу (для лінійної регресії просто числову)
+analysis['line_id_feature'] = analysis['line_id']
+
 print(f'analysis з новими фічами: {analysis.shape}')
 print(f'Додано {analysis.shape[1] - 8} нових фіч')  # -8 оригінальних колонок
 print(f'Місяці: {sorted(analysis["month"].unique())}')
@@ -415,112 +425,139 @@ plt.close()
 # Блок 8 — Лінійна регресія з розширеними фічами
 # ============================================================================
 
-# Список фіч для моделі
+# Упрощенный список фич для единой модели (7 фич)
 FEATURE_COLS = [
-    'temp_kelvin',
-    'temp_kelvin_squared',
-    'temp_ma7',
-    'temp_diff',
-    'temp_min3',
-    'day_of_week',
-    'day_of_month',
-    'month',
-    'quarter',
-    'season',
-    'is_weekend',
-    'week_of_year',
-    'pop_volume_lag7',
-    'pop_volume_ma7',
-    'temp_x_weekend',
-    'temp_x_month'
+    'temperature',        # Основная температура (°C)
+    'temp_ma7',          # Скользящее среднее 7 дней
+    'day_of_week',       # День недели (0-6)
+    'pop_volume_lag7',   # Потребление 7 дней назад
+    'pop_volume_ma7',    # Среднее потребление 7 дней
+    'line_id_feature',   # ID ГРС
+    'grs_avg_volume',    # Средний объем ГРС
 ]
 
-print(f'\n=== Навчання моделей з {len(FEATURE_COLS)} фічами ===')
+print(f'\n=== Навчання ЄДИНОЇ моделі для всіх ГРС з {len(FEATURE_COLS)} спрощеними фічами ===')
 print(f'Фічі: {", ".join(FEATURE_COLS)}')
 
+# Подготовка данных для ВСЕХ ГРС сразу (единая модель)
+from sklearn.linear_model import Ridge
+
+analysis_clean = analysis.dropna(subset=['population_volume'] + FEATURE_COLS)
+
+train = analysis_clean[analysis_clean['month'].isin(TRAIN_MONTHS)]
+test = analysis_clean[analysis_clean['month'] == TEST_MONTH]
+
+print(f'\nРозмір тренувальної вибірки: {len(train)} сэмплов ({len(train)//365:.0f} ГРС × ~365 днів)')
+print(f'Розмір тестової вибірки: {len(test)} сэмплов ({len(test)//31:.0f} ГРС × ~31 день)')
+
+X_train = train[FEATURE_COLS].values
+y_train = train['population_volume'].values
+X_test = test[FEATURE_COLS].values
+y_test = test['population_volume'].values
+
+# Обучение ОДНОЙ модели с Ridge регрессией (регуляризация против переобучения)
+model = Ridge(alpha=1.0)
+model.fit(X_train, y_train)
+
+# Прогноз
+y_pred_train = model.predict(X_train)
+y_pred_test = model.predict(X_test)
+
+# Метрики общие
+mae_test_overall = mean_absolute_error(y_test, y_pred_test)
+r2_train_overall = r2_score(y_train, y_pred_train)
+r2_test_overall = r2_score(y_test, y_pred_test)
+
+print(f'\n=== ЗАГАЛЬНІ МЕТРИКИ (всі ГРС разом) ===')
+print(f'R²_train: {r2_train_overall:.4f}')
+print(f'R²_test:  {r2_test_overall:.4f}')
+print(f'MAE_test: {mae_test_overall:.2f} м³')
+print(f'Різниця R²_train - R²_test: {r2_train_overall - r2_test_overall:.4f}')
+
+# Важность фич (абсолютное значение коэффициентов)
+feature_importance_global = dict(zip(FEATURE_COLS, np.abs(model.coef_)))
+print(f'\n=== Важливість фіч (глобальна модель) ===')
+for feat, importance in sorted(feature_importance_global.items(), key=lambda x: x[1], reverse=True):
+    print(f'  {feat}: {importance:.2f}')
+
+# Метрики для каждой ГРС отдельно
+print(f'\n=== МЕТРИКИ ДЛЯ КОЖНОЇ ГРС (з єдиної моделі) ===')
 reg_results = []
-models = {}
-feature_importance = {}
+models = {}  # Сохраняем данные для графиков
 
 for lid in sorted(analysis['line_id'].unique()):
-    subset = analysis[analysis['line_id'] == lid].copy()
+    train_grs = train[train['line_id'] == lid]
+    test_grs = test[test['line_id'] == lid]
 
-    # Видалити рядки з NaN у цільовій змінній або фічах
-    subset = subset.dropna(subset=['population_volume'] + FEATURE_COLS)
-
-    train = subset[subset['month'].isin(TRAIN_MONTHS)]
-    test = subset[subset['month'] == TEST_MONTH]
-
-    if len(train) < 10 or len(test) < 1:
-        print(f'⚠ line_id={lid}: недостатньо даних (train={len(train)}, test={len(test)}), пропуск')
+    if len(test_grs) < 1:
+        print(f'⚠ line_id={lid}: немає тестових даних, пропуск')
         continue
 
-    X_train = train[FEATURE_COLS].values
-    y_train = train['population_volume'].values
-    X_test = test[FEATURE_COLS].values
-    y_test = test['population_volume'].values
+    X_train_grs = train_grs[FEATURE_COLS].values
+    y_train_grs = train_grs['population_volume'].values
+    X_test_grs = test_grs[FEATURE_COLS].values
+    y_test_grs = test_grs['population_volume'].values
 
-    model = LinearRegression()
-    model.fit(X_train, y_train)
+    y_pred_train_grs = model.predict(X_train_grs)
+    y_pred_test_grs = model.predict(X_test_grs)
 
-    y_pred_train = model.predict(X_train)
-    y_pred_test = model.predict(X_test)
-
-    mae_test = mean_absolute_error(y_test, y_pred_test)
-    r2_train = r2_score(y_train, y_pred_train)
-    r2_test = r2_score(y_test, y_pred_test)
-
-    # Зберігаємо важливість фіч (абсолютне значення коефіцієнтів)
-    feature_importance[lid] = dict(zip(FEATURE_COLS, np.abs(model.coef_)))
+    mae_grs = mean_absolute_error(y_test_grs, y_pred_test_grs)
+    r2_train_grs = r2_score(y_train_grs, y_pred_train_grs)
+    r2_test_grs = r2_score(y_test_grs, y_pred_test_grs)
 
     reg_results.append({
         'line_id': lid,
         'GRS': lineid_to_grs.get(lid, '?'),
-        'MAE_test': round(mae_test, 2),
-        'R2_train': round(r2_train, 4),
-        'R2_test': round(r2_test, 4),
-        'N_train': len(train),
-        'N_test': len(test),
+        'MAE_test': round(mae_grs, 2),
+        'R2_train': round(r2_train_grs, 4),
+        'R2_test': round(r2_test_grs, 4),
+        'N_train': len(train_grs),
+        'N_test': len(test_grs),
     })
-    models[lid] = (model, train, test, X_train, X_test, y_train, y_test)
+
+    # Сохраняем данные для графиков
+    models[lid] = (model, train_grs, test_grs, X_train_grs, X_test_grs, y_train_grs, y_test_grs)
+
+    print(f'{lineid_to_grs.get(lid, lid)} (line_id={lid}): R²_train={r2_train_grs:.4f}, R²_test={r2_test_grs:.4f}, MAE={mae_grs:.2f} м³')
 
 reg_df = pd.DataFrame(reg_results)
-print('\n=== Результати лінійної регресії з розширеними фічами ===')
+print('\n=== Таблиця результатів для кожної ГРС ===')
 print(reg_df)
 
-# Виведення топ-5 найважливіших фіч для кожної ГРС
-print('\n=== Топ-5 найважливіших фіч для кожної ГРС ===')
-for lid in sorted(feature_importance.keys()):
-    grs = lineid_to_grs.get(lid, '?')
-    top_features = sorted(feature_importance[lid].items(), key=lambda x: x[1], reverse=True)[:5]
-    print(f'\n{grs} (line_id={lid}):')
-    for feat, importance in top_features:
-        print(f'  {feat}: {importance:.2f}')
-
-# Графік важливості фіч (топ-10 найважливіших фіч в середньому по всіх ГРС)
+# Графік важливості фіч (глобальная модель)
 print('\n=== Створення графіка важливості фіч ===')
-# Усереднена важливість по всіх ГРС
-avg_importance = {}
-for feat in FEATURE_COLS:
-    avg_importance[feat] = np.mean([feature_importance[lid][feat] for lid in feature_importance.keys()])
-
-# Сортування та вибір топ-10
-top_10_features = sorted(avg_importance.items(), key=lambda x: x[1], reverse=True)[:10]
+sorted_features = sorted(feature_importance_global.items(), key=lambda x: x[1], reverse=True)
 
 fig, ax = plt.subplots(figsize=(10, 6))
-features = [f[0] for f in top_10_features]
-importances = [f[1] for f in top_10_features]
+features = [f[0] for f in sorted_features]
+importances = [f[1] for f in sorted_features]
 ax.barh(features, importances, color='steelblue', alpha=0.7)
-ax.set_xlabel('Середня важливість (абсолютне значення коефіцієнта)')
-ax.set_title('Топ-10 найважливіших фіч для прогнозування споживання газу')
+ax.set_xlabel('Важливість (абсолютне значення коефіцієнта Ridge регресії)')
+ax.set_title('Важливість фіч для прогнозування споживання газу (єдина модель)')
 ax.invert_yaxis()
 plt.tight_layout()
 plt.savefig(OUTPUT_DIR / 'feature_importance.png', dpi=150, bbox_inches='tight')
 print(f'Збережено графік: {OUTPUT_DIR / "feature_importance.png"}')
 plt.close()
 
-# Графіки: actual vs predicted для грудня (Test)
+# Графіки: actual vs predicted для грудня (Test) + загальний графік
 print('\n=== Створення графіків actual vs predicted ===')
+
+# 1. Загальний графік для всіх ГРС
+fig, ax = plt.subplots(figsize=(12, 6))
+ax.scatter(y_test, y_pred_test, alpha=0.5, s=20, edgecolors='k', linewidths=0.5)
+ax.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--', lw=2, label='Ідеальний прогноз')
+ax.set_xlabel('Фактичний об\'єм (м³)')
+ax.set_ylabel('Прогнозований об\'єм (м³)')
+ax.set_title(f'Actual vs Predicted (всі ГРС, грудень 2025)\nR²={r2_test_overall:.4f}, MAE={mae_test_overall:.0f} м³')
+ax.legend()
+ax.grid(alpha=0.3)
+plt.tight_layout()
+plt.savefig(OUTPUT_DIR / 'actual_vs_predicted_overall.png', dpi=150, bbox_inches='tight')
+print(f'Збережено графік: {OUTPUT_DIR / "actual_vs_predicted_overall.png"}')
+plt.close()
+
+# 2. Графіки для кожної ГРС окремо
 n_models = len(models)
 ncols = 2
 nrows = (n_models + ncols - 1) // ncols
@@ -528,11 +565,11 @@ nrows = (n_models + ncols - 1) // ncols
 fig, axes = plt.subplots(nrows, ncols, figsize=(14, 4 * nrows))
 axes = axes.flatten()
 
-for i, (lid, (model, train, test, X_train, X_test, y_train, y_test)) in enumerate(sorted(models.items())):
+for i, (lid, (model, train_grs, test_grs, X_train, X_test, y_train, y_test)) in enumerate(sorted(models.items())):
     ax = axes[i]
 
     y_pred = model.predict(X_test)
-    dates = test['date'].values
+    dates = test_grs['date'].values
 
     ax.plot(dates, y_test, 'b-o', markersize=3, label='Actual')
     ax.plot(dates, y_pred, 'r--s', markersize=3, label='Predicted')
@@ -540,7 +577,7 @@ for i, (lid, (model, train, test, X_train, X_test, y_train, y_test)) in enumerat
     r2_test_val = reg_df[reg_df['line_id'] == lid].iloc[0]['R2_test']
     mae_test_val = reg_df[reg_df['line_id'] == lid].iloc[0]['MAE_test']
 
-    ax.set_title(f'{lineid_to_grs.get(lid, lid)} — Грудень 2025\nR²={r2_test_val:.4f}, MAE={mae_test_val:.0f}')
+    ax.set_title(f'{lineid_to_grs.get(lid, lid)} — Грудень 2025 (єдина модель)\nR²={r2_test_val:.4f}, MAE={mae_test_val:.0f}')
     ax.set_xlabel('Дата')
     ax.set_ylabel('Об\'єм населення (м³)')
     ax.legend(fontsize=8)
@@ -612,33 +649,39 @@ for _, row in final.iterrows():
         r2 = row['R2_test']
         mae = row['MAE_test']
         r2_train = row['R2_train']
-        print(f'  Регресія: R²_test={r2:.4f}, R²_train={r2_train:.4f}, MAE_test={mae:.2f} м³')
-
-        # Топ-3 фічі для цієї ГРС
-        lid = row['line_id']
-        if lid in feature_importance:
-            top_3 = sorted(feature_importance[lid].items(), key=lambda x: x[1], reverse=True)[:3]
-            print(f'  Топ-3 фічі: {", ".join([f"{f[0]}" for f in top_3])}')
+        print(f'  Регресія (єдина модель): R²_test={r2:.4f}, R²_train={r2_train:.4f}, MAE_test={mae:.2f} м³')
     print()
 
 # Експорт у Excel
 output_file = DATA_DIR / 'analysis_population_gas_results.xlsx'
 
-# Підготовка таблиці важливості фіч
-feature_imp_data = []
-for lid in sorted(feature_importance.keys()):
-    grs = lineid_to_grs.get(lid, '?')
-    for feat, importance in sorted(feature_importance[lid].items(), key=lambda x: x[1], reverse=True):
-        feature_imp_data.append({
-            'line_id': lid,
-            'GRS': grs,
-            'Feature': feat,
-            'Importance': round(importance, 4)
-        })
-feature_imp_df = pd.DataFrame(feature_imp_data)
+# Підготовка таблиці важливості фіч (глобальна модель)
+feature_imp_df = pd.DataFrame([
+    {'Feature': feat, 'Importance': round(importance, 4)}
+    for feat, importance in sorted(feature_importance_global.items(), key=lambda x: x[1], reverse=True)
+])
+
+# Додаткові загальні метрики
+overall_metrics_df = pd.DataFrame([{
+    'Metric': 'Overall R²_train',
+    'Value': round(r2_train_overall, 4)
+}, {
+    'Metric': 'Overall R²_test',
+    'Value': round(r2_test_overall, 4)
+}, {
+    'Metric': 'Overall MAE_test',
+    'Value': round(mae_test_overall, 2)
+}, {
+    'Metric': 'Train samples',
+    'Value': len(train)
+}, {
+    'Metric': 'Test samples',
+    'Value': len(test)
+}])
 
 with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
     final.to_excel(writer, sheet_name='Summary', index=False)
+    overall_metrics_df.to_excel(writer, sheet_name='Overall_Metrics', index=False)
     corr_df.to_excel(writer, sheet_name='Correlation', index=False)
     reg_df.to_excel(writer, sheet_name='Regression', index=False)
     feature_imp_df.to_excel(writer, sheet_name='Feature_Importance', index=False)
@@ -649,7 +692,17 @@ print(f'Результати збережено у {output_file}')
 print(f'Графіки збережено у директорії {OUTPUT_DIR}/')
 print(f'  - scatter_temp_vs_population.png')
 print(f'  - correlation_heatmap.png')
-print(f'  - feature_importance.png (НОВИЙ)')
-print(f'  - actual_vs_predicted.png')
+print(f'  - feature_importance.png (важливість фіч єдиної моделі)')
+print(f'  - actual_vs_predicted_overall.png (НОВИЙ - загальний графік для всіх ГРС)')
+print(f'  - actual_vs_predicted.png (графіки для кожної ГРС)')
 print(f'{"="*80}')
-print('\nАналіз завершено успішно!')
+print(f'\n=== ПІДСУМОК ===')
+print(f'Використано ЄДИНУ модель Ridge регресії для всіх {len(models)} ГРС')
+print(f'Навчальна вибірка: {len(train)} сэмплов')
+print(f'Тестова вибірка: {len(test)} сэмплов')
+print(f'Кількість фіч: {len(FEATURE_COLS)}')
+print(f'\nЗагальні метрики:')
+print(f'  R²_test:  {r2_test_overall:.4f}')
+print(f'  MAE_test: {mae_test_overall:.2f} м³')
+print(f'  Переобучення (R²_train - R²_test): {r2_train_overall - r2_test_overall:.4f}')
+print(f'\nАналіз завершено успішно!')
