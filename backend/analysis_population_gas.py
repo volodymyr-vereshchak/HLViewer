@@ -249,9 +249,78 @@ if (merged['population_volume'] < 0).any():
 
 # Merge з температурою по date
 analysis = merged.merge(temp_daily[['date', 'temp_kelvin', 'temperature']], on='date', how='inner')
-analysis['month'] = analysis['date'].dt.month
 
-print(f'analysis: {analysis.shape}')
+# ============================================================================
+# Feature Engineering - додаткові фічі для моделі
+# ============================================================================
+
+print('\n=== Feature Engineering ===')
+
+# Сортування по line_id та date для lag-фіч
+analysis = analysis.sort_values(['line_id', 'date']).reset_index(drop=True)
+
+# 1. Часові фічі
+analysis['month'] = analysis['date'].dt.month
+analysis['day_of_week'] = analysis['date'].dt.dayofweek  # 0=понеділок, 6=неділя
+analysis['day_of_month'] = analysis['date'].dt.day
+analysis['week_of_year'] = analysis['date'].dt.isocalendar().week
+analysis['quarter'] = analysis['date'].dt.quarter
+analysis['is_weekend'] = (analysis['day_of_week'] >= 5).astype(int)  # 1 якщо субота/неділя
+
+# Сезон: зима (12,1,2), весна (3,4,5), літо (6,7,8), осінь (9,10,11)
+def get_season(month):
+    if month in [12, 1, 2]:
+        return 1  # зима
+    elif month in [3, 4, 5]:
+        return 2  # весна
+    elif month in [6, 7, 8]:
+        return 3  # літо
+    else:
+        return 4  # осінь
+
+analysis['season'] = analysis['month'].apply(get_season)
+
+# 2. Температурні фічі
+# Скользяче середнє температури за 7 днів (для кожної ГРС окремо)
+analysis['temp_ma7'] = analysis.groupby('line_id')['temperature'].transform(
+    lambda x: x.rolling(window=7, min_periods=1).mean()
+)
+
+# Різниця температури з попереднім днем
+analysis['temp_diff'] = analysis.groupby('line_id')['temperature'].transform(
+    lambda x: x.diff()
+)
+
+# Мінімальна температура за останні 3 дні
+analysis['temp_min3'] = analysis.groupby('line_id')['temperature'].transform(
+    lambda x: x.rolling(window=3, min_periods=1).min()
+)
+
+# Температура в квадраті (для нелінійної залежності)
+analysis['temp_kelvin_squared'] = analysis['temp_kelvin'] ** 2
+
+# 3. Lag-фічі на основі історії споживання
+# Споживання 7 днів тому
+analysis['pop_volume_lag7'] = analysis.groupby('line_id')['population_volume'].transform(
+    lambda x: x.shift(7)
+)
+
+# Середнє споживання за останні 7 днів
+analysis['pop_volume_ma7'] = analysis.groupby('line_id')['population_volume'].transform(
+    lambda x: x.rolling(window=7, min_periods=1).mean().shift(1)  # shift(1) щоб не було витоку даних
+)
+
+# 4. Взаємодії фіч
+analysis['temp_x_weekend'] = analysis['temperature'] * analysis['is_weekend']
+analysis['temp_x_month'] = analysis['temperature'] * analysis['month']
+
+# Заповнення NaN для lag-фіч (перші дні)
+analysis['temp_diff'] = analysis['temp_diff'].fillna(0)
+analysis['pop_volume_lag7'] = analysis['pop_volume_lag7'].fillna(analysis['population_volume'])
+analysis['pop_volume_ma7'] = analysis['pop_volume_ma7'].fillna(analysis['population_volume'])
+
+print(f'analysis з новими фічами: {analysis.shape}')
+print(f'Додано {analysis.shape[1] - 8} нових фіч')  # -8 оригінальних колонок
 print(f'Місяці: {sorted(analysis["month"].unique())}')
 print(f'line_id: {sorted(analysis["line_id"].unique())}')
 
@@ -343,18 +412,41 @@ print(f'Збережено графік: {OUTPUT_DIR / "correlation_heatmap.png"
 plt.close()
 
 # ============================================================================
-# Блок 8 — Лінійна регресія
+# Блок 8 — Лінійна регресія з розширеними фічами
 # ============================================================================
 
-# Лінійна регресія для кожної ГРС
-# Feature: temp_kelvin, Target: population_volume
-# Train: місяці 1-11, Test: місяць 12
+# Список фіч для моделі
+FEATURE_COLS = [
+    'temp_kelvin',
+    'temp_kelvin_squared',
+    'temp_ma7',
+    'temp_diff',
+    'temp_min3',
+    'day_of_week',
+    'day_of_month',
+    'month',
+    'quarter',
+    'season',
+    'is_weekend',
+    'week_of_year',
+    'pop_volume_lag7',
+    'pop_volume_ma7',
+    'temp_x_weekend',
+    'temp_x_month'
+]
+
+print(f'\n=== Навчання моделей з {len(FEATURE_COLS)} фічами ===')
+print(f'Фічі: {", ".join(FEATURE_COLS)}')
 
 reg_results = []
 models = {}
+feature_importance = {}
 
 for lid in sorted(analysis['line_id'].unique()):
-    subset = analysis[analysis['line_id'] == lid].dropna(subset=['temp_kelvin', 'population_volume'])
+    subset = analysis[analysis['line_id'] == lid].copy()
+
+    # Видалити рядки з NaN у цільовій змінній або фічах
+    subset = subset.dropna(subset=['population_volume'] + FEATURE_COLS)
 
     train = subset[subset['month'].isin(TRAIN_MONTHS)]
     test = subset[subset['month'] == TEST_MONTH]
@@ -363,9 +455,9 @@ for lid in sorted(analysis['line_id'].unique()):
         print(f'⚠ line_id={lid}: недостатньо даних (train={len(train)}, test={len(test)}), пропуск')
         continue
 
-    X_train = train[['temp_kelvin']].values
+    X_train = train[FEATURE_COLS].values
     y_train = train['population_volume'].values
-    X_test = test[['temp_kelvin']].values
+    X_test = test[FEATURE_COLS].values
     y_test = test['population_volume'].values
 
     model = LinearRegression()
@@ -378,64 +470,57 @@ for lid in sorted(analysis['line_id'].unique()):
     r2_train = r2_score(y_train, y_pred_train)
     r2_test = r2_score(y_test, y_pred_test)
 
+    # Зберігаємо важливість фіч (абсолютне значення коефіцієнтів)
+    feature_importance[lid] = dict(zip(FEATURE_COLS, np.abs(model.coef_)))
+
     reg_results.append({
         'line_id': lid,
         'GRS': lineid_to_grs.get(lid, '?'),
-        'coef': round(model.coef_[0], 4),
-        'intercept': round(model.intercept_, 2),
         'MAE_test': round(mae_test, 2),
         'R2_train': round(r2_train, 4),
         'R2_test': round(r2_test, 4),
         'N_train': len(train),
         'N_test': len(test),
     })
-    models[lid] = (model, train, test)
+    models[lid] = (model, train, test, X_train, X_test, y_train, y_test)
 
 reg_df = pd.DataFrame(reg_results)
-print('\nРезультати лінійної регресії: temp_kelvin → population_volume')
+print('\n=== Результати лінійної регресії з розширеними фічами ===')
 print(reg_df)
 
-# Графіки: regression line + scatter (train/test) для кожної ГРС
-n_models = len(models)
-ncols = 2
-nrows = (n_models + ncols - 1) // ncols
+# Виведення топ-5 найважливіших фіч для кожної ГРС
+print('\n=== Топ-5 найважливіших фіч для кожної ГРС ===')
+for lid in sorted(feature_importance.keys()):
+    grs = lineid_to_grs.get(lid, '?')
+    top_features = sorted(feature_importance[lid].items(), key=lambda x: x[1], reverse=True)[:5]
+    print(f'\n{grs} (line_id={lid}):')
+    for feat, importance in top_features:
+        print(f'  {feat}: {importance:.2f}')
 
-fig, axes = plt.subplots(nrows, ncols, figsize=(14, 5 * nrows))
-axes = axes.flatten()
+# Графік важливості фіч (топ-10 найважливіших фіч в середньому по всіх ГРС)
+print('\n=== Створення графіка важливості фіч ===')
+# Усереднена важливість по всіх ГРС
+avg_importance = {}
+for feat in FEATURE_COLS:
+    avg_importance[feat] = np.mean([feature_importance[lid][feat] for lid in feature_importance.keys()])
 
-for i, (lid, (model, train, test)) in enumerate(sorted(models.items())):
-    ax = axes[i]
+# Сортування та вибір топ-10
+top_10_features = sorted(avg_importance.items(), key=lambda x: x[1], reverse=True)[:10]
 
-    # Train scatter
-    ax.scatter(train['temp_kelvin'], train['population_volume'],
-               alpha=0.4, s=15, color='blue', label='Train (міс. 1-11)')
-    # Test scatter
-    ax.scatter(test['temp_kelvin'], test['population_volume'],
-               alpha=0.7, s=25, color='red', marker='x', label='Test (міс. 12)')
-
-    # Regression line
-    x_range = np.linspace(
-        analysis[analysis['line_id'] == lid]['temp_kelvin'].min(),
-        analysis[analysis['line_id'] == lid]['temp_kelvin'].max(),
-        100
-    ).reshape(-1, 1)
-    ax.plot(x_range, model.predict(x_range), 'g--', linewidth=2, label='Regression')
-
-    r2_test_val = reg_df[reg_df['line_id'] == lid].iloc[0]['R2_test']
-    ax.set_title(f'{lineid_to_grs.get(lid, lid)} (R² test={r2_test_val:.4f})')
-    ax.set_xlabel('Температура (K)')
-    ax.set_ylabel('Об\'єм населення')
-    ax.legend(fontsize=8)
-
-for j in range(i + 1, len(axes)):
-    axes[j].set_visible(False)
-
+fig, ax = plt.subplots(figsize=(10, 6))
+features = [f[0] for f in top_10_features]
+importances = [f[1] for f in top_10_features]
+ax.barh(features, importances, color='steelblue', alpha=0.7)
+ax.set_xlabel('Середня важливість (абсолютне значення коефіцієнта)')
+ax.set_title('Топ-10 найважливіших фіч для прогнозування споживання газу')
+ax.invert_yaxis()
 plt.tight_layout()
-plt.savefig(OUTPUT_DIR / 'regression_lines.png', dpi=150, bbox_inches='tight')
-print(f'\nЗбережено графік: {OUTPUT_DIR / "regression_lines.png"}')
+plt.savefig(OUTPUT_DIR / 'feature_importance.png', dpi=150, bbox_inches='tight')
+print(f'Збережено графік: {OUTPUT_DIR / "feature_importance.png"}')
 plt.close()
 
 # Графіки: actual vs predicted для грудня (Test)
+print('\n=== Створення графіків actual vs predicted ===')
 n_models = len(models)
 ncols = 2
 nrows = (n_models + ncols - 1) // ncols
@@ -443,17 +528,21 @@ nrows = (n_models + ncols - 1) // ncols
 fig, axes = plt.subplots(nrows, ncols, figsize=(14, 4 * nrows))
 axes = axes.flatten()
 
-for i, (lid, (model, train, test)) in enumerate(sorted(models.items())):
+for i, (lid, (model, train, test, X_train, X_test, y_train, y_test)) in enumerate(sorted(models.items())):
     ax = axes[i]
 
-    y_pred = model.predict(test[['temp_kelvin']].values)
+    y_pred = model.predict(X_test)
     dates = test['date'].values
 
-    ax.plot(dates, test['population_volume'].values, 'b-o', markersize=3, label='Actual')
+    ax.plot(dates, y_test, 'b-o', markersize=3, label='Actual')
     ax.plot(dates, y_pred, 'r--s', markersize=3, label='Predicted')
-    ax.set_title(f'{lineid_to_grs.get(lid, lid)} — Грудень 2025')
+
+    r2_test_val = reg_df[reg_df['line_id'] == lid].iloc[0]['R2_test']
+    mae_test_val = reg_df[reg_df['line_id'] == lid].iloc[0]['MAE_test']
+
+    ax.set_title(f'{lineid_to_grs.get(lid, lid)} — Грудень 2025\nR²={r2_test_val:.4f}, MAE={mae_test_val:.0f}')
     ax.set_xlabel('Дата')
-    ax.set_ylabel('Об\'єм населення')
+    ax.set_ylabel('Об\'єм населення (м³)')
     ax.legend(fontsize=8)
     ax.tick_params(axis='x', rotation=45)
 
@@ -466,14 +555,14 @@ print(f'Збережено графік: {OUTPUT_DIR / "actual_vs_predicted.png"
 plt.close()
 
 # Діагностика: розподіл помилок на тесті
-print('\nДіагностика помилок на тесті:')
-for lid, (model, train, test) in sorted(models.items()):
-    y_pred = model.predict(test[['temp_kelvin']].values)
-    residuals = test['population_volume'].values - y_pred
+print('\n=== Діагностика помилок на тесті ===')
+for lid, (model, train, test, X_train, X_test, y_train, y_test) in sorted(models.items()):
+    y_pred = model.predict(X_test)
+    residuals = y_test - y_pred
     print(f'{lineid_to_grs.get(lid, lid)} (line_id={lid}):')
     print(f'  Residuals: mean={residuals.mean():.2f}, std={residuals.std():.2f}, '
           f'min={residuals.min():.2f}, max={residuals.max():.2f}')
-    print(f'  MAPE: {(np.abs(residuals) / np.abs(test["population_volume"].values + 1e-9)).mean() * 100:.1f}%')
+    print(f'  MAPE: {(np.abs(residuals) / np.abs(y_test + 1e-9)).mean() * 100:.1f}%')
     print()
 
 # ============================================================================
@@ -482,12 +571,12 @@ for lid, (model, train, test) in sorted(models.items()):
 
 # Фінальна таблиця: GRS, Pearson r, p-value, MAE, R² test
 final = corr_df[['line_id', 'GRS', 'Pearson_r', 'p_value', 'Significant']].merge(
-    reg_df[['line_id', 'MAE_test', 'R2_train', 'R2_test', 'coef', 'intercept']],
+    reg_df[['line_id', 'MAE_test', 'R2_train', 'R2_test']],
     on='line_id',
     how='left'
 )
 
-print('=' * 100)
+print('\n' + '=' * 100)
 print('ЗВЕДЕНА ТАБЛИЦЯ: Кореляція та регресія — температура vs об\'єм газу населення')
 print('=' * 100)
 print(final)
@@ -522,19 +611,45 @@ for _, row in final.iterrows():
     if pd.notna(row.get('R2_test')):
         r2 = row['R2_test']
         mae = row['MAE_test']
-        coef = row['coef']
-        print(f'  Регресія: R²_test={r2:.4f}, MAE={mae:.2f}')
-        print(f'  Коефіцієнт: {coef:.4f} (при зростанні T на 1K об\'єм змінюється на {coef:.2f})')
+        r2_train = row['R2_train']
+        print(f'  Регресія: R²_test={r2:.4f}, R²_train={r2_train:.4f}, MAE_test={mae:.2f} м³')
+
+        # Топ-3 фічі для цієї ГРС
+        lid = row['line_id']
+        if lid in feature_importance:
+            top_3 = sorted(feature_importance[lid].items(), key=lambda x: x[1], reverse=True)[:3]
+            print(f'  Топ-3 фічі: {", ".join([f"{f[0]}" for f in top_3])}')
     print()
 
 # Експорт у Excel
 output_file = DATA_DIR / 'analysis_population_gas_results.xlsx'
+
+# Підготовка таблиці важливості фіч
+feature_imp_data = []
+for lid in sorted(feature_importance.keys()):
+    grs = lineid_to_grs.get(lid, '?')
+    for feat, importance in sorted(feature_importance[lid].items(), key=lambda x: x[1], reverse=True):
+        feature_imp_data.append({
+            'line_id': lid,
+            'GRS': grs,
+            'Feature': feat,
+            'Importance': round(importance, 4)
+        })
+feature_imp_df = pd.DataFrame(feature_imp_data)
+
 with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
     final.to_excel(writer, sheet_name='Summary', index=False)
     corr_df.to_excel(writer, sheet_name='Correlation', index=False)
     reg_df.to_excel(writer, sheet_name='Regression', index=False)
+    feature_imp_df.to_excel(writer, sheet_name='Feature_Importance', index=False)
     enterprise_daily.to_excel(writer, sheet_name='Enterprise_Daily', index=False)
 
-print(f'\nРезультати збережено у {output_file}')
+print(f'\n{"="*80}')
+print(f'Результати збережено у {output_file}')
 print(f'Графіки збережено у директорії {OUTPUT_DIR}/')
+print(f'  - scatter_temp_vs_population.png')
+print(f'  - correlation_heatmap.png')
+print(f'  - feature_importance.png (НОВИЙ)')
+print(f'  - actual_vs_predicted.png')
+print(f'{"="*80}')
 print('\nАналіз завершено успішно!')
