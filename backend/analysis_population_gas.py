@@ -299,6 +299,29 @@ analysis['temp_min3'] = analysis.groupby('line_id')['temperature'].transform(
 # Температура в квадраті (для нелінійної залежності)
 analysis['temp_kelvin_squared'] = analysis['temp_kelvin'] ** 2
 
+# ============================================================================
+# Кусочно-линейные температурные фичи (учет физики процесса)
+# ============================================================================
+# Зона сильного отопления: чем холоднее, тем больше газа (активна при t < 15°C)
+analysis['temp_heating'] = np.maximum(0, 15 - analysis['temperature'])
+
+# Переходная зона: 15-25°C (линейная зависимость)
+analysis['temp_transition'] = np.clip(analysis['temperature'], 15, 25) - 15
+
+# Летняя зона: выше 25°C газ почти не зависит от температуры (только ГВС)
+analysis['temp_summer'] = np.maximum(0, analysis['temperature'] - 25)
+
+# Дополнительные кусочные фичи для разных температурных режимов
+analysis['temp_very_cold'] = np.maximum(0, -analysis['temperature'])  # активна при t < 0°C
+analysis['temp_cold'] = np.maximum(0, 10 - analysis['temperature'])   # активна при t < 10°C
+analysis['temp_moderate'] = np.maximum(0, analysis['temperature'] - 10) * (analysis['temperature'] <= 20)  # 10-20°C
+
+print(f'\nДодано кусочно-лінійні температурні фічі:')
+print(f'  temp_heating: max(0, 15-T) - зона відопления')
+print(f'  temp_transition: clip(T, 15, 25) - 15 - перехідна зона')
+print(f'  temp_summer: max(0, T-25) - літня зона')
+print(f'  temp_very_cold, temp_cold, temp_moderate - додаткові зони')
+
 # 3. Lag-фічі на основі історії споживання
 # Споживання 7 днів тому
 analysis['pop_volume_lag7'] = analysis.groupby('line_id')['population_volume'].transform(
@@ -425,10 +448,15 @@ plt.close()
 # Блок 8 — Лінійна регресія з розширеними фічами
 # ============================================================================
 
-# Упрощенный список фич для единой модели (7 фич)
+# Список фич для единой модели с кусочно-линейными температурными фичами
 FEATURE_COLS = [
     'temperature',        # Основная температура (°C)
     'temp_ma7',          # Скользящее среднее 7 дней
+    'temp_heating',      # Зона отопления (активна при t < 15°C)
+    'temp_transition',   # Переходная зона (15-25°C)
+    'temp_summer',       # Летняя зона (t > 25°C)
+    'temp_very_cold',    # Очень холодно (t < 0°C)
+    'temp_cold',         # Холодно (t < 10°C)
     'day_of_week',       # День недели (0-6)
     'pop_volume_lag7',   # Потребление 7 дней назад
     'pop_volume_ma7',    # Среднее потребление 7 дней
@@ -436,8 +464,9 @@ FEATURE_COLS = [
     'grs_avg_volume',    # Средний объем ГРС
 ]
 
-print(f'\n=== Навчання ЄДИНОЇ моделі для всіх ГРС з {len(FEATURE_COLS)} спрощеними фічами ===')
+print(f'\n=== Навчання ЄДИНОЇ моделі для всіх ГРС з {len(FEATURE_COLS)} фічами (кусочно-лінійні температурні зони) ===')
 print(f'Фічі: {", ".join(FEATURE_COLS)}')
+print(f'ВАЖЛИВО: Додано фічі для температурних зон (heating/transition/summer) та клипинг прогнозів >= 0')
 
 # Подготовка данных для ВСЕХ ГРС сразу (единая модель)
 from sklearn.linear_model import Ridge
@@ -459,9 +488,10 @@ y_test = test['population_volume'].values
 model = Ridge(alpha=1.0)
 model.fit(X_train, y_train)
 
-# Прогноз
-y_pred_train = model.predict(X_train)
-y_pred_test = model.predict(X_test)
+# Прогноз с клипингом (убираем отрицательные значения)
+y_pred_train = np.maximum(0, model.predict(X_train))
+y_pred_test = np.maximum(0, model.predict(X_test))
+print(f'\nПрименен клипинг прогнозов: min(y_pred) = 0 (физическое ограничение)')
 
 # Метрики общие
 mae_test_overall = mean_absolute_error(y_test, y_pred_test)
@@ -498,8 +528,8 @@ for lid in sorted(analysis['line_id'].unique()):
     X_test_grs = test_grs[FEATURE_COLS].values
     y_test_grs = test_grs['population_volume'].values
 
-    y_pred_train_grs = model.predict(X_train_grs)
-    y_pred_test_grs = model.predict(X_test_grs)
+    y_pred_train_grs = np.maximum(0, model.predict(X_train_grs))
+    y_pred_test_grs = np.maximum(0, model.predict(X_test_grs))
 
     mae_grs = mean_absolute_error(y_test_grs, y_pred_test_grs)
     r2_train_grs = r2_score(y_train_grs, y_pred_train_grs)
@@ -532,8 +562,8 @@ print('\n' + '='*80)
 print('STAGE 2: Навчання корректуючих моделей для кожної ГРС')
 print('='*80)
 
-# Упрощенный набор фич для коррекции (только температурные и временные)
-CORRECTION_COLS = ['temperature', 'temp_ma7', 'day_of_week']
+# Упрощенный набор фич для коррекции (температурные зоны + временные)
+CORRECTION_COLS = ['temperature', 'temp_ma7', 'temp_heating', 'temp_transition', 'day_of_week']
 
 correction_models = {}
 reg_results_corrected = []
@@ -551,9 +581,9 @@ for lid in sorted(analysis['line_id'].unique()):
     X_test_grs = test_grs[FEATURE_COLS].values
     y_test_grs = test_grs['population_volume'].values
 
-    # Базовый прогноз от основной модели
-    y_pred_train_base = model.predict(X_train_grs)
-    y_pred_test_base = model.predict(X_test_grs)
+    # Базовый прогноз от основной модели (с клипингом)
+    y_pred_train_base = np.maximum(0, model.predict(X_train_grs))
+    y_pred_test_base = np.maximum(0, model.predict(X_test_grs))
 
     # Вычисляем residuals (ошибки) на тренировочной выборке
     residuals_train = y_train_grs - y_pred_train_base
@@ -570,9 +600,9 @@ for lid in sorted(analysis['line_id'].unique()):
     correction_train = correction_model.predict(X_train_correction)
     correction_test = correction_model.predict(X_test_correction)
 
-    # Финальный прогноз = базовый + коррекция
-    y_pred_train_final = y_pred_train_base + correction_train
-    y_pred_test_final = y_pred_test_base + correction_test
+    # Финальный прогноз = базовый + коррекция (с клипингом)
+    y_pred_train_final = np.maximum(0, y_pred_train_base + correction_train)
+    y_pred_test_final = np.maximum(0, y_pred_test_base + correction_test)
 
     # Метрики с коррекцией
     mae_grs_corrected = mean_absolute_error(y_test_grs, y_pred_test_final)
@@ -863,13 +893,17 @@ print(f'  - actual_vs_predicted_overall.png (порівняння: базова 
 print(f'  - actual_vs_predicted.png (графіки для кожної ГРС з коррекцією)')
 print(f'{"="*80}')
 print(f'\n=== ПІДСУМОК ===')
-print(f'Використано TWO-STAGE модель:')
+print(f'Використано TWO-STAGE модель з кусочно-лінійними температурними фічами:')
 print(f'  Stage 1: Єдина Ridge модель для всіх {len(models_corrected)} ГРС')
 print(f'  Stage 2: Індивідуальні корректуючі моделі для кожної ГРС')
+print(f'\nФізичні обмеження:')
+print(f'  ✓ Клипинг прогнозів: volume >= 0 (немає від\'ємних об\'ємів)')
+print(f'  ✓ Температурні зони: heating (<15°C), transition (15-25°C), summer (>25°C)')
+print(f'  ✓ Нелінійність: споживання не падає лінійно при високих температурах')
 print(f'\nДані:')
 print(f'  Навчальна вибірка: {len(train)} сэмплов')
 print(f'  Тестова вибірка: {len(test)} сэмплов')
-print(f'  Базова модель - фіч: {len(FEATURE_COLS)}')
+print(f'  Базова модель - фіч: {len(FEATURE_COLS)} (включаючи температурні зони)')
 print(f'  Коррекція - фіч: {len(CORRECTION_COLS)}')
 print(f'\nЗагальні метрики:')
 print(f'  Базова модель:    R²={r2_test_overall:.4f}, MAE={mae_test_overall:.2f} м³')
