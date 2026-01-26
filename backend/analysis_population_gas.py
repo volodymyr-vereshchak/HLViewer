@@ -91,13 +91,14 @@ cols[1] = 'enterprise_line'
 cols[2] = 'grs'
 vol_raw.columns = cols
 
-# Парсинг колонок дат: формат 'DD.MM.YYYY г.'
+# Парсинг колонок дат: формат 'DD.MM.YYYY г.' або 'DD.MM.YYYY р.'
 date_cols = []
 date_map = {}  # col_name → datetime
 for c in vol_raw.columns[3:]:
     c_str = str(c).strip()
-    if c_str.endswith('\u0433.'):
-        date_str = c_str.replace('\u0433.', '').strip()
+    # Обробка формату 'DD.MM.YYYY г.' (українська) або 'DD.MM.YYYY р.' (російська)
+    if c_str.endswith('\u0433.') or c_str.endswith(' р.'):
+        date_str = c_str.replace('\u0433.', '').replace(' р.', '').strip()
         try:
             dt = pd.to_datetime(date_str, format='%d.%m.%Y')
             date_cols.append(c)
@@ -106,8 +107,12 @@ for c in vol_raw.columns[3:]:
             pass
 
 print(f'Знайдено дат-колонок: {len(date_cols)}')
-print(f'Перша дата: {date_map[date_cols[0]].date()}')
-print(f'Остання дата: {date_map[date_cols[-1]].date()}')
+if len(date_cols) > 0:
+    print(f'Перша дата: {date_map[date_cols[0]].date()}')
+    print(f'Остання дата: {date_map[date_cols[-1]].date()}')
+else:
+    print('⚠ Не знайдено жодної колонки з датами!')
+    exit(1)
 
 # Фільтрація тільки за ГРС з маппінгу
 grs_names_set = set(grs_to_lineid.keys())
