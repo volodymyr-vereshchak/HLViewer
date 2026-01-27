@@ -720,6 +720,100 @@ if len(bad_grs) > 0:
     for _, row in bad_grs.iterrows():
         print(f'  - {row["GRS"]}: R²={row["R2_test"]:.4f}')
 
+# Графік regression_lines: scatter + крива регресії (температура vs об'єм)
+print('\n=== Створення графіка regression_lines ===')
+
+n_grs = len(unique_lids)
+ncols = 2
+nrows = (n_grs + ncols - 1) // ncols
+
+fig, axes = plt.subplots(nrows, ncols, figsize=(14, 5 * nrows))
+axes = axes.flatten()
+
+for i, lid in enumerate(unique_lids):
+    ax = axes[i]
+    grs_name = lineid_to_grs.get(lid, lid)
+
+    # Всі дані для цієї ГРС (train + test)
+    subset = analysis_clean[analysis_clean['line_id'] == lid].copy()
+    train_subset = subset[subset['month'].isin(TRAIN_MONTHS)]
+
+    # Scatter: фактичні значення
+    ax.scatter(subset['temperature'], subset['population_volume'],
+               alpha=0.3, s=10, color='steelblue', label='Фактичні дані', zorder=1)
+
+    # Створюємо синтетичний ряд температур для кривої регресії
+    temp_range = np.linspace(subset['temperature'].min(), subset['temperature'].max(), 200)
+
+    # Медіанні значення інших фіч (від тренувальних даних цієї ГРС)
+    synthetic = pd.DataFrame()
+    synthetic['temperature'] = temp_range
+    for col in FEATURE_COLS:
+        if col == 'temperature':
+            continue
+        elif col == 'temp_ma7':
+            synthetic[col] = temp_range  # ковзне середнє ~ поточна температура
+        elif col == 'temp_heating':
+            synthetic[col] = np.maximum(0, 15 - temp_range)
+        elif col == 'temp_transition':
+            synthetic[col] = np.clip(temp_range, 15, 25) - 15
+        elif col == 'temp_summer':
+            synthetic[col] = np.maximum(0, temp_range - 25)
+        elif col == 'temp_very_cold':
+            synthetic[col] = np.maximum(0, -temp_range)
+        elif col == 'temp_cold':
+            synthetic[col] = np.maximum(0, 10 - temp_range)
+        elif col == 'temp_moderate':
+            synthetic[col] = np.maximum(0, temp_range - 10) * (temp_range <= 20)
+        elif col == 'tmin_heating':
+            synthetic[col] = np.maximum(0, 15 - (temp_range - 3))  # ~min temp
+        elif col == 'tmin_very_cold':
+            synthetic[col] = np.maximum(0, -(temp_range - 3))
+        elif col == 'temp_range':
+            synthetic[col] = train_subset[col].median() if col in train_subset.columns else 6.0
+        elif col == 'wind_chill':
+            median_wind = train_subset['wind_speed'].median() if 'wind_speed' in train_subset.columns else 3.0
+            synthetic[col] = temp_range - 0.1 * median_wind
+        else:
+            # Для всіх інших фіч — медіана від тренувальних даних
+            if col in train_subset.columns:
+                synthetic[col] = train_subset[col].median()
+            else:
+                synthetic[col] = 0
+
+    X_synthetic = synthetic[FEATURE_COLS].values
+    y_synthetic = np.maximum(0, model.predict(X_synthetic))
+
+    # Якщо для цієї ГРС застосована корекція — додаємо її
+    if lid in correction_models:
+        corr_cols_synthetic = synthetic[CORRECTION_COLS].values
+        correction = correction_models[lid].predict(corr_cols_synthetic)
+        y_synthetic_corrected = np.maximum(0, y_synthetic + correction)
+        ax.plot(temp_range, y_synthetic, 'r--', linewidth=1.5, alpha=0.5, label='Base model', zorder=2)
+        ax.plot(temp_range, y_synthetic_corrected, 'g-', linewidth=2, label='Corrected', zorder=3)
+    else:
+        ax.plot(temp_range, y_synthetic, 'r-', linewidth=2, label='Base model', zorder=2)
+
+    # R² та модель
+    row_grs = reg_df_corrected[reg_df_corrected['line_id'] == lid].iloc[0]
+    r2_val = row_grs['R2_test']
+    used_corr = row_grs['used_correction']
+    model_label = 'corrected' if used_corr else 'base'
+
+    ax.set_title(f'{grs_name} [{model_label}]\nR²_test={r2_val:.4f}')
+    ax.set_xlabel('Температура (°C)')
+    ax.set_ylabel('Об\'єм населення (м³)')
+    ax.legend(fontsize=8, loc='upper right')
+    ax.grid(alpha=0.2)
+
+for j in range(i + 1, len(axes)):
+    axes[j].set_visible(False)
+
+plt.tight_layout()
+plt.savefig(OUTPUT_DIR / 'regression_lines.png', dpi=150, bbox_inches='tight')
+print(f'Збережено графік: {OUTPUT_DIR / "regression_lines.png"}')
+plt.close()
+
 # Графік важливості фіч (глобальная модель)
 print('\n=== Створення графіка важливості фіч ===')
 sorted_features = sorted(feature_importance_global.items(), key=lambda x: x[1], reverse=True)
