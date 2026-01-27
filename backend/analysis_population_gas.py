@@ -46,8 +46,10 @@ LINE_ID_FILE = DATA_DIR / 'line_id_2025.xlsx'
 VOLUME_FILE = DATA_DIR / 'volume_2025.xlsx'
 
 WEATHER_FILE = DATA_DIR / 'weather_2025.csv'
-TRAIN_MONTHS = list(range(1, 12))  # січень–листопад
-TEST_MONTH = 12                     # грудень
+TRAIN_START = '2025-01-01'
+TRAIN_END = '2025-12-31'
+TEST_START = '2026-01-01'
+TEST_END = '2026-01-31'
 
 # Створити директорію для виводу
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -168,7 +170,7 @@ sql_lines = text(f"""
     SELECT line_id, period AS date, volume AS line_volume
     FROM daily_archive
     WHERE line_id IN ({line_ids_str})
-      AND period BETWEEN '2025-01-01' AND '2025-12-31'
+      AND period BETWEEN '{TRAIN_START}' AND '{TEST_END}'
     ORDER BY line_id, period
 """)
 
@@ -504,11 +506,11 @@ from sklearn.linear_model import Ridge
 
 analysis_clean = analysis.dropna(subset=['population_volume'] + FEATURE_COLS)
 
-train = analysis_clean[analysis_clean['month'].isin(TRAIN_MONTHS)]
-test = analysis_clean[analysis_clean['month'] == TEST_MONTH]
+train = analysis_clean[(analysis_clean['date'] >= TRAIN_START) & (analysis_clean['date'] <= TRAIN_END)]
+test = analysis_clean[(analysis_clean['date'] >= TEST_START) & (analysis_clean['date'] <= TEST_END)]
 
-print(f'\nРозмір тренувальної вибірки: {len(train)} сэмплов ({len(train)//365:.0f} ГРС × ~365 днів)')
-print(f'Розмір тестової вибірки: {len(test)} сэмплов ({len(test)//31:.0f} ГРС × ~31 день)')
+print(f'\nТренувальна вибірка: {TRAIN_START} — {TRAIN_END} ({len(train)} семплів)')
+print(f'Тестова вибірка: {TEST_START} — {TEST_END} ({len(test)} семплів)')
 
 X_train = train[FEATURE_COLS].values
 y_train = train['population_volume'].values
@@ -830,7 +832,7 @@ plt.savefig(OUTPUT_DIR / 'feature_importance.png', dpi=150, bbox_inches='tight')
 print(f'Збережено графік: {OUTPUT_DIR / "feature_importance.png"}')
 plt.close()
 
-# Графіки: actual vs predicted для грудня (Test) + загальний графік
+# Графіки: actual vs predicted для тестового періоду (січень 2026)
 print('\n=== Створення графіків actual vs predicted ===')
 
 # 1. Загальний графік — найкраща модель (selective correction)
@@ -839,7 +841,7 @@ ax.scatter(all_y_test, all_y_pred_best, alpha=0.5, s=20, edgecolors='k', linewid
 ax.plot([min(all_y_test), max(all_y_test)], [min(all_y_test), max(all_y_test)], 'r--', lw=2, label='Ідеальний прогноз')
 ax.set_xlabel('Фактичний об\'єм (м³)')
 ax.set_ylabel('Прогнозований об\'єм (м³)')
-ax.set_title(f'Selective correction (грудень 2025)\nR²={r2_test_overall_best:.4f}, MAE={mae_test_overall_best:.0f} м³')
+ax.set_title(f'Selective correction (тест: {TEST_START}..{TEST_END})\nR²={r2_test_overall_best:.4f}, MAE={mae_test_overall_best:.0f} м³')
 ax.legend()
 ax.grid(alpha=0.3)
 plt.tight_layout()
@@ -875,7 +877,7 @@ for i, (lid, (base_model, corr_model, train_grs, test_grs, X_train, X_test, y_tr
     mae_test_val = row_grs['MAE_test']
     model_label = 'corrected' if used_corr else 'base'
 
-    ax.set_title(f'{lineid_to_grs.get(lid, lid)} — Грудень 2025 [{model_label}]\nR²={r2_test_val:.4f}, MAE={mae_test_val:.0f}')
+    ax.set_title(f'{lineid_to_grs.get(lid, lid)} — Січень 2026 [{model_label}]\nR²={r2_test_val:.4f}, MAE={mae_test_val:.0f}')
     ax.set_xlabel('Дата')
     ax.set_ylabel('Об\'єм населення (м³)')
     ax.legend(fontsize=8)
