@@ -774,7 +774,7 @@ for i, lid in enumerate(unique_lids):
 
     # Всі дані для цієї ГРС (train + test)
     subset = analysis_clean[analysis_clean['line_id'] == lid].copy()
-    train_subset = subset[subset['month'].isin(TRAIN_MONTHS)]
+    train_subset = subset[(subset['date'] >= TRAIN_START) & (subset['date'] <= TRAIN_END)]
 
     # Scatter: фактичні значення
     ax.scatter(subset['temperature'], subset['population_volume'],
