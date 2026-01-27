@@ -65,8 +65,8 @@ print('DB engine створено:', engine.url)
 grs_map_df = pd.read_excel(LINE_ID_FILE, sheet_name='line_id', header=None, names=['grs_name', 'line_id'])
 print(f'Всього записів у файлі: {len(grs_map_df)}')
 
-# Цільові 8 ГРС (line_id 15-25, без 1003)
-TARGET_LINE_IDS = [15, 16, 20, 21, 22, 23, 24, 25]
+# Цільові 8 ГРС (1004 — віртуальна лінія Новомиколаївка замість 15)
+TARGET_LINE_IDS = [1004, 16, 20, 21, 22, 23, 24, 25]
 grs_map_df = grs_map_df[grs_map_df['line_id'].isin(TARGET_LINE_IDS)].copy()
 grs_map_df = grs_map_df.reset_index(drop=True)
 
