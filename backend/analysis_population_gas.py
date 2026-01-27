@@ -45,7 +45,7 @@ DB_URL = f'postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB
 LINE_ID_FILE = DATA_DIR / 'line_id_2025.xlsx'
 VOLUME_FILE = DATA_DIR / 'volume_2025.xlsx'
 
-TEMPERATURE_LINE_ID = 19
+WEATHER_FILE = DATA_DIR / 'weather_2025.csv'
 TRAIN_MONTHS = list(range(1, 12))  # січень–листопад
 TEST_MONTH = 12                     # грудень
 
@@ -195,37 +195,28 @@ for lid in sorted(line_volumes['line_id'].unique()):
           f'volume range=[{subset["line_volume"].min():.1f}, {subset["line_volume"].max():.1f}]')
 
 # ============================================================================
-# Блок 5 — Температура з БД
+# Блок 5 — Температура з Meteostat (weather_2025.csv)
 # ============================================================================
 
-# SQL запит до daily_archive для line_id=19 (температура)
-sql_temp = text(f"""
-    SELECT period AS date, temperature
-    FROM daily_archive
-    WHERE line_id = {TEMPERATURE_LINE_ID}
-      AND period BETWEEN '2025-01-01' AND '2025-12-31'
-    ORDER BY period
-""")
-
-with engine.connect() as conn:
-    temp_df = pd.read_sql(sql_temp, conn)
-
-temp_df['date'] = pd.to_datetime(temp_df['date'])
+print(f'\nЗавантаження погодних даних: {WEATHER_FILE}')
+temp_df = pd.read_csv(WEATHER_FILE, parse_dates=['date'])
 print(f'Записів температури: {len(temp_df)}')
 print(f'Діапазон дат: {temp_df["date"].min().date()} .. {temp_df["date"].max().date()}')
 print(f'Температура (°C): min={temp_df["temperature"].min():.1f}, max={temp_df["temperature"].max():.1f}, mean={temp_df["temperature"].mean():.1f}')
 
-# Конвертація °C → K
+# Конвертація °C -> K
 temp_df['temp_kelvin'] = temp_df['temperature'] + 273.15
 
-# Можливі дублікати по даті (кілька записів для одного дня) — агрегуємо
-temp_daily = temp_df.groupby('date', as_index=False).agg(
-    temperature=('temperature', 'mean'),
-    temp_kelvin=('temp_kelvin', 'mean')
-)
+# Зберігаємо додаткові погодні стовпці для фіч
+weather_extra_cols = ['temperature_min', 'temperature_max', 'humidity', 'wind_speed', 'pressure', 'cloud_cover']
+weather_extra_cols = [c for c in weather_extra_cols if c in temp_df.columns]
+
+temp_daily = temp_df[['date', 'temperature', 'temp_kelvin'] + weather_extra_cols].copy()
 
 print(f'Унікальних днів температури: {len(temp_daily)}')
 print(f'temp_kelvin: min={temp_daily["temp_kelvin"].min():.2f}, max={temp_daily["temp_kelvin"].max():.2f}')
+if weather_extra_cols:
+    print(f'Додаткові погодні стовпці: {weather_extra_cols}')
 
 # ============================================================================
 # Блок 6 — Розрахунок об'єму населення
@@ -247,8 +238,9 @@ if (merged['population_volume'] < 0).any():
         cnt = len(neg[neg['line_id'] == lid])
         print(f'  line_id={lid} ({lineid_to_grs.get(lid, "?")}): {cnt} днів')
 
-# Merge з температурою по date
-analysis = merged.merge(temp_daily[['date', 'temp_kelvin', 'temperature']], on='date', how='inner')
+# Merge з температурою та погодними даними по date
+merge_cols = ['date', 'temp_kelvin', 'temperature'] + weather_extra_cols
+analysis = merged.merge(temp_daily[merge_cols], on='date', how='inner')
 
 # ============================================================================
 # Feature Engineering - додаткові фічі для моделі
@@ -316,11 +308,24 @@ analysis['temp_very_cold'] = np.maximum(0, -analysis['temperature'])  # акти
 analysis['temp_cold'] = np.maximum(0, 10 - analysis['temperature'])   # активна при t < 10°C
 analysis['temp_moderate'] = np.maximum(0, analysis['temperature'] - 10) * (analysis['temperature'] <= 20)  # 10-20°C
 
+# Фічі на основі мінімальної та максимальної температури
+if 'temperature_min' in analysis.columns:
+    analysis['temperature_min'] = analysis['temperature_min'].interpolate().fillna(analysis['temperature'])
+    analysis['tmin_heating'] = np.maximum(0, 15 - analysis['temperature_min'])
+    analysis['tmin_very_cold'] = np.maximum(0, -analysis['temperature_min'])
+if 'temperature_max' in analysis.columns:
+    analysis['temperature_max'] = analysis['temperature_max'].interpolate().fillna(analysis['temperature'])
+# Добовий розмах температури (амплітуда)
+if 'temperature_min' in analysis.columns and 'temperature_max' in analysis.columns:
+    analysis['temp_range'] = analysis['temperature_max'] - analysis['temperature_min']
+
 print(f'\nДодано кусочно-лінійні температурні фічі:')
-print(f'  temp_heating: max(0, 15-T) - зона відопления')
+print(f'  temp_heating: max(0, 15-T) - зона вiдопления')
 print(f'  temp_transition: clip(T, 15, 25) - 15 - перехідна зона')
 print(f'  temp_summer: max(0, T-25) - літня зона')
 print(f'  temp_very_cold, temp_cold, temp_moderate - додаткові зони')
+print(f'  temperature_min, temperature_max, temp_range - мін/макс/амплітуда')
+print(f'  tmin_heating, tmin_very_cold - кусочні фічі від мін. температури')
 
 # 3. Lag-фічі на основі історії споживання
 # Споживання 7 днів тому
@@ -341,6 +346,22 @@ analysis['temp_x_month'] = analysis['temperature'] * analysis['month']
 analysis['temp_diff'] = analysis['temp_diff'].fillna(0)
 analysis['pop_volume_lag7'] = analysis['pop_volume_lag7'].fillna(analysis['population_volume'])
 analysis['pop_volume_ma7'] = analysis['pop_volume_ma7'].fillna(analysis['population_volume'])
+
+# 5. Погодні фічі з Meteostat
+if 'humidity' in analysis.columns:
+    analysis['humidity'] = analysis['humidity'].fillna(analysis['humidity'].median())
+if 'wind_speed' in analysis.columns:
+    analysis['wind_speed'] = analysis['wind_speed'].fillna(analysis['wind_speed'].median())
+if 'pressure' in analysis.columns:
+    analysis['pressure'] = analysis['pressure'].fillna(analysis['pressure'].median())
+if 'cloud_cover' in analysis.columns:
+    analysis['cloud_cover'] = analysis['cloud_cover'].fillna(analysis['cloud_cover'].median())
+
+# Вітро-холодовий ефект: вітер підсилює потребу в опаленні при низьких t
+if 'wind_speed' in analysis.columns:
+    analysis['wind_chill'] = analysis['temperature'] - 0.1 * analysis['wind_speed']
+
+print(f'Додано погодні фічі: {[c for c in weather_extra_cols if c in analysis.columns]}')
 
 # ============================================================================
 # ГРС-специфічні фічі для єдиної моделі
@@ -450,7 +471,7 @@ plt.close()
 
 # Список фич для единой модели с кусочно-линейными температурными фичами
 FEATURE_COLS = [
-    'temperature',        # Основная температура (°C)
+    'temperature',        # Основная температура (°C) - Meteostat
     'temp_ma7',          # Скользящее среднее 7 дней
     'temp_heating',      # Зона отопления (активна при t < 15°C)
     'temp_transition',   # Переходная зона (15-25°C)
@@ -463,6 +484,16 @@ FEATURE_COLS = [
     'line_id_feature',   # ID ГРС
     'grs_avg_volume',    # Средний объем ГРС
 ]
+
+# Додаткові погодні фічі з Meteostat (якщо доступні)
+WEATHER_FEATURE_COLS = [
+    'temperature_min', 'temperature_max', 'temp_range',
+    'tmin_heating', 'tmin_very_cold',
+    'humidity', 'wind_speed', 'pressure', 'cloud_cover', 'wind_chill',
+]
+for wf in WEATHER_FEATURE_COLS:
+    if wf in analysis.columns:
+        FEATURE_COLS.append(wf)
 
 print(f'\n=== Навчання ЄДИНОЇ моделі для всіх ГРС з {len(FEATURE_COLS)} фічами (кусочно-лінійні температурні зони) ===')
 print(f'Фічі: {", ".join(FEATURE_COLS)}')
