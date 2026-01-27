@@ -16,6 +16,7 @@ from sqlalchemy import create_engine, text
 from scipy.stats import pearsonr
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, r2_score
+import json
 import warnings
 from pathlib import Path
 import os
@@ -45,6 +46,7 @@ DB_URL = f'postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB
 LINE_ID_FILE = DATA_DIR / 'line_id_2025.xlsx'
 VOLUME_FILE = DATA_DIR / 'volume_2025.xlsx'
 
+VIRTUAL_LINES_FILE = DATA_DIR / 'virtual_lines.json'
 WEATHER_FILE = DATA_DIR / 'weather_2025.csv'
 TRAIN_START = '2025-01-01'
 TRAIN_END = '2025-12-31'
@@ -58,33 +60,68 @@ engine = create_engine(DB_URL)
 print('DB engine створено:', engine.url)
 
 # ============================================================================
-# Блок 2 — Маппінг ГРС → line_id
+# Блок 2 — Маппінг ГРС → line_id (з підтримкою віртуальних ліній)
 # ============================================================================
+
+# Цільові ГРС (1003 — Вольнянськ, 1004 — Новомиколаївка; це віртуальні лінії)
+TARGET_LINE_IDS = [1003, 1004, 16, 20, 21, 22, 23, 24, 25]
+
+# --- Завантаження конфігурації віртуальних ліній ---
+VIRTUAL_LINES = {}  # {virtual_id: [physical_ids]}
+vl_data = {}
+if VIRTUAL_LINES_FILE.exists():
+    with open(VIRTUAL_LINES_FILE, 'r', encoding='utf-8') as f:
+        vl_data = json.load(f)
+    for vid_str, info in vl_data.get('virtual_lines', {}).items():
+        vid = int(vid_str)
+        VIRTUAL_LINES[vid] = info['physical_line_ids']
+    print(f'Завантажено {len(VIRTUAL_LINES)} віртуальних ліній:')
+    for vid, phys in VIRTUAL_LINES.items():
+        print(f'  {vid} → фізичні лінії {phys}')
+else:
+    print(f'⚠ Файл віртуальних ліній не знайдено: {VIRTUAL_LINES_FILE}')
+
+# Розширений набір line_id для фільтрації Excel (цільові + фізичні компоненти віртуальних)
+expanded_line_ids = set(TARGET_LINE_IDS)
+for vid in TARGET_LINE_IDS:
+    if vid >= 1000 and vid in VIRTUAL_LINES:
+        expanded_line_ids.update(VIRTUAL_LINES[vid])
 
 # Завантаження маппінгу з Excel (без заголовка, 2 колонки: назва ГРС, line_id)
 grs_map_df = pd.read_excel(LINE_ID_FILE, sheet_name='line_id', header=None, names=['grs_name', 'line_id'])
-print(f'Всього записів у файлі: {len(grs_map_df)}')
+print(f'\nВсього записів у файлі маппінгу: {len(grs_map_df)}')
 
-# Цільові 8 ГРС (1004 — віртуальна лінія Новомиколаївка замість 15)
-TARGET_LINE_IDS = [1004, 16, 20, 21, 22, 23, 24, 25]
-grs_map_df = grs_map_df[grs_map_df['line_id'].isin(TARGET_LINE_IDS)].copy()
+# Фільтрація: цільові line_id + фізичні компоненти віртуальних ліній
+grs_map_df = grs_map_df[grs_map_df['line_id'].isin(expanded_line_ids)].copy()
 grs_map_df = grs_map_df.reset_index(drop=True)
 
-# Словник: назва ГРС → line_id
+# Словник: назва ГРС → line_id (включає фізичні компоненти для enterprise mapping)
 grs_to_lineid = dict(zip(grs_map_df['grs_name'], grs_map_df['line_id']))
 # Зворотній словник: line_id → назва ГРС
 lineid_to_grs = dict(zip(grs_map_df['line_id'], grs_map_df['grs_name']))
 
-print(f'Цільових ГРС: {len(grs_map_df)}')
-print()
-for name, lid in grs_to_lineid.items():
-    print(f'  {name} → line_id={lid}')
+# Додати імена віртуальних ліній з JSON (якщо відсутні в Excel)
+for vid in TARGET_LINE_IDS:
+    if vid >= 1000 and vid not in lineid_to_grs:
+        vid_str = str(vid)
+        if vid_str in vl_data.get('virtual_lines', {}):
+            vl_name = vl_data['virtual_lines'][vid_str].get('name', f'Virtual_{vid}')
+            grs_name = f'ГРС {vl_name}'
+            lineid_to_grs[vid] = grs_name
+            grs_to_lineid[grs_name] = vid
+            print(f'  Додано віртуальну лінію з JSON: {grs_name} → line_id={vid}')
+
+print(f'\nЦільових ГРС: {len(TARGET_LINE_IDS)}')
+for lid in TARGET_LINE_IDS:
+    virt_label = ' [virtual]' if lid >= 1000 else ''
+    print(f'  {lineid_to_grs.get(lid, "?")} → line_id={lid}{virt_label}')
 
 # Перевірка дублікатів назв
-dup_names = grs_map_df['grs_name'].duplicated(keep=False)
+target_map = grs_map_df[grs_map_df['line_id'].isin(TARGET_LINE_IDS)]
+dup_names = target_map['grs_name'].duplicated(keep=False)
 if dup_names.any():
     print('\n⚠ Знайдено дублікати назв ГРС:')
-    print(grs_map_df[dup_names])
+    print(target_map[dup_names])
 else:
     print('\nДублікатів назв ГРС не знайдено.')
 
@@ -156,15 +193,53 @@ enterprise_daily = (
     .sum()
 )
 
+# Ремапінг фізичних line_id → віртуальних для enterprise_daily
+# (якщо enterprise Excel має дані під фізичними лініями, що входять у віртуальну)
+phys_to_virt = {}  # physical_line_id → virtual_line_id
+for vid, phys_ids in VIRTUAL_LINES.items():
+    if vid in TARGET_LINE_IDS:
+        for pid in phys_ids:
+            phys_to_virt[pid] = vid
+
+if phys_to_virt:
+    remapped = enterprise_daily['line_id'].map(phys_to_virt)
+    has_remap = remapped.notna()
+    if has_remap.any():
+        enterprise_daily.loc[has_remap, 'line_id'] = remapped[has_remap].astype(int)
+        # Ре-агрегація після ремапінгу (можуть бути кілька фізичних ліній → одна віртуальна)
+        enterprise_daily = (
+            enterprise_daily
+            .groupby(['line_id', 'date'], as_index=False)['enterprise_volume']
+            .sum()
+        )
+        print(f'Ремапінг enterprise: {has_remap.sum()} записів фізичних ліній → віртуальні')
+
 print(f'enterprise_daily: {enterprise_daily.shape}')
 print(f'line_id у даних: {sorted(enterprise_daily["line_id"].unique())}')
 
 # ============================================================================
-# Блок 4 — Об'єми ліній з БД
+# Блок 4 — Об'єми ліній з БД (з підтримкою віртуальних ліній)
 # ============================================================================
 
-# SQL запит до daily_archive для цільових line_id
-line_ids_str = ', '.join(str(x) for x in TARGET_LINE_IDS)
+# Розділення на фізичні та віртуальні line_id
+physical_target_ids = [lid for lid in TARGET_LINE_IDS if lid < 1000]
+virtual_target_ids = [lid for lid in TARGET_LINE_IDS if lid >= 1000]
+
+# Зібрати ВСІ фізичні line_id для запиту (включаючи компоненти віртуальних)
+all_physical_ids = set(physical_target_ids)
+for vid in virtual_target_ids:
+    if vid in VIRTUAL_LINES:
+        all_physical_ids.update(VIRTUAL_LINES[vid])
+    else:
+        print(f'⚠ Віртуальна лінія {vid} не знайдена в конфігурації!')
+all_physical_ids = sorted(all_physical_ids)
+
+print(f'\nФізичні цільові line_id: {physical_target_ids}')
+print(f'Віртуальні цільові line_id: {virtual_target_ids}')
+print(f'Усі фізичні line_id для запиту: {all_physical_ids}')
+
+# SQL запит до daily_archive для ВСІХ фізичних line_id
+line_ids_str = ', '.join(str(x) for x in all_physical_ids)
 
 sql_lines = text(f"""
     SELECT line_id, period AS date, volume AS line_volume
@@ -175,25 +250,58 @@ sql_lines = text(f"""
 """)
 
 with engine.connect() as conn:
-    line_volumes = pd.read_sql(sql_lines, conn)
+    line_volumes_raw = pd.read_sql(sql_lines, conn)
 
-line_volumes['date'] = pd.to_datetime(line_volumes['date'])
-print(f'line_volumes: {line_volumes.shape}')
-print(f'line_id у БД: {sorted(line_volumes["line_id"].unique())}')
+line_volumes_raw['date'] = pd.to_datetime(line_volumes_raw['date'])
+print(f'\nline_volumes (raw з БД): {line_volumes_raw.shape}')
+print(f'line_id у БД: {sorted(line_volumes_raw["line_id"].unique())}')
 
-# Перевірка яких line_id немає в БД
-missing_in_db = set(TARGET_LINE_IDS) - set(line_volumes['line_id'].unique())
-if missing_in_db:
-    print(f'⚠ Наступні line_id відсутні в БД: {missing_in_db}')
-    for lid in missing_in_db:
+# Агрегація віртуальних ліній (SUM volumes по даті)
+virtual_dfs = []
+for vid in virtual_target_ids:
+    if vid not in VIRTUAL_LINES:
+        continue
+    phys_ids = VIRTUAL_LINES[vid]
+    virt_data = line_volumes_raw[line_volumes_raw['line_id'].isin(phys_ids)].copy()
+    if virt_data.empty:
+        print(f'⚠ Немає даних для віртуальної лінії {vid} (фізичні: {phys_ids})')
+        continue
+    # Перевірка наявності всіх фізичних ліній
+    found_phys = sorted(virt_data['line_id'].unique())
+    missing_phys = set(phys_ids) - set(found_phys)
+    if missing_phys:
+        print(f'⚠ Віртуальна лінія {vid}: відсутні фізичні лінії {missing_phys} у БД')
+    # Агрегація: SUM volume по даті
+    virt_agg = virt_data.groupby('date', as_index=False)['line_volume'].sum()
+    virt_agg['line_id'] = vid
+    virtual_dfs.append(virt_agg)
+    print(f'  Віртуальна лінія {vid} ({lineid_to_grs.get(vid, "?")}): '
+          f'{len(virt_agg)} днів, фізичні лінії {phys_ids} (знайдено: {found_phys})')
+
+# Фізичні лінії (тільки ті, що є в TARGET, не компоненти віртуальних)
+physical_data = line_volumes_raw[line_volumes_raw['line_id'].isin(physical_target_ids)].copy()
+
+# Об'єднуємо фізичні + віртуальні
+line_volumes = pd.concat([physical_data] + virtual_dfs, ignore_index=True)
+line_volumes = line_volumes.sort_values(['line_id', 'date']).reset_index(drop=True)
+
+print(f'\nline_volumes (з віртуальними): {line_volumes.shape}')
+print(f'line_id: {sorted(line_volumes["line_id"].unique())}')
+
+# Перевірка яких line_id немає в результаті
+missing_in_result = set(TARGET_LINE_IDS) - set(line_volumes['line_id'].unique())
+if missing_in_result:
+    print(f'⚠ Наступні line_id відсутні: {missing_in_result}')
+    for lid in missing_in_result:
         print(f'  line_id={lid} ({lineid_to_grs.get(lid, "?")})')
 else:
-    print('Всі цільові line_id знайдено в БД.')
+    print('Всі цільові line_id (включаючи віртуальні) присутні.')
 
 # Статистика по кожному line_id
 for lid in sorted(line_volumes['line_id'].unique()):
     subset = line_volumes[line_volumes['line_id'] == lid]
-    print(f'  line_id={lid} ({lineid_to_grs.get(lid, "?")}): {len(subset)} днів, '
+    virt_label = ' [virtual]' if lid >= 1000 else ''
+    print(f'  line_id={lid} ({lineid_to_grs.get(lid, "?")}){virt_label}: {len(subset)} днів, '
           f'volume range=[{subset["line_volume"].min():.1f}, {subset["line_volume"].max():.1f}]')
 
 # ============================================================================
