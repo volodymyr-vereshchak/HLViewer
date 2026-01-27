@@ -3,8 +3,8 @@
 
 Скрипт розраховує об'єм газу, спожитого населенням, як різницю між загальним
 об'ємом лінії (з БД) та об'ємом підприємств (з Excel).
-Далі будується кореляція Пірсона та лінійна регресія між температурою
-та об'ємом населення для кожної ГРС.
+Далі будується кореляція Пірсона та GradientBoosting регресія між температурою
+(з Fourier-сезонністю) та об'ємом населення для кожної ГРС.
 """
 
 import pandas as pd
@@ -14,7 +14,7 @@ matplotlib.use('Agg')  # Для роботи без GUI
 import matplotlib.pyplot as plt
 from sqlalchemy import create_engine, text
 from scipy.stats import pearsonr
-from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.metrics import mean_absolute_error, r2_score
 import warnings
 from pathlib import Path
@@ -258,19 +258,14 @@ analysis['day_of_month'] = analysis['date'].dt.day
 analysis['week_of_year'] = analysis['date'].dt.isocalendar().week
 analysis['quarter'] = analysis['date'].dt.quarter
 analysis['is_weekend'] = (analysis['day_of_week'] >= 5).astype(int)  # 1 якщо субота/неділя
+analysis['day_of_year'] = analysis['date'].dt.dayofyear
 
-# Сезон: зима (12,1,2), весна (3,4,5), літо (6,7,8), осінь (9,10,11)
-def get_season(month):
-    if month in [12, 1, 2]:
-        return 1  # зима
-    elif month in [3, 4, 5]:
-        return 2  # весна
-    elif month in [6, 7, 8]:
-        return 3  # літо
-    else:
-        return 4  # осінь
-
-analysis['season'] = analysis['month'].apply(get_season)
+# Fourier-фічі для сезонності (синусоїдальний патерн споживання протягом року)
+analysis['sin_doy'] = np.sin(2 * np.pi * analysis['day_of_year'] / 365)
+analysis['cos_doy'] = np.cos(2 * np.pi * analysis['day_of_year'] / 365)
+# Друга гармоніка — для асиметрії зима/літо
+analysis['sin_doy2'] = np.sin(4 * np.pi * analysis['day_of_year'] / 365)
+analysis['cos_doy2'] = np.cos(4 * np.pi * analysis['day_of_year'] / 365)
 
 # 2. Температурні фічі
 # Скользяче середнє температури за 7 днів (для кожної ГРС окремо)
@@ -466,63 +461,69 @@ print(f'Збережено графік: {OUTPUT_DIR / "correlation_heatmap.png"
 plt.close()
 
 # ============================================================================
-# Блок 8 — Лінійна регресія з розширеними фічами
+# Блок 8 — GradientBoosting регресія з Fourier-сезонністю
 # ============================================================================
 
-# Список фич для единой модели с кусочно-линейными температурными фичами
+# Список фіч для GradientBoosting моделі
+# GBR сам знаходить нелінійні залежності, тому кусочно-лінійні фічі не потрібні
 FEATURE_COLS = [
-    'temperature',        # Основная температура (°C) - Meteostat
-    'temp_ma7',          # Скользящее среднее 7 дней
-    'temp_heating',      # Зона отопления (активна при t < 15°C)
-    'temp_transition',   # Переходная зона (15-25°C)
-    'temp_summer',       # Летняя зона (t > 25°C)
-    'temp_very_cold',    # Очень холодно (t < 0°C)
-    'temp_cold',         # Холодно (t < 10°C)
-    'day_of_week',       # День недели (0-6)
-    'pop_volume_lag7',   # Потребление 7 дней назад
-    'pop_volume_ma7',    # Среднее потребление 7 дней
+    'temperature',        # Основна температура (°C) - Meteostat
+    'temp_ma7',          # Ковзне середнє 7 днів
+    'day_of_week',       # День тижня (0-6)
+    'day_of_year',       # День року (1-365)
+    'sin_doy',           # Fourier: sin(2π·doy/365)
+    'cos_doy',           # Fourier: cos(2π·doy/365)
+    'sin_doy2',          # Fourier 2-а гармоніка: sin(4π·doy/365)
+    'cos_doy2',          # Fourier 2-а гармоніка: cos(4π·doy/365)
+    'pop_volume_lag7',   # Споживання 7 днів тому
+    'pop_volume_ma7',    # Середнє споживання 7 днів
     'line_id_feature',   # ID ГРС
-    'grs_avg_volume',    # Средний объем ГРС
+    'grs_avg_volume',    # Середній об'єм ГРС
 ]
 
 # Додаткові погодні фічі з Meteostat (якщо доступні)
 WEATHER_FEATURE_COLS = [
     'temperature_min', 'temperature_max', 'temp_range',
-    'tmin_heating', 'tmin_very_cold',
     'humidity', 'wind_speed', 'pressure', 'cloud_cover', 'wind_chill',
 ]
 for wf in WEATHER_FEATURE_COLS:
     if wf in analysis.columns:
         FEATURE_COLS.append(wf)
 
-print(f'\n=== Навчання ЄДИНОЇ моделі для всіх ГРС з {len(FEATURE_COLS)} фічами (кусочно-лінійні температурні зони) ===')
+print(f'\n=== Навчання GradientBoosting моделі для всіх ГРС з {len(FEATURE_COLS)} фічами ===')
 print(f'Фічі: {", ".join(FEATURE_COLS)}')
-print(f'ВАЖЛИВО: Додано фічі для температурних зон (heating/transition/summer) та клипинг прогнозів >= 0')
+print(f'Модель: GradientBoostingRegressor (нелінійна, Fourier-сезонність)')
 
-# Подготовка данных для ВСЕХ ГРС сразу (единая модель)
-from sklearn.linear_model import Ridge
-
+# Підготовка даних для ВСІХ ГРС одразу (єдина модель)
 analysis_clean = analysis.dropna(subset=['population_volume'] + FEATURE_COLS)
 
 train = analysis_clean[analysis_clean['month'].isin(TRAIN_MONTHS)]
 test = analysis_clean[analysis_clean['month'] == TEST_MONTH]
 
-print(f'\nРозмір тренувальної вибірки: {len(train)} сэмплов ({len(train)//365:.0f} ГРС × ~365 днів)')
-print(f'Розмір тестової вибірки: {len(test)} сэмплов ({len(test)//31:.0f} ГРС × ~31 день)')
+print(f'\nРозмір тренувальної вибірки: {len(train)} семплів')
+print(f'Розмір тестової вибірки: {len(test)} семплів')
 
 X_train = train[FEATURE_COLS].values
 y_train = train['population_volume'].values
 X_test = test[FEATURE_COLS].values
 y_test = test['population_volume'].values
 
-# Обучение ОДНОЙ модели с Ridge регрессией (регуляризация против переобучения)
-model = Ridge(alpha=1.0)
+# GradientBoosting — нелінійна модель, нативно обробляє складні залежності
+model = GradientBoostingRegressor(
+    n_estimators=300,
+    max_depth=5,
+    learning_rate=0.1,
+    min_samples_leaf=5,
+    subsample=0.8,
+    random_state=42,
+)
 model.fit(X_train, y_train)
 
-# Прогноз с клипингом (убираем отрицательные значения)
+# Прогноз з кліпінгом (прибираємо від'ємні значення)
 y_pred_train = np.maximum(0, model.predict(X_train))
 y_pred_test = np.maximum(0, model.predict(X_test))
-print(f'\nПрименен клипинг прогнозов: min(y_pred) = 0 (физическое ограничение)')
+print(f'\nМодель: GradientBoostingRegressor (n_estimators=300, max_depth=5)')
+print(f'Застосовано кліпінг прогнозів: volume >= 0')
 
 # Метрики общие
 mae_test_overall = mean_absolute_error(y_test, y_pred_test)
@@ -535,11 +536,11 @@ print(f'R²_test:  {r2_test_overall:.4f}')
 print(f'MAE_test: {mae_test_overall:.2f} м³')
 print(f'Різниця R²_train - R²_test: {r2_train_overall - r2_test_overall:.4f}')
 
-# Важность фич (абсолютное значение коэффициентов)
-feature_importance_global = dict(zip(FEATURE_COLS, np.abs(model.coef_)))
-print(f'\n=== Важливість фіч (глобальна модель) ===')
+# Важливість фіч (GradientBoosting feature_importances_)
+feature_importance_global = dict(zip(FEATURE_COLS, model.feature_importances_))
+print(f'\n=== Важливість фіч (GradientBoosting) ===')
 for feat, importance in sorted(feature_importance_global.items(), key=lambda x: x[1], reverse=True):
-    print(f'  {feat}: {importance:.2f}')
+    print(f'  {feat}: {importance:.4f}')
 
 # Метрики для каждой ГРС отдельно
 print(f'\n=== МЕТРИКИ ДЛЯ КОЖНОЇ ГРС (з єдиної моделі) ===')
@@ -582,131 +583,17 @@ for lid in sorted(analysis['line_id'].unique()):
     print(f'{lineid_to_grs.get(lid, lid)} (line_id={lid}): R²_train={r2_train_grs:.4f}, R²_test={r2_test_grs:.4f}, MAE={mae_grs:.2f} м³')
 
 reg_df = pd.DataFrame(reg_results)
-print('\n=== Таблиця результатів для кожної ГРС (базова модель) ===')
+print('\n=== Таблиця результатів для кожної ГРС (GradientBoosting) ===')
 print(reg_df)
 
-# ============================================================================
-# Блок 8.5 — Two-Stage Model: Корректирующие модели для каждой ГРС
-# ============================================================================
-
-print('\n' + '='*80)
-print('STAGE 2: Навчання корректуючих моделей для кожної ГРС')
-print('='*80)
-
-# Упрощенный набор фич для коррекции (температурные зоны + временные)
-CORRECTION_COLS = ['temperature', 'temp_ma7', 'temp_heating', 'temp_transition', 'day_of_week']
-
-correction_models = {}
-reg_results_corrected = []
-models_corrected = {}
-
-for lid in sorted(analysis['line_id'].unique()):
-    train_grs = train[train['line_id'] == lid]
-    test_grs = test[test['line_id'] == lid]
-
-    if len(test_grs) < 1:
-        continue
-
-    X_train_grs = train_grs[FEATURE_COLS].values
-    y_train_grs = train_grs['population_volume'].values
-    X_test_grs = test_grs[FEATURE_COLS].values
-    y_test_grs = test_grs['population_volume'].values
-
-    # Базовый прогноз от основной модели (с клипингом)
-    y_pred_train_base = np.maximum(0, model.predict(X_train_grs))
-    y_pred_test_base = np.maximum(0, model.predict(X_test_grs))
-
-    # Вычисляем residuals (ошибки) на тренировочной выборке
-    residuals_train = y_train_grs - y_pred_train_base
-
-    # Обучаем корректирующую модель на residuals
-    X_train_correction = train_grs[CORRECTION_COLS].values
-    X_test_correction = test_grs[CORRECTION_COLS].values
-
-    # Используем Ridge с меньшей регуляризацией для коррекции
-    correction_model = Ridge(alpha=0.1)
-    correction_model.fit(X_train_correction, residuals_train)
-
-    # Прогноз коррекции
-    correction_train = correction_model.predict(X_train_correction)
-    correction_test = correction_model.predict(X_test_correction)
-
-    # Финальный прогноз = базовый + коррекция (с клипингом)
-    y_pred_train_final = np.maximum(0, y_pred_train_base + correction_train)
-    y_pred_test_final = np.maximum(0, y_pred_test_base + correction_test)
-
-    # Метрики с коррекцией
-    mae_grs_corrected = mean_absolute_error(y_test_grs, y_pred_test_final)
-    r2_train_grs_corrected = r2_score(y_train_grs, y_pred_train_final)
-    r2_test_grs_corrected = r2_score(y_test_grs, y_pred_test_final)
-
-    # Улучшение R²
-    r2_improvement = r2_test_grs_corrected - reg_df[reg_df['line_id'] == lid].iloc[0]['R2_test']
-
-    reg_results_corrected.append({
-        'line_id': lid,
-        'GRS': lineid_to_grs.get(lid, '?'),
-        'MAE_test_base': reg_df[reg_df['line_id'] == lid].iloc[0]['MAE_test'],
-        'MAE_test_corrected': round(mae_grs_corrected, 2),
-        'R2_test_base': reg_df[reg_df['line_id'] == lid].iloc[0]['R2_test'],
-        'R2_test_corrected': round(r2_test_grs_corrected, 4),
-        'R2_improvement': round(r2_improvement, 4),
-        'R2_train_corrected': round(r2_train_grs_corrected, 4),
-        'N_train': len(train_grs),
-        'N_test': len(test_grs),
-    })
-
-    correction_models[lid] = correction_model
-    models_corrected[lid] = (model, correction_model, train_grs, test_grs,
-                             X_train_grs, X_test_grs, y_train_grs, y_test_grs,
-                             y_pred_test_final)
-
-    print(f'{lineid_to_grs.get(lid, lid)} (line_id={lid}):')
-    print(f'  Base:      R²_test={reg_df[reg_df["line_id"] == lid].iloc[0]["R2_test"]:.4f}, MAE={reg_df[reg_df["line_id"] == lid].iloc[0]["MAE_test"]:.2f}')
-    print(f'  Corrected: R²_test={r2_test_grs_corrected:.4f}, MAE={mae_grs_corrected:.2f}')
-    print(f'  Improvement: ΔR² = {r2_improvement:+.4f}')
-
-reg_df_corrected = pd.DataFrame(reg_results_corrected)
-print('\n=== Таблиця результатів з коррекцією ===')
-print(reg_df_corrected)
-
-# Загальні метрики з коррекцией
-print('\n=== ЗАГАЛЬНЕ ПОРІВНЯННЯ: базова модель vs з коррекцією ===')
-print(f'{"Модель":<30} {"R²_test":<10} {"MAE_test":<10}')
-print('-' * 50)
-print(f'{"Базова (Ridge unified)":<30} {r2_test_overall:.4f}    {mae_test_overall:.2f}')
-
-# Вычисляем общие метрики для модели с коррекцией
-all_y_test = []
-all_y_pred_corrected = []
-for lid in models_corrected.keys():
-    _, _, _, test_grs, _, _, _, y_test_grs, y_pred_final = models_corrected[lid]
-    all_y_test.extend(y_test_grs)
-    all_y_pred_corrected.extend(y_pred_final)
-
-r2_test_overall_corrected = r2_score(all_y_test, all_y_pred_corrected)
-mae_test_overall_corrected = mean_absolute_error(all_y_test, all_y_pred_corrected)
-
-print(f'{"З коррекцією (Two-Stage)":<30} {r2_test_overall_corrected:.4f}    {mae_test_overall_corrected:.2f}')
-print(f'{"Покращення":<30} {r2_test_overall_corrected - r2_test_overall:+.4f}   {mae_test_overall_corrected - mae_test_overall:+.2f}')
-print()
-
-# Статистика: скільки ГРС покращилось
-improved = (reg_df_corrected['R2_improvement'] > 0).sum()
-worsened = (reg_df_corrected['R2_improvement'] < 0).sum()
-print(f'ГРС з покращенням R²: {improved}/{len(reg_df_corrected)}')
-print(f'ГРС з погіршенням R²: {worsened}/{len(reg_df_corrected)}')
-print(f'Середнє покращення R²: {reg_df_corrected["R2_improvement"].mean():+.4f}')
-print()
-
-# Сколько ГРС достигли R² > 0.75
-good_grs = (reg_df_corrected['R2_test_corrected'] >= 0.75).sum()
-print(f'ГРС з R²_test ≥ 0.75: {good_grs}/{len(reg_df_corrected)}')
-bad_grs = reg_df_corrected[reg_df_corrected['R2_test_corrected'] < 0.75]
+# Статистика якості
+good_grs = (reg_df['R2_test'] >= 0.75).sum()
+print(f'\nГРС з R²_test >= 0.75: {good_grs}/{len(reg_df)}')
+bad_grs = reg_df[reg_df['R2_test'] < 0.75]
 if len(bad_grs) > 0:
     print(f'ГРС з R²_test < 0.75:')
     for _, row in bad_grs.iterrows():
-        print(f'  - {row["GRS"]}: R²={row["R2_test_corrected"]:.4f}')
+        print(f'  - {row["GRS"]}: R²={row["R2_test"]:.4f}')
 
 # Графік важливості фіч (глобальная модель)
 print('\n=== Створення графіка важливості фіч ===')
@@ -716,68 +603,52 @@ fig, ax = plt.subplots(figsize=(10, 6))
 features = [f[0] for f in sorted_features]
 importances = [f[1] for f in sorted_features]
 ax.barh(features, importances, color='steelblue', alpha=0.7)
-ax.set_xlabel('Важливість (абсолютне значення коефіцієнта Ridge регресії)')
-ax.set_title('Важливість фіч для прогнозування споживання газу (єдина модель)')
+ax.set_xlabel('Важливість фіч (GradientBoosting feature_importances_)')
+ax.set_title('Важливість фіч для прогнозування споживання газу (GBR)')
 ax.invert_yaxis()
 plt.tight_layout()
 plt.savefig(OUTPUT_DIR / 'feature_importance.png', dpi=150, bbox_inches='tight')
 print(f'Збережено графік: {OUTPUT_DIR / "feature_importance.png"}')
 plt.close()
 
-# Графіки: actual vs predicted для грудня (Test) + загальний графік
+# Графіки: actual vs predicted для грудня (Test)
 print('\n=== Створення графіків actual vs predicted ===')
 
-# 1. Загальний графік для всіх ГРС - порівняння базової та скорректованої моделі
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
-
-# Базова модель
-ax1.scatter(y_test, y_pred_test, alpha=0.5, s=20, edgecolors='k', linewidths=0.5, color='red', label='Base model')
-ax1.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--', lw=2, label='Ідеальний прогноз')
-ax1.set_xlabel('Фактичний об\'єм (м³)')
-ax1.set_ylabel('Прогнозований об\'єм (м³)')
-ax1.set_title(f'Базова модель (грудень 2025)\nR²={r2_test_overall:.4f}, MAE={mae_test_overall:.0f} м³')
-ax1.legend()
-ax1.grid(alpha=0.3)
-
-# Модель з коррекцією
-ax2.scatter(all_y_test, all_y_pred_corrected, alpha=0.5, s=20, edgecolors='k', linewidths=0.5, color='green', label='Two-stage model')
-ax2.plot([min(all_y_test), max(all_y_test)], [min(all_y_test), max(all_y_test)], 'r--', lw=2, label='Ідеальний прогноз')
-ax2.set_xlabel('Фактичний об\'єм (м³)')
-ax2.set_ylabel('Прогнозований об\'єм (м³)')
-ax2.set_title(f'З коррекцією (грудень 2025)\nR²={r2_test_overall_corrected:.4f}, MAE={mae_test_overall_corrected:.0f} м³')
-ax2.legend()
-ax2.grid(alpha=0.3)
-
+# 1. Загальний графік для всіх ГРС
+fig, ax = plt.subplots(figsize=(8, 6))
+ax.scatter(y_test, y_pred_test, alpha=0.5, s=20, edgecolors='k', linewidths=0.5, color='steelblue', label='GBR model')
+ax.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--', lw=2, label='Ідеальний прогноз')
+ax.set_xlabel('Фактичний об\'єм (м³)')
+ax.set_ylabel('Прогнозований об\'єм (м³)')
+ax.set_title(f'GradientBoosting (грудень 2025)\nR²={r2_test_overall:.4f}, MAE={mae_test_overall:.0f} м³')
+ax.legend()
+ax.grid(alpha=0.3)
 plt.tight_layout()
 plt.savefig(OUTPUT_DIR / 'actual_vs_predicted_overall.png', dpi=150, bbox_inches='tight')
 print(f'Збережено графік: {OUTPUT_DIR / "actual_vs_predicted_overall.png"}')
 plt.close()
 
-# 2. Графіки для кожної ГРС окремо (з коррекцією)
-n_models = len(models_corrected)
+# 2. Графіки для кожної ГРС окремо
+n_models = len(models)
 ncols = 2
 nrows = (n_models + ncols - 1) // ncols
 
 fig, axes = plt.subplots(nrows, ncols, figsize=(14, 4 * nrows))
 axes = axes.flatten()
 
-for i, (lid, (base_model, corr_model, train_grs, test_grs, X_train, X_test, y_train, y_test, y_pred_final)) in enumerate(sorted(models_corrected.items())):
+for i, (lid, (mdl, train_grs, test_grs, X_train_g, X_test_g, y_train_g, y_test_g)) in enumerate(sorted(models.items())):
     ax = axes[i]
 
     dates = test_grs['date'].values
+    y_pred_g = np.maximum(0, mdl.predict(X_test_g))
 
-    # Базовый прогноз
-    y_pred_base = base_model.predict(X_test)
+    ax.plot(dates, y_test_g, 'b-o', markersize=4, linewidth=2, label='Actual', zorder=3)
+    ax.plot(dates, y_pred_g, 'g-^', markersize=3, linewidth=1.5, label='GBR', zorder=2)
 
-    ax.plot(dates, y_test, 'b-o', markersize=4, linewidth=2, label='Actual', zorder=3)
-    ax.plot(dates, y_pred_base, 'r--s', markersize=3, alpha=0.5, label='Base model', zorder=1)
-    ax.plot(dates, y_pred_final, 'g-^', markersize=3, linewidth=1.5, label='Two-stage', zorder=2)
+    r2_test_val = reg_df[reg_df['line_id'] == lid].iloc[0]['R2_test']
+    mae_test_val = reg_df[reg_df['line_id'] == lid].iloc[0]['MAE_test']
 
-    r2_test_val = reg_df_corrected[reg_df_corrected['line_id'] == lid].iloc[0]['R2_test_corrected']
-    mae_test_val = reg_df_corrected[reg_df_corrected['line_id'] == lid].iloc[0]['MAE_test_corrected']
-    improvement = reg_df_corrected[reg_df_corrected['line_id'] == lid].iloc[0]['R2_improvement']
-
-    ax.set_title(f'{lineid_to_grs.get(lid, lid)} — Грудень 2025 (Two-Stage)\nR²={r2_test_val:.4f} (Δ={improvement:+.4f}), MAE={mae_test_val:.0f}')
+    ax.set_title(f'{lineid_to_grs.get(lid, lid)} — Грудень 2025\nR²={r2_test_val:.4f}, MAE={mae_test_val:.0f}')
     ax.set_xlabel('Дата')
     ax.set_ylabel('Об\'єм населення (м³)')
     ax.legend(fontsize=8)
@@ -793,32 +664,25 @@ plt.close()
 
 # Діагностика: розподіл помилок на тесті
 print('\n=== Діагностика помилок на тесті ===')
-for lid, (model, train, test, X_train, X_test, y_train, y_test) in sorted(models.items()):
-    y_pred = model.predict(X_test)
-    residuals = y_test - y_pred
+for lid, (mdl, train_grs, test_grs, X_train_g, X_test_g, y_train_g, y_test_g) in sorted(models.items()):
+    y_pred_diag = mdl.predict(X_test_g)
+    residuals = y_test_g - y_pred_diag
     print(f'{lineid_to_grs.get(lid, lid)} (line_id={lid}):')
     print(f'  Residuals: mean={residuals.mean():.2f}, std={residuals.std():.2f}, '
           f'min={residuals.min():.2f}, max={residuals.max():.2f}')
-    print(f'  MAPE: {(np.abs(residuals) / np.abs(y_test + 1e-9)).mean() * 100:.1f}%')
+    print(f'  MAPE: {(np.abs(residuals) / np.abs(y_test_g + 1e-9)).mean() * 100:.1f}%')
     print()
 
 # ============================================================================
 # Блок 9 — Зведені результати
 # ============================================================================
 
-# Фінальна таблиця: GRS, Pearson r, p-value, MAE, R² test (з коррекцією)
+# Фінальна таблиця: GRS, Pearson r, p-value, MAE, R² test
 final = corr_df[['line_id', 'GRS', 'Pearson_r', 'p_value', 'Significant']].merge(
-    reg_df_corrected[['line_id', 'MAE_test_base', 'MAE_test_corrected', 'R2_test_base', 'R2_test_corrected', 'R2_improvement', 'R2_train_corrected']],
+    reg_df[['line_id', 'MAE_test', 'R2_test', 'R2_train']],
     on='line_id',
     how='left'
-).rename(columns={
-    'MAE_test_base': 'MAE_test_base',
-    'MAE_test_corrected': 'MAE_test',
-    'R2_test_base': 'R2_test_base',
-    'R2_test_corrected': 'R2_test',
-    'R2_train_corrected': 'R2_train',
-    'R2_improvement': 'R2_improvement'
-})
+)
 
 print('\n' + '=' * 100)
 print('ЗВЕДЕНА ТАБЛИЦЯ: Кореляція та регресія — температура vs об\'єм газу населення')
@@ -856,44 +720,28 @@ for _, row in final.iterrows():
         r2 = row['R2_test']
         mae = row['MAE_test']
         r2_train = row['R2_train']
-        r2_base = row.get('R2_test_base', 'N/A')
-        improvement = row.get('R2_improvement', 0)
-        print(f'  Регресія (Two-Stage): R²_test={r2:.4f}, R²_train={r2_train:.4f}, MAE_test={mae:.2f} м³')
-        if pd.notna(r2_base):
-            print(f'  Покращення: Base R²={r2_base:.4f} → Corrected R²={r2:.4f} (Δ={improvement:+.4f})')
+        print(f'  Регресія (GBR): R²_test={r2:.4f}, R²_train={r2_train:.4f}, MAE_test={mae:.2f} м³')
     print()
 
 # Експорт у Excel
 output_file = DATA_DIR / 'analysis_population_gas_results.xlsx'
 
-# Підготовка таблиці важливості фіч (глобальна модель)
+# Підготовка таблиці важливості фіч
 feature_imp_df = pd.DataFrame([
     {'Feature': feat, 'Importance': round(importance, 4)}
     for feat, importance in sorted(feature_importance_global.items(), key=lambda x: x[1], reverse=True)
 ])
 
-# Додаткові загальні метрики
+# Загальні метрики
 overall_metrics_df = pd.DataFrame([{
-    'Metric': 'Base Model - R²_train',
+    'Metric': 'GBR - R²_train',
     'Value': round(r2_train_overall, 4)
 }, {
-    'Metric': 'Base Model - R²_test',
+    'Metric': 'GBR - R²_test',
     'Value': round(r2_test_overall, 4)
 }, {
-    'Metric': 'Base Model - MAE_test',
+    'Metric': 'GBR - MAE_test',
     'Value': round(mae_test_overall, 2)
-}, {
-    'Metric': 'Two-Stage - R²_test',
-    'Value': round(r2_test_overall_corrected, 4)
-}, {
-    'Metric': 'Two-Stage - MAE_test',
-    'Value': round(mae_test_overall_corrected, 2)
-}, {
-    'Metric': 'Improvement - ΔR²',
-    'Value': round(r2_test_overall_corrected - r2_test_overall, 4)
-}, {
-    'Metric': 'Improvement - ΔMAE',
-    'Value': round(mae_test_overall_corrected - mae_test_overall, 2)
 }, {
     'Metric': 'Train samples',
     'Value': len(train)
@@ -901,7 +749,10 @@ overall_metrics_df = pd.DataFrame([{
     'Metric': 'Test samples',
     'Value': len(test)
 }, {
-    'Metric': 'GRS with R² ≥ 0.75',
+    'Metric': 'Features',
+    'Value': len(FEATURE_COLS)
+}, {
+    'Metric': 'GRS with R² >= 0.75',
     'Value': good_grs
 }])
 
@@ -909,8 +760,7 @@ with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
     final.to_excel(writer, sheet_name='Summary', index=False)
     overall_metrics_df.to_excel(writer, sheet_name='Overall_Metrics', index=False)
     corr_df.to_excel(writer, sheet_name='Correlation', index=False)
-    reg_df.to_excel(writer, sheet_name='Regression_Base', index=False)
-    reg_df_corrected.to_excel(writer, sheet_name='Regression_TwoStage', index=False)
+    reg_df.to_excel(writer, sheet_name='Regression_GBR', index=False)
     feature_imp_df.to_excel(writer, sheet_name='Feature_Importance', index=False)
     enterprise_daily.to_excel(writer, sheet_name='Enterprise_Daily', index=False)
 
@@ -919,29 +769,27 @@ print(f'Результати збережено у {output_file}')
 print(f'Графіки збережено у директорії {OUTPUT_DIR}/')
 print(f'  - scatter_temp_vs_population.png')
 print(f'  - correlation_heatmap.png')
-print(f'  - feature_importance.png (важливість фіч базової моделі)')
-print(f'  - actual_vs_predicted_overall.png (порівняння: базова vs Two-Stage)')
-print(f'  - actual_vs_predicted.png (графіки для кожної ГРС з коррекцією)')
+print(f'  - feature_importance.png (GradientBoosting)')
+print(f'  - actual_vs_predicted_overall.png')
+print(f'  - actual_vs_predicted.png (графіки для кожної ГРС)')
 print(f'{"="*80}')
 print(f'\n=== ПІДСУМОК ===')
-print(f'Використано TWO-STAGE модель з кусочно-лінійними температурними фічами:')
-print(f'  Stage 1: Єдина Ridge модель для всіх {len(models_corrected)} ГРС')
-print(f'  Stage 2: Індивідуальні корректуючі моделі для кожної ГРС')
+print(f'Модель: GradientBoostingRegressor з Fourier-сезонністю')
+print(f'  n_estimators=300, max_depth=5, learning_rate=0.1, subsample=0.8')
 print(f'\nФізичні обмеження:')
-print(f'  ✓ Клипинг прогнозів: volume >= 0 (немає від\'ємних об\'ємів)')
-print(f'  ✓ Температурні зони: heating (<15°C), transition (15-25°C), summer (>25°C)')
-print(f'  ✓ Нелінійність: споживання не падає лінійно при високих температурах')
+print(f'  - Кліпінг прогнозів: volume >= 0')
+print(f'  - Fourier-фічі (sin/cos) для сезонності замість кусочно-лінійних зон')
+print(f'  - Нелінійність обробляється нативно (дерева рішень)')
 print(f'\nДані:')
-print(f'  Навчальна вибірка: {len(train)} сэмплов')
-print(f'  Тестова вибірка: {len(test)} сэмплов')
-print(f'  Базова модель - фіч: {len(FEATURE_COLS)} (включаючи температурні зони)')
-print(f'  Коррекція - фіч: {len(CORRECTION_COLS)}')
+print(f'  Навчальна вибірка: {len(train)} семплів')
+print(f'  Тестова вибірка: {len(test)} семплів')
+print(f'  Фіч: {len(FEATURE_COLS)}')
 print(f'\nЗагальні метрики:')
-print(f'  Базова модель:    R²={r2_test_overall:.4f}, MAE={mae_test_overall:.2f} м³')
-print(f'  Two-Stage модель: R²={r2_test_overall_corrected:.4f}, MAE={mae_test_overall_corrected:.2f} м³')
-print(f'  Покращення:       ΔR²={r2_test_overall_corrected - r2_test_overall:+.4f}, ΔMAE={mae_test_overall_corrected - mae_test_overall:+.2f} м³')
+print(f'  R²_train: {r2_train_overall:.4f}')
+print(f'  R²_test:  {r2_test_overall:.4f}')
+print(f'  MAE_test:  {mae_test_overall:.2f} м³')
 print(f'\nДосягнуто цілі:')
-print(f'  ГРС з R²_test ≥ 0.75: {good_grs}/{len(reg_df_corrected)}')
+print(f'  ГРС з R²_test >= 0.75: {good_grs}/{len(reg_df)}')
 if len(bad_grs) > 0:
     print(f'  Проблемні ГРС (R² < 0.75): {", ".join(bad_grs["GRS"].tolist())}')
 print(f'\nАналіз завершено успішно!')
