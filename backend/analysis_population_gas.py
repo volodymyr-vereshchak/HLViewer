@@ -398,6 +398,42 @@ print('\nЗведена статистика по ГРС:')
 print(summary_stats)
 
 # ============================================================================
+# Блок 6.5 — Видалення викидів (outliers)
+# ============================================================================
+
+print('\n=== Видалення викидів ===')
+n_before = len(analysis)
+
+# 1. Видалити рядки з population_volume <= 0 (фізично неможливе споживання)
+n_negative = (analysis['population_volume'] <= 0).sum()
+analysis = analysis[analysis['population_volume'] > 0].copy()
+print(f'Видалено population_volume <= 0: {n_negative} рядків')
+
+# 2. Per-GRS IQR фільтр (Tukey method: Q1 - 1.5*IQR .. Q3 + 1.5*IQR)
+outlier_mask = pd.Series(False, index=analysis.index)
+
+for lid in sorted(analysis['line_id'].unique()):
+    grs_mask = analysis['line_id'] == lid
+    vol = analysis.loc[grs_mask, 'population_volume']
+
+    q1 = vol.quantile(0.25)
+    q3 = vol.quantile(0.75)
+    iqr = q3 - q1
+    lower = q1 - 1.5 * iqr
+    upper = q3 + 1.5 * iqr
+
+    grs_outliers = grs_mask & ((analysis['population_volume'] < lower) | (analysis['population_volume'] > upper))
+    n_out = grs_outliers.sum()
+    if n_out > 0:
+        print(f'  {lineid_to_grs.get(lid, lid)}: {n_out} викидів (bounds: {lower:.0f}..{upper:.0f})')
+    outlier_mask |= grs_outliers
+
+analysis = analysis[~outlier_mask].copy()
+n_after = len(analysis)
+print(f'Всього видалено: {n_before - n_after} рядків ({(n_before - n_after) / n_before * 100:.1f}%)')
+print(f'Залишилось: {n_after} рядків')
+
+# ============================================================================
 # Блок 7 — Кореляція Пірсона
 # ============================================================================
 
