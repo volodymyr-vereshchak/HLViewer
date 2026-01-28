@@ -48,10 +48,10 @@ VOLUME_FILE = DATA_DIR / 'volume_2025.xlsx'
 
 VIRTUAL_LINES_FILE = DATA_DIR / 'virtual_lines.json'
 WEATHER_FILE = DATA_DIR / 'weather_2025_daily_contractual.csv'
-TRAIN_START = '2025-01-01'
-TRAIN_END = '2025-12-31'
-TEST_START = '2026-01-01'
-TEST_END = '2026-01-31'
+TRAIN_START = pd.to_datetime('2025-01-01')
+TRAIN_END = pd.to_datetime('2025-12-31')
+TEST_START = pd.to_datetime('2026-01-01')
+TEST_END = pd.to_datetime('2026-01-31')
 
 # Створити директорію для виводу
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -183,7 +183,7 @@ ent_long = vol_filtered.melt(
 )
 
 # Конвертація назви колонки → дата
-ent_long['date'] = ent_long['date_col'].map(date_map)
+ent_long['date'] = pd.to_datetime(ent_long['date_col'].map(date_map)).dt.normalize()
 ent_long['enterprise_volume'] = pd.to_numeric(ent_long['enterprise_volume'], errors='coerce').fillna(0)
 
 # Агрегація (sum) по line_id + date
@@ -245,14 +245,14 @@ sql_lines = text(f"""
     SELECT line_id, period AS date, volume AS line_volume
     FROM daily_archive
     WHERE line_id IN ({line_ids_str})
-      AND period BETWEEN '{TRAIN_START}' AND '{TEST_END}'
+      AND period BETWEEN '{TRAIN_START.strftime('%Y-%m-%d')}' AND '{TEST_END.strftime('%Y-%m-%d')}'
     ORDER BY line_id, period
 """)
 
 with engine.connect() as conn:
     line_volumes_raw = pd.read_sql(sql_lines, conn)
 
-line_volumes_raw['date'] = pd.to_datetime(line_volumes_raw['date'])
+line_volumes_raw['date'] = pd.to_datetime(line_volumes_raw['date']).dt.normalize()
 print(f'\nline_volumes (raw з БД): {line_volumes_raw.shape}')
 print(f'line_id у БД: {sorted(line_volumes_raw["line_id"].unique())}')
 
@@ -310,6 +310,8 @@ for lid in sorted(line_volumes['line_id'].unique()):
 
 print(f'\nЗавантаження погодних даних: {WEATHER_FILE}')
 temp_df = pd.read_csv(WEATHER_FILE, parse_dates=['date'])
+# Нормалізація дат: прибираємо час, залишаємо тільки дату для коректного merge
+temp_df['date'] = pd.to_datetime(temp_df['date']).dt.normalize()
 print(f'Записів температури: {len(temp_df)}')
 print(f'Діапазон дат: {temp_df["date"].min().date()} .. {temp_df["date"].max().date()}')
 print(f'Температура (°C): min={temp_df["temperature"].min():.1f}, max={temp_df["temperature"].max():.1f}, mean={temp_df["temperature"].mean():.1f}')
