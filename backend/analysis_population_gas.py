@@ -47,7 +47,7 @@ LINE_ID_FILE = DATA_DIR / 'line_id_2025.xlsx'
 VOLUME_FILE = DATA_DIR / 'volume_2025.xlsx'
 
 VIRTUAL_LINES_FILE = DATA_DIR / 'virtual_lines.json'
-WEATHER_FILE = DATA_DIR / 'weather_2025.csv'
+WEATHER_FILE = DATA_DIR / 'weather_2025_daily_contractual.csv'
 TRAIN_START = '2025-01-01'
 TRAIN_END = '2025-12-31'
 TEST_START = '2026-01-01'
@@ -317,8 +317,12 @@ print(f'Температура (°C): min={temp_df["temperature"].min():.1f}, ma
 # Конвертація °C -> K
 temp_df['temp_kelvin'] = temp_df['temperature'] + 273.15
 
-# Зберігаємо додаткові погодні стовпці для фіч
-weather_extra_cols = ['temperature_min', 'temperature_max', 'humidity', 'wind_speed', 'pressure', 'cloud_cover']
+# Зберігаємо додаткові погодні стовпці для фіч (включаючи нові погодинні)
+weather_extra_cols = [
+    'temperature_min', 'temperature_max', 'humidity', 'wind_speed', 'pressure', 'cloud_cover',
+    'temp_range', 'temp_hourly_std', 'hdh_18c', 'hdh_15c',
+    'hours_below_0c', 'wind_chill_mean', 'wind_chill_min'
+]
 weather_extra_cols = [c for c in weather_extra_cols if c in temp_df.columns]
 
 temp_daily = temp_df[['date', 'temperature', 'temp_kelvin'] + weather_extra_cols].copy()
@@ -472,6 +476,38 @@ if 'wind_speed' in analysis.columns:
     analysis['wind_chill'] = analysis['temperature'] - 0.1 * analysis['wind_speed']
 
 print(f'Додано погодні фічі: {[c for c in weather_extra_cols if c in analysis.columns]}')
+
+# ============================================================================
+# Погодинні фічі температури (з контрактної добової агрегації)
+# ============================================================================
+
+# Temperature variance from hourly data
+if 'temp_hourly_std' in analysis.columns:
+    analysis['temp_hourly_std'] = analysis['temp_hourly_std'].fillna(
+        analysis['temp_range'] / 4  # Approximation when missing
+    )
+    print(f'  temp_hourly_std: стандартне відхилення погодинної температури')
+
+# Heating degree hours
+if 'hdh_18c' in analysis.columns:
+    analysis['hdh_18c'] = analysis['hdh_18c'].fillna(0)
+    print(f'  hdh_18c: градусо-години опалення (база 18°C)')
+
+if 'hdh_15c' in analysis.columns:
+    analysis['hdh_15c'] = analysis['hdh_15c'].fillna(0)
+    print(f'  hdh_15c: градусо-години опалення (база 15°C)')
+
+# Hours below freezing
+if 'hours_below_0c' in analysis.columns:
+    analysis['hours_below_0c'] = analysis['hours_below_0c'].fillna(0)
+    print(f'  hours_below_0c: кількість годин з T < 0°C')
+
+# Wind chill from hourly aggregation
+if 'wind_chill_min' in analysis.columns:
+    analysis['wind_chill_min'] = analysis['wind_chill_min'].fillna(
+        analysis['temperature']
+    )
+    print(f'  wind_chill_min: мінімальний вітро-холод за добу')
 
 # ============================================================================
 # ГРС-специфічні фічі для єдиної моделі
@@ -640,6 +676,19 @@ WEATHER_FEATURE_COLS = [
 for wf in WEATHER_FEATURE_COLS:
     if wf in analysis.columns:
         FEATURE_COLS.append(wf)
+
+# Додаткові погодинні фічі (з контрактної добової агрегації)
+HOURLY_FEATURES = [
+    'temp_hourly_std',
+    'hdh_18c',
+    'hdh_15c',
+    'hours_below_0c',
+    'wind_chill_min'
+]
+for hf in HOURLY_FEATURES:
+    if hf in analysis.columns:
+        FEATURE_COLS.append(hf)
+        print(f'  Додано погодинну фічу: {hf}')
 
 print(f'\n=== Навчання ЄДИНОЇ моделі для всіх ГРС з {len(FEATURE_COLS)} фічами (кусочно-лінійні температурні зони) ===')
 print(f'Фічі: {", ".join(FEATURE_COLS)}')
@@ -920,6 +969,22 @@ for i, lid in enumerate(unique_lids):
         elif col == 'wind_chill':
             median_wind = train_subset['wind_speed'].median() if 'wind_speed' in train_subset.columns else 3.0
             synthetic[col] = temp_range - 0.1 * median_wind
+        elif col == 'temp_hourly_std':
+            # Approximate as fraction of daily range
+            synthetic[col] = train_subset[col].median() if col in train_subset.columns else 2.0
+        elif col == 'hdh_18c':
+            # Heating degree hours: sum over 24 hours of max(0, 18 - T_hourly)
+            synthetic[col] = np.maximum(0, (18 - temp_range) * 24)
+        elif col == 'hdh_15c':
+            # Heating degree hours with 15°C base
+            synthetic[col] = np.maximum(0, (15 - temp_range) * 24)
+        elif col == 'hours_below_0c':
+            # Hours below freezing: 0 if temp >= 0, otherwise proportional estimate
+            synthetic[col] = np.where(temp_range < 0, 24, 0)
+        elif col == 'wind_chill_min':
+            # Minimum wind chill during day
+            median_wind = train_subset['wind_speed'].median() if 'wind_speed' in train_subset.columns else 3.0
+            synthetic[col] = temp_range - 2.0 - 0.1 * median_wind  # Slightly lower than mean temp
         else:
             # Для всіх інших фіч — медіана від тренувальних даних
             if col in train_subset.columns:
