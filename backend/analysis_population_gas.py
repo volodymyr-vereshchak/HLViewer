@@ -607,48 +607,58 @@ print(corr_df)
 # Scatter plots: температура vs об'єм населення для кожної ГРС
 unique_lids = sorted(analysis['line_id'].unique())
 n_grs = len(unique_lids)
-ncols = 2
-nrows = (n_grs + ncols - 1) // ncols
 
-fig, axes = plt.subplots(nrows, ncols, figsize=(14, 4 * nrows))
-axes = axes.flatten()
+if n_grs == 0:
+    print('ПОПЕРЕДЖЕННЯ: Немає даних для побудови графіків (analysis порожній)')
+else:
+    ncols = 2
+    nrows = (n_grs + ncols - 1) // ncols
 
-for i, lid in enumerate(unique_lids):
-    ax = axes[i]
-    subset = analysis[analysis['line_id'] == lid]
-    ax.scatter(subset['temp_kelvin'], subset['population_volume'], alpha=0.4, s=10)
-    ax.set_title(f'{lineid_to_grs.get(lid, lid)} (line_id={lid})')
-    ax.set_xlabel('Температура (K)')
-    ax.set_ylabel('Об\'єм населення')
-    # Додати r
-    r_row = corr_df[corr_df['line_id'] == lid]
-    if not r_row.empty:
-        r_val = r_row.iloc[0]['Pearson_r']
-        ax.text(0.05, 0.95, f'r = {r_val:.4f}', transform=ax.transAxes, va='top', fontsize=10)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(14, 4 * nrows))
+    if nrows == 1 and ncols == 1:
+        axes = [axes]
+    else:
+        axes = axes.flatten()
 
-# Приховати порожні subplot
-for j in range(i + 1, len(axes)):
-    axes[j].set_visible(False)
+    for i, lid in enumerate(unique_lids):
+        ax = axes[i]
+        subset = analysis[analysis['line_id'] == lid]
+        ax.scatter(subset['temp_kelvin'], subset['population_volume'], alpha=0.4, s=10)
+        ax.set_title(f'{lineid_to_grs.get(lid, lid)} (line_id={lid})')
+        ax.set_xlabel('Температура (K)')
+        ax.set_ylabel('Об\'єм населення')
+        # Додати r
+        r_row = corr_df[corr_df['line_id'] == lid]
+        if not r_row.empty:
+            r_val = r_row.iloc[0]['Pearson_r']
+            ax.text(0.05, 0.95, f'r = {r_val:.4f}', transform=ax.transAxes, va='top', fontsize=10)
 
-plt.tight_layout()
-plt.savefig(OUTPUT_DIR / 'scatter_temp_vs_population.png', dpi=150, bbox_inches='tight')
-print(f'\nЗбережено графік: {OUTPUT_DIR / "scatter_temp_vs_population.png"}')
-plt.close()
+    # Приховати порожні subplot
+    for j in range(i + 1, len(axes)):
+        axes[j].set_visible(False)
+
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR / 'scatter_temp_vs_population.png', dpi=150, bbox_inches='tight')
+    print(f'\nЗбережено графік: {OUTPUT_DIR / "scatter_temp_vs_population.png"}')
+    plt.close()
 
 # Heatmap кореляцій
-corr_pivot = corr_df.set_index('GRS')['Pearson_r']
-fig, ax = plt.subplots(figsize=(8, 3))
-colors = ['red' if v < 0 else 'blue' for v in corr_pivot.values]
-bars = ax.barh(corr_pivot.index, corr_pivot.values, color=colors, alpha=0.7)
-ax.set_xlabel('Pearson r')
-ax.set_title('Кореляція: температура vs об\'єм населення')
-ax.axvline(x=0, color='black', linewidth=0.5)
-for bar, val in zip(bars, corr_pivot.values):
-    ax.text(val, bar.get_y() + bar.get_height() / 2, f' {val:.3f}', va='center', fontsize=9)
-plt.tight_layout()
-plt.savefig(OUTPUT_DIR / 'correlation_heatmap.png', dpi=150, bbox_inches='tight')
-print(f'Збережено графік: {OUTPUT_DIR / "correlation_heatmap.png"}')
-plt.close()
+if not corr_df.empty:
+    corr_pivot = corr_df.set_index('GRS')['Pearson_r']
+    fig, ax = plt.subplots(figsize=(8, 3))
+    colors = ['red' if v < 0 else 'blue' for v in corr_pivot.values]
+    bars = ax.barh(corr_pivot.index, corr_pivot.values, color=colors, alpha=0.7)
+    ax.set_xlabel('Pearson r')
+    ax.set_title('Кореляція: температура vs об\'єм населення')
+    ax.axvline(x=0, color='black', linewidth=0.5)
+    for bar, val in zip(bars, corr_pivot.values):
+        ax.text(val, bar.get_y() + bar.get_height() / 2, f' {val:.3f}', va='center', fontsize=9)
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR / 'correlation_heatmap.png', dpi=150, bbox_inches='tight')
+    print(f'Збережено графік: {OUTPUT_DIR / "correlation_heatmap.png"}')
+    plt.close()
+else:
+    print('ПОПЕРЕДЖЕННЯ: Немає даних для побудови heatmap кореляцій')
 
 # ============================================================================
 # Блок 8 — Лінійна регресія з розширеними фічами
