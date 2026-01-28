@@ -574,7 +574,10 @@ for lid in sorted(analysis['line_id'].unique()):
 
 analysis = analysis[~outlier_mask].copy()
 n_after = len(analysis)
-print(f'Всього видалено: {n_before - n_after} рядків ({(n_before - n_after) / n_before * 100:.1f}%)')
+if n_before > 0:
+    print(f'Всього видалено: {n_before - n_after} рядків ({(n_before - n_after) / n_before * 100:.1f}%)')
+else:
+    print(f'Всього видалено: {n_before - n_after} рядків')
 print(f'Залишилось: {n_after} рядків')
 
 # ============================================================================
