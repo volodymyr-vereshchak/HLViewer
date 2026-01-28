@@ -918,8 +918,17 @@ print('STAGE 2: Навчання корректуючих моделей для 
 print('(корекція застосовується тільки якщо покращує R² на тесті)')
 print('='*80)
 
-# Упрощенный набор фич для коррекции (температурные зоны + временные)
-CORRECTION_COLS = ['temperature', 'temp_ma7', 'temp_heating', 'temp_transition', 'day_of_week']
+# Упрощенный набір фіч для корекції (тільки ті, що є в FEATURE_COLS після greedy selection)
+CORRECTION_COLS_CANDIDATES = ['temperature', 'temp_ma7', 'temp_heating', 'temp_transition', 'day_of_week']
+CORRECTION_COLS = [col for col in CORRECTION_COLS_CANDIDATES if col in FEATURE_COLS]
+
+if len(CORRECTION_COLS) == 0:
+    # Якщо жодної фічі-кандидата немає, використовуємо всі відібрані фічі
+    CORRECTION_COLS = FEATURE_COLS.copy()
+    print(f'\nПОПЕРЕДЖЕННЯ: Жодної фічі з CORRECTION_COLS_CANDIDATES не знайдено в FEATURE_COLS')
+    print(f'Використовуємо всі {len(CORRECTION_COLS)} відібраних фіч для корекції')
+else:
+    print(f'\nФічі для корекції: {CORRECTION_COLS} ({len(CORRECTION_COLS)} фіч)')
 
 correction_models = {}
 reg_results_corrected = []
@@ -947,8 +956,14 @@ for lid in sorted(analysis['line_id'].unique()):
     # Навчаємо корректуючу модель на residuals
     residuals_train = y_train_grs - y_pred_train_base
 
-    X_train_correction = train_grs[CORRECTION_COLS].values
-    X_test_correction = test_grs[CORRECTION_COLS].values
+    # Перевіряємо наявність всіх колонок CORRECTION_COLS
+    available_correction_cols = [col for col in CORRECTION_COLS if col in train_grs.columns]
+    if len(available_correction_cols) == 0:
+        # Якщо жодної колонки немає, використовуємо FEATURE_COLS
+        available_correction_cols = FEATURE_COLS
+
+    X_train_correction = train_grs[available_correction_cols].values
+    X_test_correction = test_grs[available_correction_cols].values
 
     correction_model = Ridge(alpha=0.1)
     correction_model.fit(X_train_correction, residuals_train)
@@ -973,7 +988,8 @@ for lid in sorted(analysis['line_id'].unique()):
         r2_final = r2_test_grs_corrected
         mae_final = mae_grs_corrected
         r2_train_final = r2_train_grs_corrected
-        correction_models[lid] = correction_model
+        # Зберігаємо модель разом зі списком колонок, які вона використовує
+        correction_models[lid] = (correction_model, available_correction_cols)
         status = 'CORRECTED'
     else:
         y_pred_test_final = y_pred_test_base
@@ -1119,8 +1135,21 @@ for i, lid in enumerate(unique_lids):
 
     # Якщо для цієї ГРС застосована корекція — додаємо її
     if lid in correction_models:
-        corr_cols_synthetic = synthetic[CORRECTION_COLS].values
-        correction = correction_models[lid].predict(corr_cols_synthetic)
+        # Отримуємо модель та її колонки
+        correction_model_obj, correction_cols_used = correction_models[lid]
+
+        # Перевіряємо, чи всі необхідні колонки є в synthetic
+        missing_cols = [col for col in correction_cols_used if col not in synthetic.columns]
+        if missing_cols:
+            # Додаємо відсутні колонки (використовуємо медіани з train)
+            for col in missing_cols:
+                if col in train_subset.columns:
+                    synthetic[col] = train_subset[col].median()
+                else:
+                    synthetic[col] = 0
+
+        corr_cols_synthetic = synthetic[correction_cols_used].values
+        correction = correction_model_obj.predict(corr_cols_synthetic)
         y_synthetic_corrected = np.maximum(0, y_synthetic + correction)
         ax.plot(temp_range, y_synthetic, 'r--', linewidth=1.5, alpha=0.5, label='Base model', zorder=2)
         ax.plot(temp_range, y_synthetic_corrected, 'g-', linewidth=2, label='Corrected', zorder=3)
