@@ -120,11 +120,6 @@ def aggregate_hourly_to_contractual_daily(hourly_df):
     df_work['below_0c'] = (df_work['temperature'] < 0).astype(int)
     daily['hours_below_0c'] = df_work['below_0c'].resample('D').sum()
 
-    # Wind chill metrics
-    df_work['wind_chill'] = df_work['temperature'] - 0.1 * df_work['wind_speed']
-    daily['wind_chill_mean'] = df_work['wind_chill'].resample('D').mean()
-    daily['wind_chill_min'] = df_work['wind_chill'].resample('D').min()
-
     # Shift index back forward 7 hours to restore contractual day date
     daily.index = daily.index + pd.Timedelta(hours=7)
     daily.index.name = 'date'
@@ -155,5 +150,3 @@ print(f"  hdh_18c: mean={daily_contractual['hdh_18c'].mean():.1f}, "
       f"max={daily_contractual['hdh_18c'].max():.1f}")
 print(f"  hours_below_0c: mean={daily_contractual['hours_below_0c'].mean():.1f}, "
       f"max={daily_contractual['hours_below_0c'].max():.0f}")
-print(f"  wind_chill_min: mean={daily_contractual['wind_chill_min'].mean():.1f}°C, "
-      f"min={daily_contractual['wind_chill_min'].min():.1f}°C")

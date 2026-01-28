@@ -319,11 +319,11 @@ print(f'Температура (°C): min={temp_df["temperature"].min():.1f}, ma
 # Конвертація °C -> K
 temp_df['temp_kelvin'] = temp_df['temperature'] + 273.15
 
-# Зберігаємо додаткові погодні стовпці для фіч (включаючи нові погодинні)
+# Зберігаємо тільки температурні стовпці для фіч (виключаємо humidity, wind_speed, pressure, cloud_cover)
 weather_extra_cols = [
-    'temperature_min', 'temperature_max', 'humidity', 'wind_speed', 'pressure', 'cloud_cover',
+    'temperature_min', 'temperature_max',
     'temp_range', 'temp_hourly_std', 'hdh_18c', 'hdh_15c',
-    'hours_below_0c', 'wind_chill_mean', 'wind_chill_min'
+    'hours_below_0c'
 ]
 weather_extra_cols = [c for c in weather_extra_cols if c in temp_df.columns]
 
@@ -463,21 +463,8 @@ analysis['temp_diff'] = analysis['temp_diff'].fillna(0)
 analysis['pop_volume_lag7'] = analysis['pop_volume_lag7'].fillna(analysis['population_volume'])
 analysis['pop_volume_ma7'] = analysis['pop_volume_ma7'].fillna(analysis['population_volume'])
 
-# 5. Погодні фічі з Meteostat
-if 'humidity' in analysis.columns:
-    analysis['humidity'] = analysis['humidity'].fillna(analysis['humidity'].median())
-if 'wind_speed' in analysis.columns:
-    analysis['wind_speed'] = analysis['wind_speed'].fillna(analysis['wind_speed'].median())
-if 'pressure' in analysis.columns:
-    analysis['pressure'] = analysis['pressure'].fillna(analysis['pressure'].median())
-if 'cloud_cover' in analysis.columns:
-    analysis['cloud_cover'] = analysis['cloud_cover'].fillna(analysis['cloud_cover'].median())
-
-# Вітро-холодовий ефект: вітер підсилює потребу в опаленні при низьких t
-if 'wind_speed' in analysis.columns:
-    analysis['wind_chill'] = analysis['temperature'] - 0.1 * analysis['wind_speed']
-
-print(f'Додано погодні фічі: {[c for c in weather_extra_cols if c in analysis.columns]}')
+# 5. Температурні фічі з Meteostat (тільки пов'язані з температурою)
+print(f'Додано температурні фічі: {[c for c in weather_extra_cols if c in analysis.columns]}')
 
 # ============================================================================
 # Погодинні фічі температури (з контрактної добової агрегації)
@@ -503,13 +490,6 @@ if 'hdh_15c' in analysis.columns:
 if 'hours_below_0c' in analysis.columns:
     analysis['hours_below_0c'] = analysis['hours_below_0c'].fillna(0)
     print(f'  hours_below_0c: кількість годин з T < 0°C')
-
-# Wind chill from hourly aggregation
-if 'wind_chill_min' in analysis.columns:
-    analysis['wind_chill_min'] = analysis['wind_chill_min'].fillna(
-        analysis['temperature']
-    )
-    print(f'  wind_chill_min: мінімальний вітро-холод за добу')
 
 # ============================================================================
 # ГРС-специфічні фічі для єдиної моделі
@@ -682,43 +662,136 @@ FEATURE_COLS = [
     'grs_avg_volume',    # Средний объем ГРС
 ]
 
-# Додаткові погодні фічі з Meteostat (якщо доступні)
+# Додаткові температурні фічі з Meteostat (тільки температурні)
 WEATHER_FEATURE_COLS = [
     'temperature_min', 'temperature_max', 'temp_range',
     'tmin_heating', 'tmin_very_cold',
-    'humidity', 'wind_speed', 'pressure', 'cloud_cover', 'wind_chill',
 ]
 for wf in WEATHER_FEATURE_COLS:
     if wf in analysis.columns:
         FEATURE_COLS.append(wf)
 
-# Додаткові погодинні фічі (з контрактної добової агрегації)
+# Додаткові погодинні температурні фічі (з контрактної добової агрегації)
 HOURLY_FEATURES = [
     'temp_hourly_std',
     'hdh_18c',
     'hdh_15c',
     'hours_below_0c',
-    'wind_chill_min'
 ]
 for hf in HOURLY_FEATURES:
     if hf in analysis.columns:
         FEATURE_COLS.append(hf)
         print(f'  Додано погодинну фічу: {hf}')
 
-print(f'\n=== Навчання ЄДИНОЇ моделі для всіх ГРС з {len(FEATURE_COLS)} фічами (кусочно-лінійні температурні зони) ===')
+print(f'\n=== Початковий набір фіч: {len(FEATURE_COLS)} фіч ===')
 print(f'Фічі: {", ".join(FEATURE_COLS)}')
-print(f'ВАЖЛИВО: Додано фічі для температурних зон (heating/transition/summer) та клипинг прогнозів >= 0')
 
-# Подготовка данных для ВСЕХ ГРС сразу (единая модель)
+# ============================================================================
+# Greedy Feature Selection на основі MAE
+# ============================================================================
+
 from sklearn.linear_model import Ridge
+from sklearn.metrics import mean_absolute_error
 
+def greedy_feature_selection(X_train, y_train, X_val, y_val, available_features,
+                             feature_names, base_features=['temperature'],
+                             threshold_pct=0.5, max_features=15, alpha=10.0):
+    """
+    Жадібний відбір фіч на основі MAE на валідаційній вибірці.
+
+    Parameters:
+    -----------
+    threshold_pct : float
+        Мінімальне покращення MAE у відсотках для додавання фічі (за замовчуванням 0.5%)
+    max_features : int
+        Максимальна кількість фіч (за замовчуванням 15)
+    alpha : float
+        Параметр регуляризації Ridge (за замовчуванням 10.0)
+    """
+    print(f'\n=== Greedy Feature Selection (threshold={threshold_pct}%, max={max_features}, alpha={alpha}) ===')
+
+    # Індекси базових фіч
+    selected_indices = [i for i, name in enumerate(feature_names) if name in base_features]
+    selected_names = base_features.copy()
+
+    # Індекси доступних фіч (виключаючи вже вибрані)
+    remaining_indices = [i for i in range(len(feature_names))
+                        if i not in selected_indices]
+
+    # Навчання базової моделі
+    model = Ridge(alpha=alpha)
+    model.fit(X_train[:, selected_indices], y_train)
+    y_pred = np.maximum(0, model.predict(X_val[:, selected_indices]))
+    best_mae = mean_absolute_error(y_val, y_pred)
+
+    print(f'\nБазова модель ({len(selected_names)} фіч): MAE = {best_mae:.2f}')
+    print(f'  Фічі: {", ".join(selected_names)}')
+
+    iteration = 1
+    while remaining_indices and len(selected_indices) < max_features:
+        best_improvement = 0
+        best_feature_idx = None
+        best_feature_mae = best_mae
+
+        # Пробуємо кожну залишкову фічу
+        for idx in remaining_indices:
+            # Додаємо фічу до вибраних
+            trial_indices = selected_indices + [idx]
+
+            # Навчаємо модель
+            model = Ridge(alpha=alpha)
+            model.fit(X_train[:, trial_indices], y_train)
+            y_pred = np.maximum(0, model.predict(X_val[:, trial_indices]))
+            mae = mean_absolute_error(y_val, y_pred)
+
+            # Обчислюємо покращення у відсотках
+            improvement_pct = (best_mae - mae) / best_mae * 100
+
+            if improvement_pct > best_improvement:
+                best_improvement = improvement_pct
+                best_feature_idx = idx
+                best_feature_mae = mae
+
+        # Якщо знайдено фічу з достатнім покращенням
+        if best_feature_idx is not None and best_improvement >= threshold_pct:
+            selected_indices.append(best_feature_idx)
+            selected_names.append(feature_names[best_feature_idx])
+            remaining_indices.remove(best_feature_idx)
+
+            print(f'\nІтерація {iteration}: Додано "{feature_names[best_feature_idx]}"')
+            print(f'  MAE: {best_mae:.2f} → {best_feature_mae:.2f} (покращення: {best_improvement:.2f}%)')
+
+            best_mae = best_feature_mae
+            iteration += 1
+        else:
+            if best_feature_idx is not None:
+                print(f'\nІтерація {iteration}: Найкраще покращення {best_improvement:.2f}% < {threshold_pct}% (поріг)')
+            print(f'Зупинка: немає фіч з достатнім покращенням MAE')
+            break
+
+    if len(selected_indices) >= max_features:
+        print(f'\nЗупинка: досягнуто максимальну кількість фіч ({max_features})')
+
+    print(f'\n=== Фінальний набір: {len(selected_names)} фіч, MAE = {best_mae:.2f} ===')
+    print(f'Вибрані фічі: {", ".join(selected_names)}')
+
+    return selected_indices, selected_names, best_mae
+
+# Підготовка даних з розділенням train/validation/test
 analysis_clean = analysis.dropna(subset=['population_volume'] + FEATURE_COLS)
 
-train = analysis_clean[(analysis_clean['date'] >= TRAIN_START) & (analysis_clean['date'] <= TRAIN_END)]
+# Розділення: train (Jan-Oct 2025), validation (Nov-Dec 2025), test (Jan 2026)
+VAL_START = pd.to_datetime('2025-11-01')
+VAL_END = pd.to_datetime('2025-12-31')
+
+train = analysis_clean[(analysis_clean['date'] >= TRAIN_START) & (analysis_clean['date'] < VAL_START)]
+validation = analysis_clean[(analysis_clean['date'] >= VAL_START) & (analysis_clean['date'] <= VAL_END)]
 test = analysis_clean[(analysis_clean['date'] >= TEST_START) & (analysis_clean['date'] <= TEST_END)]
 
-print(f'\nТренувальна вибірка: {TRAIN_START} — {TRAIN_END} ({len(train)} семплів)')
-print(f'Тестова вибірка: {TEST_START} — {TEST_END} ({len(test)} семплів)')
+print(f'\nРозділення даних:')
+print(f'  Train:      {TRAIN_START.strftime("%Y-%m-%d")} — {(VAL_START - pd.Timedelta(days=1)).strftime("%Y-%m-%d")} ({len(train)} семплів)')
+print(f'  Validation: {VAL_START.strftime("%Y-%m-%d")} — {VAL_END.strftime("%Y-%m-%d")} ({len(validation)} семплів)')
+print(f'  Test:       {TEST_START.strftime("%Y-%m-%d")} — {TEST_END.strftime("%Y-%m-%d")} ({len(test)} семплів)')
 
 if len(train) == 0:
     print('\n' + '='*80)
@@ -735,19 +808,45 @@ if len(train) == 0:
         print(analysis_clean[['date', 'line_id', 'population_volume', 'temperature']].head())
     raise ValueError('Неможливо навчити модель: тренувальна вибірка порожня. Перевірте діапазони дат та формат даних.')
 
-X_train = train[FEATURE_COLS].values
-y_train = train['population_volume'].values
+# Застосування Greedy Feature Selection
+X_train_all = train[FEATURE_COLS].values
+y_train_all = train['population_volume'].values
+X_val_all = validation[FEATURE_COLS].values
+y_val_all = validation['population_volume'].values
+X_test_all = test[FEATURE_COLS].values
+y_test_all = test['population_volume'].values
+
+selected_indices, selected_features, val_mae = greedy_feature_selection(
+    X_train_all, y_train_all,
+    X_val_all, y_val_all,
+    FEATURE_COLS, FEATURE_COLS,
+    base_features=['temperature'],
+    threshold_pct=0.5,
+    max_features=15,
+    alpha=10.0
+)
+
+# Оновлюємо FEATURE_COLS відібраними фічами
+FEATURE_COLS = selected_features
+print(f'\n=== Навчання фінальної моделі з {len(FEATURE_COLS)} відібраними фічами ===')
+
+# Об'єднуємо train + validation для фінального навчання
+train_final = pd.concat([train, validation], ignore_index=True)
+
+X_train = train_final[FEATURE_COLS].values
+y_train = train_final['population_volume'].values
 X_test = test[FEATURE_COLS].values
 y_test = test['population_volume'].values
 
-# Обучение ОДНОЙ модели с Ridge регрессией (регуляризация против переобучения)
-model = Ridge(alpha=1.0)
+# Навчання ЄДИНОЇ моделі з Ridge регрессією (посилена регуляризація)
+model = Ridge(alpha=10.0)
 model.fit(X_train, y_train)
 
-# Прогноз с клипингом (убираем отрицательные значения)
+# Прогноз з клипінгом (прибираємо від'ємні значення)
 y_pred_train = np.maximum(0, model.predict(X_train))
 y_pred_test = np.maximum(0, model.predict(X_test))
-print(f'\nПрименен клипинг прогнозов: min(y_pred) = 0 (физическое ограничение)')
+print(f'\nЗастосовано клипінг прогнозів: min(y_pred) = 0 (фізичне обмеження)')
+print(f'Параметр регуляризації Ridge: alpha = 10.0')
 
 # Метрики общие
 mae_test_overall = mean_absolute_error(y_test, y_pred_test)
@@ -996,9 +1095,6 @@ for i, lid in enumerate(unique_lids):
             synthetic[col] = np.maximum(0, -(temp_range - 3))
         elif col == 'temp_range':
             synthetic[col] = train_subset[col].median() if col in train_subset.columns else 6.0
-        elif col == 'wind_chill':
-            median_wind = train_subset['wind_speed'].median() if 'wind_speed' in train_subset.columns else 3.0
-            synthetic[col] = temp_range - 0.1 * median_wind
         elif col == 'temp_hourly_std':
             # Approximate as fraction of daily range
             synthetic[col] = train_subset[col].median() if col in train_subset.columns else 2.0
@@ -1011,10 +1107,6 @@ for i, lid in enumerate(unique_lids):
         elif col == 'hours_below_0c':
             # Hours below freezing: 0 if temp >= 0, otherwise proportional estimate
             synthetic[col] = np.where(temp_range < 0, 24, 0)
-        elif col == 'wind_chill_min':
-            # Minimum wind chill during day
-            median_wind = train_subset['wind_speed'].median() if 'wind_speed' in train_subset.columns else 3.0
-            synthetic[col] = temp_range - 2.0 - 0.1 * median_wind  # Slightly lower than mean temp
         else:
             # Для всіх інших фіч — медіана від тренувальних даних
             if col in train_subset.columns:
