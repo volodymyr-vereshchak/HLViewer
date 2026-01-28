@@ -718,6 +718,21 @@ test = analysis_clean[(analysis_clean['date'] >= TEST_START) & (analysis_clean['
 print(f'\nТренувальна вибірка: {TRAIN_START} — {TRAIN_END} ({len(train)} семплів)')
 print(f'Тестова вибірка: {TEST_START} — {TEST_END} ({len(test)} семплів)')
 
+if len(train) == 0:
+    print('\n' + '='*80)
+    print('КРИТИЧНА ПОМИЛКА: Тренувальна вибірка порожня!')
+    print('='*80)
+    print(f'\nДіагностика:')
+    print(f'  analysis_clean: {len(analysis_clean)} рядків')
+    print(f'  TRAIN_START: {TRAIN_START}')
+    print(f'  TRAIN_END: {TRAIN_END}')
+    if len(analysis_clean) > 0:
+        print(f'  Діапазон дат в analysis_clean: {analysis_clean["date"].min()} — {analysis_clean["date"].max()}')
+        print(f'  Типи даних date column: {analysis_clean["date"].dtype}')
+        print(f'\nПерші 5 рядків analysis_clean:')
+        print(analysis_clean[['date', 'line_id', 'population_volume', 'temperature']].head())
+    raise ValueError('Неможливо навчити модель: тренувальна вибірка порожня. Перевірте діапазони дат та формат даних.')
+
 X_train = train[FEATURE_COLS].values
 y_train = train['population_volume'].values
 X_test = test[FEATURE_COLS].values
