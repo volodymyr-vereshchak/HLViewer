@@ -1004,10 +1004,12 @@ from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_absolute_error
 
 def greedy_feature_selection(X_train, y_train, X_val, y_val, available_features,
-                             feature_names, base_features=['temperature'],
-                             threshold_pct=0.5, max_features=15, alpha=10.0):
+                             feature_names, threshold_pct=0.5, max_features=15, alpha=10.0):
     """
-    Жадібний відбір фіч на основі MAE на валідаційній вибірці.
+    Правильний жадібний відбір фіч на основі MAE.
+
+    Крок 1: Знайти найкращу ПЕРШУ фічу (прогнати всі окремо)
+    Крок 2+: Додавати по одній фічі, вибираючи найкращу на кожному кроці
 
     Parameters:
     -----------
@@ -1020,23 +1022,41 @@ def greedy_feature_selection(X_train, y_train, X_val, y_val, available_features,
     """
     print(f'\n=== Greedy Feature Selection (threshold={threshold_pct}%, max={max_features}, alpha={alpha}) ===')
 
-    # Індекси базових фіч
-    selected_indices = [i for i, name in enumerate(feature_names) if name in base_features]
-    selected_names = base_features.copy()
+    # ============================================================================
+    # КРОК 1: ЗНАЙТИ НАЙКРАЩУ ПЕРШУ ФІЧУ
+    # ============================================================================
+    print(f'\nКрок 1: Пошук найкращої стартової фічі серед {len(feature_names)} кандидатів...')
 
-    # Індекси доступних фіч (виключаючи вже вибрані)
-    remaining_indices = [i for i in range(len(feature_names))
-                        if i not in selected_indices]
+    best_first_mae = float('inf')
+    best_first_idx = None
 
-    # Навчання базової моделі
-    model = Ridge(alpha=alpha)
-    model.fit(X_train[:, selected_indices], y_train)
-    y_pred = np.maximum(0, model.predict(X_val[:, selected_indices]))
-    best_mae = mean_absolute_error(y_val, y_pred)
+    # Тестуємо КОЖНУ фічу окремо
+    for idx in range(len(feature_names)):
+        model = Ridge(alpha=alpha)
+        model.fit(X_train[:, [idx]], y_train)
+        y_pred = np.maximum(0, model.predict(X_val[:, [idx]]))
+        mae = mean_absolute_error(y_val, y_pred)
 
-    print(f'\nБазова модель ({len(selected_names)} фіч): MAE = {best_mae:.2f}')
-    print(f'  Фічі: {", ".join(selected_names)}')
+        if mae < best_first_mae:
+            best_first_mae = mae
+            best_first_idx = idx
 
+        # Логування прогресу
+        if (idx + 1) % 20 == 0:
+            print(f'  Протестовано {idx + 1}/{len(feature_names)} фіч...')
+
+    # Стартуємо з найкращої фічі
+    selected_indices = [best_first_idx]
+    selected_names = [feature_names[best_first_idx]]
+    remaining_indices = [i for i in range(len(feature_names)) if i != best_first_idx]
+
+    print(f'\nНайкраща стартова фіча: "{feature_names[best_first_idx]}" (MAE = {best_first_mae:.2f})')
+
+    best_mae = best_first_mae
+
+    # ============================================================================
+    # КРОК 2+: ДОДАЄМО ФІЧІ ПО ОДНІЙ
+    # ============================================================================
     iteration = 1
     while remaining_indices and len(selected_indices) < max_features:
         best_improvement = 0
@@ -1045,7 +1065,6 @@ def greedy_feature_selection(X_train, y_train, X_val, y_val, available_features,
 
         # Пробуємо кожну залишкову фічу
         for idx in remaining_indices:
-            # Додаємо фічу до вибраних
             trial_indices = selected_indices + [idx]
 
             # Навчаємо модель
@@ -1083,7 +1102,8 @@ def greedy_feature_selection(X_train, y_train, X_val, y_val, available_features,
         print(f'\nЗупинка: досягнуто максимальну кількість фіч ({max_features})')
 
     print(f'\n=== Фінальний набір: {len(selected_names)} фіч, MAE = {best_mae:.2f} ===')
-    print(f'Вибрані фічі: {", ".join(selected_names)}')
+    for i, name in enumerate(selected_names, 1):
+        print(f'  {i}. {name}')
 
     return selected_indices, selected_names, best_mae
 
@@ -1143,39 +1163,24 @@ print(f'\n=== Стандартизация фич ===')
 print(f'Масштаб фич приведен к mean=0, std=1')
 print(f'Это критично для корректной работы Ridge регрессии')
 
-# ОТКЛЮЧАЕМ GREEDY SELECTION - он не работает с этими данными!
-# Используем отбор по корреляции вместо жадного алгоритма
-print('\n=== ОТБОР ФИЧ ПО КОРРЕЛЯЦИИ (greedy selection отключен) ===')
-print('Причина: greedy selection выбирает только 3-4 фичи из ~100, что недостаточно')
+# ИСПОЛЬЗУЕМ ИСПРАВЛЕННЫЙ GREEDY SELECTION
+# Теперь алгоритм правильно ищет лучшую стартовую фичу вместо привязки к 'temperature'
+print('\n=== ОТБОР ФИЧ С ПОМОЩЬЮ GREEDY SELECTION ===')
 
-# Вычисляем корреляцию каждой фичи с целевой переменной
-correlations = []
-for i, feat in enumerate(FEATURE_COLS):
-    # Используем train + validation для вычисления корреляции
-    X_col = X_train_all_scaled[:, i]
-    corr, p_value = pearsonr(X_col, y_train_all)
-    correlations.append({
-        'feature': feat,
-        'correlation': abs(corr),  # Абсолютная величина корреляции
-        'corr_signed': corr,
-        'p_value': p_value
-    })
+# Вызываем greedy selection с правильным алгоритмом
+selected_indices, selected_features, val_mae = greedy_feature_selection(
+    X_train_all_scaled, y_train_all,
+    X_val_all_scaled, y_val_all,
+    FEATURE_COLS, FEATURE_COLS,
+    # Убран параметр base_features - алгоритм сам найдет лучшую первую фичу
+    threshold_pct=0.05,  # 0.05% минимальное улучшение
+    max_features=40,      # Максимум 40 фич
+    alpha=1.0             # Ridge регуляризация
+)
 
-# Сортируем по абсолютной корреляции
-correlations_df = pd.DataFrame(correlations).sort_values('correlation', ascending=False)
-
-print(f'\nТоп-30 фич по корреляции с population_volume:')
-print('-'*80)
-for idx, row in correlations_df.head(30).iterrows():
-    print(f"{row['feature']:45s} r={row['corr_signed']:>7.4f} (|r|={row['correlation']:>7.4f})")
-
-# Выбираем топ-30 фич
-TOP_N = 30
-selected_features = correlations_df.head(TOP_N)['feature'].tolist()
-
-# Обновляем FEATURE_COLS
+# Обновляем FEATURE_COLS выбранными фичами
 FEATURE_COLS = selected_features
-print(f'\n=== Отобрано {len(FEATURE_COLS)} фич по корреляции (топ-{TOP_N}) ===')
+print(f'\n=== Отобрано {len(FEATURE_COLS)} фич с помощью greedy selection ===')
 
 # Об'єднуємо train + validation для фінального навчання
 train_final = pd.concat([train, validation], ignore_index=True)
