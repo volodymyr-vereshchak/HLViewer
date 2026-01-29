@@ -443,25 +443,12 @@ print(f'  temp_very_cold, temp_cold, temp_moderate - додаткові зони
 print(f'  temperature_min, temperature_max, temp_range - мін/макс/амплітуда')
 print(f'  tmin_heating, tmin_very_cold - кусочні фічі від мін. температури')
 
-# 3. Lag-фічі на основі історії споживання
-# Споживання 7 днів тому
-analysis['pop_volume_lag7'] = analysis.groupby('line_id')['population_volume'].transform(
-    lambda x: x.shift(7)
-)
-
-# Середнє споживання за останні 7 днів
-analysis['pop_volume_ma7'] = analysis.groupby('line_id')['population_volume'].transform(
-    lambda x: x.rolling(window=7, min_periods=1).mean().shift(1)  # shift(1) щоб не було витоку даних
-)
-
-# 4. Взаємодії фіч
+# 3. Взаємодії фіч
 analysis['temp_x_weekend'] = analysis['temperature'] * analysis['is_weekend']
 analysis['temp_x_month'] = analysis['temperature'] * analysis['month']
 
 # Заповнення NaN для lag-фіч (перші дні)
 analysis['temp_diff'] = analysis['temp_diff'].fillna(0)
-analysis['pop_volume_lag7'] = analysis['pop_volume_lag7'].fillna(analysis['population_volume'])
-analysis['pop_volume_ma7'] = analysis['pop_volume_ma7'].fillna(analysis['population_volume'])
 
 # 5. Температурні фічі з Meteostat (тільки пов'язані з температурою)
 print(f'Додано температурні фічі: {[c for c in weather_extra_cols if c in analysis.columns]}')
@@ -737,10 +724,6 @@ print(f'   Phase 3 (Fine-tuning): ~10 features')
 # ============================================================================
 # ГРС-специфічні фічі для єдиної моделі
 # ============================================================================
-# Середній об'єм для кожної ГРС (нормалізація)
-grs_avg = analysis.groupby('line_id')['population_volume'].transform('mean')
-analysis['grs_avg_volume'] = grs_avg
-
 # line_id як категоріальну фічу (для лінійної регресії просто числову)
 analysis['line_id_feature'] = analysis['line_id']
 
@@ -889,23 +872,40 @@ else:
 # Блок 8 — Лінійна регресія з розширеними фічами
 # ============================================================================
 
-# Список фич для единой модели с кусочно-линейными температурными фичами
+# ============================================================================
+# Список фич для модели - ТОЛЬКО на основе погоды и календаря
+# УДАЛЕНЫ: pop_volume_lag7, pop_volume_ma7, grs_avg_volume
+# (для корректного предсказания и детекции аномалий/утечек/воровства)
+# ============================================================================
+
 FEATURE_COLS = [
-    'temperature',        # Основная температура (°C) - Meteostat
+    # Базовые температурные фичи
+    'temperature',        # Основная температура (°C)
+    'temp_kelvin',        # Температура в Кельвинах
+    'temp_kelvin_squared', # Температура в Кельвинах в квадрате
+    'temp_diff',         # Разница с предыдущим днем
+    'temp_min3',         # Минимум за 3 дня
     'temp_ma7',          # Скользящее среднее 7 дней
+
+    # Кусочно-линейные температурные зоны
     'temp_heating',      # Зона отопления (активна при t < 15°C)
     'temp_transition',   # Переходная зона (15-25°C)
     'temp_summer',       # Летняя зона (t > 25°C)
     'temp_very_cold',    # Очень холодно (t < 0°C)
     'temp_cold',         # Холодно (t < 10°C)
+    'temp_moderate',     # Умеренно (10-20°C)
+
+    # Календарные признаки
     'day_of_week',       # День недели (0-6)
-    'pop_volume_lag7',   # Потребление 7 дней назад
-    'pop_volume_ma7',    # Среднее потребление 7 дней
+    'month',             # Месяц (1-12)
+    'season',            # Сезон (1-4)
+    'is_weekend',        # Выходной день
+
+    # ГРС идентификатор (для различения разных ГРС)
     'line_id_feature',   # ID ГРС
-    'grs_avg_volume',    # Средний объем ГРС
 ]
 
-# Додаткові температурні фічі з Meteostat (тільки температурні)
+# Додаткові температурні фічі з Meteostat (min/max/range)
 WEATHER_FEATURE_COLS = [
     'temperature_min', 'temperature_max', 'temp_range',
     'tmin_heating', 'tmin_very_cold',
@@ -914,17 +914,84 @@ for wf in WEATHER_FEATURE_COLS:
     if wf in analysis.columns:
         FEATURE_COLS.append(wf)
 
-# Додаткові погодинні температурні фічі (з контрактної добової агрегації)
+# Погодинні температурні фічі (HDH, hours below/above thresholds)
 HOURLY_FEATURES = [
     'temp_hourly_std',
-    'hdh_18c',
-    'hdh_15c',
-    'hours_below_0c',
+    'hdh_18c', 'hdh_15c', 'hdh_12c', 'hdh_20c', 'cdh_25c',
+    'hours_below_0c', 'hours_below_minus5c', 'hours_below_minus10c',
+    'hours_above_15c', 'hours_above_20c',
+    'temp_night_min', 'temp_night_avg',
 ]
 for hf in HOURLY_FEATURES:
     if hf in analysis.columns:
         FEATURE_COLS.append(hf)
-        print(f'  Додано погодинну фічу: {hf}')
+
+# PHASE 1: Temperature lag features
+PHASE1_LAG_FEATURES = [
+    'temp_lag1', 'temp_lag3', 'temp_lag7',
+    'temp_heating_lag1', 'temp_heating_lag3',
+    'hdh_18c_lag1', 'hdh_18c_lag3', 'hdh_18c_lag7',
+    'temp_accel',
+    'temp_max_change_3d', 'temp_max_change_7d',
+]
+for feat in PHASE1_LAG_FEATURES:
+    if feat in analysis.columns:
+        FEATURE_COLS.append(feat)
+
+# PHASE 1: Rolling statistics
+PHASE1_ROLLING_FEATURES = [
+    'temp_ma3', 'temp_ma14', 'temp_ma30',
+    'temp_std3', 'temp_std7', 'temp_std14',
+    'temp_min7', 'temp_max7', 'temp_range7',
+    'temp_min14', 'temp_max14', 'temp_range14',
+    'temp_deviation_ma7', 'temp_deviation_ma30',
+    'temp_zscore_7d', 'temp_zscore_14d',
+]
+for feat in PHASE1_ROLLING_FEATURES:
+    if feat in analysis.columns:
+        FEATURE_COLS.append(feat)
+
+# PHASE 1: Max temperature features
+PHASE1_MAX_FEATURES = [
+    'tmax_heating', 'tmax_summer', 'temp_asymmetry',
+    'daytime_warming', 'tmin_x_tmax',
+]
+for feat in PHASE1_MAX_FEATURES:
+    if feat in analysis.columns:
+        FEATURE_COLS.append(feat)
+
+# PHASE 2: Temperature inertia & cumulative features
+PHASE2_INERTIA_FEATURES = [
+    'cumulative_hdd_7d', 'cumulative_hdd_14d', 'cumulative_hdd_30d',
+    'cumulative_hdh18_7d', 'cumulative_hdh18_14d',
+    'cold_spell_0c', 'cold_spell_minus5c', 'warm_spell_15c',
+    'ewm_hdd_7d',
+    'night_heating',
+]
+for feat in PHASE2_INERTIA_FEATURES:
+    if feat in analysis.columns:
+        FEATURE_COLS.append(feat)
+
+# PHASE 3: Temperature interaction features
+PHASE3_INTERACTION_FEATURES = [
+    'temp_heating_x_range', 'temp_very_cold_x_range',
+    'hdh_x_std', 'temp_heating_x_frost_hours',
+    'tmin_x_tavg', 'tmin_deviation',
+    'temp_heating_squared', 'hdh_18c_squared',
+    'hdh_diff_18_15',
+]
+for feat in PHASE3_INTERACTION_FEATURES:
+    if feat in analysis.columns:
+        FEATURE_COLS.append(feat)
+
+print(f'\n=== Фичи для модели (БЕЗ pop_volume): {len(FEATURE_COLS)} фич ===')
+print(f'Доступні фичи за категоріями:')
+print(f'  - Базові температурні: 13')
+print(f'  - Календарні: 4')
+print(f'  - Phase 1 (Lag & Rolling): {len([f for f in PHASE1_LAG_FEATURES + PHASE1_ROLLING_FEATURES + PHASE1_MAX_FEATURES if f in analysis.columns])}')
+print(f'  - Phase 2 (Inertia): {len([f for f in PHASE2_INERTIA_FEATURES if f in analysis.columns])}')
+print(f'  - Phase 3 (Interactions): {len([f for f in PHASE3_INTERACTION_FEATURES if f in analysis.columns])}')
+print(f'  - Hourly features: {len([f for f in HOURLY_FEATURES if f in analysis.columns])}')
 
 print(f'\n=== Початковий набір фіч: {len(FEATURE_COLS)} фіч ===')
 print(f'Фічі: {", ".join(FEATURE_COLS)}')
