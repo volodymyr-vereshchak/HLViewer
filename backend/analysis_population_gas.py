@@ -1143,19 +1143,39 @@ print(f'\n=== Стандартизация фич ===')
 print(f'Масштаб фич приведен к mean=0, std=1')
 print(f'Это критично для корректной работы Ridge регрессии')
 
-selected_indices, selected_features, val_mae = greedy_feature_selection(
-    X_train_all_scaled, y_train_all,  # Используем стандартизированные данные
-    X_val_all_scaled, y_val_all,      # Используем стандартизированные данные
-    FEATURE_COLS, FEATURE_COLS,
-    base_features=['temperature'],
-    threshold_pct=0.05,  # Снижено с 0.5% до 0.05% для более мягкого отбора
-    max_features=40,     # Увеличено с 15 до 40 для большего числа фич
-    alpha=1.0            # Снижено с 10.0 до 1.0 для меньшей регуляризации
-)
+# ОТКЛЮЧАЕМ GREEDY SELECTION - он не работает с этими данными!
+# Используем отбор по корреляции вместо жадного алгоритма
+print('\n=== ОТБОР ФИЧ ПО КОРРЕЛЯЦИИ (greedy selection отключен) ===')
+print('Причина: greedy selection выбирает только 3-4 фичи из ~100, что недостаточно')
 
-# Оновлюємо FEATURE_COLS відібраними фічами
+# Вычисляем корреляцию каждой фичи с целевой переменной
+correlations = []
+for i, feat in enumerate(FEATURE_COLS):
+    # Используем train + validation для вычисления корреляции
+    X_col = X_train_all_scaled[:, i]
+    corr, p_value = pearsonr(X_col, y_train_all)
+    correlations.append({
+        'feature': feat,
+        'correlation': abs(corr),  # Абсолютная величина корреляции
+        'corr_signed': corr,
+        'p_value': p_value
+    })
+
+# Сортируем по абсолютной корреляции
+correlations_df = pd.DataFrame(correlations).sort_values('correlation', ascending=False)
+
+print(f'\nТоп-30 фич по корреляции с population_volume:')
+print('-'*80)
+for idx, row in correlations_df.head(30).iterrows():
+    print(f"{row['feature']:45s} r={row['corr_signed']:>7.4f} (|r|={row['correlation']:>7.4f})")
+
+# Выбираем топ-30 фич
+TOP_N = 30
+selected_features = correlations_df.head(TOP_N)['feature'].tolist()
+
+# Обновляем FEATURE_COLS
 FEATURE_COLS = selected_features
-print(f'\n=== Навчання фінальної моделі з {len(FEATURE_COLS)} відібраними фічами ===')
+print(f'\n=== Отобрано {len(FEATURE_COLS)} фич по корреляции (топ-{TOP_N}) ===')
 
 # Об'єднуємо train + validation для фінального навчання
 train_final = pd.concat([train, validation], ignore_index=True)
