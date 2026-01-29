@@ -1173,7 +1173,7 @@ selected_indices, selected_features, val_mae = greedy_feature_selection(
     X_val_all_scaled, y_val_all,
     FEATURE_COLS, FEATURE_COLS,
     # Убран параметр base_features - алгоритм сам найдет лучшую первую фичу
-    threshold_pct=0.05,  # 0.05% минимальное улучшение
+    threshold_pct=0.1,   # 0.1% минимальное улучшение (было 0.05% - слишком строго)
     max_features=40,      # Максимум 40 фич
     alpha=1.0             # Ridge регуляризация
 )
@@ -1309,9 +1309,13 @@ for lid in sorted(analysis['line_id'].unique()):
     X_test_grs = test_grs[FEATURE_COLS].values
     y_test_grs = test_grs['population_volume'].values
 
+    # КРИТИЧНО: Стандартизація даних перед предсказанням
+    X_train_grs_scaled_corr = scaler_final.transform(X_train_grs)
+    X_test_grs_scaled_corr = scaler_final.transform(X_test_grs)
+
     # Базовий прогноз від основної моделі (з кліпінгом)
-    y_pred_train_base = np.maximum(0, model.predict(X_train_grs))
-    y_pred_test_base = np.maximum(0, model.predict(X_test_grs))
+    y_pred_train_base = np.maximum(0, model.predict(X_train_grs_scaled_corr))
+    y_pred_test_base = np.maximum(0, model.predict(X_test_grs_scaled_corr))
 
     r2_test_base = reg_df[reg_df['line_id'] == lid].iloc[0]['R2_test']
     mae_test_base = reg_df[reg_df['line_id'] == lid].iloc[0]['MAE_test']
@@ -1328,11 +1332,16 @@ for lid in sorted(analysis['line_id'].unique()):
     X_train_correction = train_grs[available_correction_cols].values
     X_test_correction = test_grs[available_correction_cols].values
 
-    correction_model = Ridge(alpha=0.1)
-    correction_model.fit(X_train_correction, residuals_train)
+    # КРИТИЧНО: Стандартизація для correction model
+    scaler_correction = StandardScaler()
+    X_train_correction_scaled = scaler_correction.fit_transform(X_train_correction)
+    X_test_correction_scaled = scaler_correction.transform(X_test_correction)
 
-    correction_train = correction_model.predict(X_train_correction)
-    correction_test = correction_model.predict(X_test_correction)
+    correction_model = Ridge(alpha=0.1)
+    correction_model.fit(X_train_correction_scaled, residuals_train)
+
+    correction_train = correction_model.predict(X_train_correction_scaled)
+    correction_test = correction_model.predict(X_test_correction_scaled)
 
     y_pred_train_corrected = np.maximum(0, y_pred_train_base + correction_train)
     y_pred_test_corrected = np.maximum(0, y_pred_test_base + correction_test)
@@ -1351,8 +1360,8 @@ for lid in sorted(analysis['line_id'].unique()):
         r2_final = r2_test_grs_corrected
         mae_final = mae_grs_corrected
         r2_train_final = r2_train_grs_corrected
-        # Зберігаємо модель разом зі списком колонок, які вона використовує
-        correction_models[lid] = (correction_model, available_correction_cols)
+        # Зберігаємо модель разом зі scaler і списком колонок
+        correction_models[lid] = (correction_model, scaler_correction, available_correction_cols)
         status = 'CORRECTED'
     else:
         y_pred_test_final = y_pred_test_base
