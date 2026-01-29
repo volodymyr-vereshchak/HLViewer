@@ -492,6 +492,249 @@ if 'hours_below_0c' in analysis.columns:
     print(f'  hours_below_0c: кількість годин з T < 0°C')
 
 # ============================================================================
+# PHASE 1: Quick Wins - Temperature lag features and rolling statistics
+# ============================================================================
+print('\n=== Phase 1: Temperature Lag Features ===')
+
+# 1. Temperature lag features (1, 3, 7 days ago)
+for lag in [1, 3, 7]:
+    analysis[f'temp_lag{lag}'] = (
+        analysis.groupby('line_id')['temperature']
+        .transform(lambda x: x.shift(lag))
+    )
+    analysis[f'temp_lag{lag}'] = analysis[f'temp_lag{lag}'].fillna(analysis['temperature'])
+
+print(f'  temp_lag1, temp_lag3, temp_lag7: температура 1/3/7 днів тому')
+
+# 2. Heating demand lag features
+for lag in [1, 3]:
+    analysis[f'temp_heating_lag{lag}'] = (
+        analysis.groupby('line_id')['temp_heating']
+        .transform(lambda x: x.shift(lag))
+    )
+    analysis[f'temp_heating_lag{lag}'] = analysis[f'temp_heating_lag{lag}'].fillna(analysis['temp_heating'])
+
+print(f'  temp_heating_lag1, temp_heating_lag3: потреба в опаленні 1/3 дні тому')
+
+# 3. HDH lag features (if available)
+if 'hdh_18c' in analysis.columns:
+    for lag in [1, 3, 7]:
+        analysis[f'hdh_18c_lag{lag}'] = (
+            analysis.groupby('line_id')['hdh_18c']
+            .transform(lambda x: x.shift(lag))
+        )
+        analysis[f'hdh_18c_lag{lag}'] = analysis[f'hdh_18c_lag{lag}'].fillna(analysis['hdh_18c'])
+    print(f'  hdh_18c_lag1, hdh_18c_lag3, hdh_18c_lag7: градусо-години 1/3/7 днів тому')
+
+# 4. Temperature acceleration (2nd derivative - rate of change)
+analysis['temp_accel'] = (
+    analysis.groupby('line_id')['temp_diff']
+    .transform(lambda x: x.diff())
+)
+analysis['temp_accel'] = analysis['temp_accel'].fillna(0)
+print(f'  temp_accel: прискорення зміни температури (2-га похідна)')
+
+# 5. Maximum temperature change over rolling windows
+for window in [3, 7]:
+    analysis[f'temp_max_change_{window}d'] = (
+        analysis.groupby('line_id')['temp_diff']
+        .transform(lambda x: x.rolling(window=window, min_periods=1).apply(
+            lambda vals: vals.max() - vals.min() if len(vals) > 0 else 0
+        ))
+    )
+print(f'  temp_max_change_3d, temp_max_change_7d: максимальна зміна температури за вікно')
+
+print('\n=== Phase 1: Rolling Statistics ===')
+
+# 6. Rolling averages for different windows
+for window in [3, 14, 30]:
+    analysis[f'temp_ma{window}'] = (
+        analysis.groupby('line_id')['temperature']
+        .transform(lambda x: x.rolling(window=window, min_periods=1).mean())
+    )
+print(f'  temp_ma3, temp_ma14, temp_ma30: ковзне середнє за 3/14/30 днів')
+
+# 7. Rolling standard deviations (temperature variability)
+for window in [3, 7, 14]:
+    analysis[f'temp_std{window}'] = (
+        analysis.groupby('line_id')['temperature']
+        .transform(lambda x: x.rolling(window=window, min_periods=1).std())
+    )
+    analysis[f'temp_std{window}'] = analysis[f'temp_std{window}'].fillna(0)
+print(f'  temp_std3, temp_std7, temp_std14: стандартне відхилення температури за вікно')
+
+# 8. Rolling min/max and range
+for window in [7, 14]:
+    analysis[f'temp_min{window}'] = (
+        analysis.groupby('line_id')['temperature']
+        .transform(lambda x: x.rolling(window=window, min_periods=1).min())
+    )
+    analysis[f'temp_max{window}'] = (
+        analysis.groupby('line_id')['temperature']
+        .transform(lambda x: x.rolling(window=window, min_periods=1).max())
+    )
+    analysis[f'temp_range{window}'] = (
+        analysis[f'temp_max{window}'] - analysis[f'temp_min{window}']
+    )
+print(f'  temp_min7, temp_max7, temp_range7: мін/макс/амплітуда за 7 днів')
+print(f'  temp_min14, temp_max14, temp_range14: мін/макс/амплітуда за 14 днів')
+
+# 9. Deviation from rolling mean (temperature anomaly)
+analysis['temp_deviation_ma7'] = analysis['temperature'] - analysis['temp_ma7']
+analysis['temp_deviation_ma30'] = analysis['temperature'] - analysis['temp_ma30']
+print(f'  temp_deviation_ma7, temp_deviation_ma30: відхилення від ковзного середнього')
+
+# 10. Z-score (how many std deviations from mean)
+analysis['temp_zscore_7d'] = (
+    (analysis['temperature'] - analysis['temp_ma7']) /
+    (analysis['temp_std7'] + 1e-6)  # +epsilon to avoid division by zero
+)
+analysis['temp_zscore_14d'] = (
+    (analysis['temperature'] - analysis['temp_ma14']) /
+    (analysis['temp_std14'] + 1e-6)
+)
+print(f'  temp_zscore_7d, temp_zscore_14d: z-score (скільки σ від середнього)')
+
+print('\n=== Phase 1: Max Temperature Features ===')
+
+# 11. Features derived from max temperature
+if 'temperature_max' in analysis.columns:
+    # Piecewise features from max temperature
+    analysis['tmax_heating'] = np.maximum(0, 15 - analysis['temperature_max'])
+    analysis['tmax_summer'] = np.maximum(0, analysis['temperature_max'] - 25)
+
+    # Temperature asymmetry (day warming)
+    analysis['temp_asymmetry'] = analysis['temperature_max'] - analysis['temperature_min']
+
+    # Daytime warming relative to average
+    analysis['daytime_warming'] = analysis['temperature_max'] - analysis['temperature']
+
+    # Min × Max interaction
+    analysis['tmin_x_tmax'] = analysis['temperature_min'] * analysis['temperature_max']
+
+    print(f'  tmax_heating, tmax_summer: кусочні фічі від макс. температури')
+    print(f'  temp_asymmetry: добова асиметрія (tmax - tmin)')
+    print(f'  daytime_warming: денне прогрівання')
+    print(f'  tmin_x_tmax: взаємодія мін × макс')
+
+print(f'\n✅ Phase 1 completed: Added ~35 new temperature features')
+
+# ============================================================================
+# PHASE 2: High Impact - Temperature inertia and cumulative features
+# ============================================================================
+print('\n=== Phase 2: Temperature Inertia & Cumulative Features ===')
+
+# 1. Cumulative Heating Degree Days (accumulated cold over last N days)
+for window in [7, 14, 30]:
+    analysis[f'cumulative_hdd_{window}d'] = (
+        analysis.groupby('line_id')['temp_heating']
+        .transform(lambda x: x.rolling(window=window, min_periods=1).sum())
+    )
+print(f'  cumulative_hdd_7d, 14d, 30d: накопичені градусо-дні холоду')
+
+# 2. Cumulative HDH (accumulated heating degree hours)
+if 'hdh_18c' in analysis.columns:
+    for window in [7, 14]:
+        analysis[f'cumulative_hdh18_{window}d'] = (
+            analysis.groupby('line_id')['hdh_18c']
+            .transform(lambda x: x.rolling(window=window, min_periods=1).sum())
+        )
+    print(f'  cumulative_hdh18_7d, 14d: накопичені градусо-години')
+
+# 3. Cold spell length (how many consecutive days below threshold)
+def cold_spell_length(temps, threshold=0):
+    """Calculate how many consecutive days temperature was below threshold"""
+    below = (temps < threshold).astype(int)
+    # Cumulative count that resets when temp rises above threshold
+    groups = (below != below.shift()).cumsum()
+    spell = below * below.groupby(groups).cumsum()
+    return spell
+
+analysis['cold_spell_0c'] = (
+    analysis.groupby('line_id')['temperature']
+    .transform(lambda x: cold_spell_length(x, threshold=0))
+)
+analysis['cold_spell_minus5c'] = (
+    analysis.groupby('line_id')['temperature']
+    .transform(lambda x: cold_spell_length(x, threshold=-5))
+)
+print(f'  cold_spell_0c, cold_spell_minus5c: дні підряд з морозом')
+
+# 4. Warm spell length (consecutive days above threshold)
+def warm_spell_length(temps, threshold=15):
+    """Calculate how many consecutive days temperature was above threshold"""
+    above = (temps > threshold).astype(int)
+    groups = (above != above.shift()).cumsum()
+    spell = above * above.groupby(groups).cumsum()
+    return spell
+
+analysis['warm_spell_15c'] = (
+    analysis.groupby('line_id')['temperature']
+    .transform(lambda x: warm_spell_length(x, threshold=15))
+)
+print(f'  warm_spell_15c: дні підряд з теплом (>15°C)')
+
+# 5. Exponentially weighted cumulative HDD (recent days weigh more)
+analysis['ewm_hdd_7d'] = (
+    analysis.groupby('line_id')['temp_heating']
+    .transform(lambda x: x.ewm(span=7, adjust=False).mean() * 7)
+)
+print(f'  ewm_hdd_7d: експоненційно зважені градусо-дні')
+
+# 6. Night temperature features (if available from hourly data)
+if 'temp_night_min' in analysis.columns:
+    analysis['night_heating'] = np.maximum(0, 15 - analysis['temp_night_min'])
+    print(f'  night_heating: потреба в опаленні на основі нічного мінімуму')
+
+print(f'\n✅ Phase 2 completed: Added ~15 new inertia features')
+
+# ============================================================================
+# PHASE 3: Fine-tuning - Temperature zone interactions
+# ============================================================================
+print('\n=== Phase 3: Temperature Interaction Features ===')
+
+# 1. Cold × Amplitude (unstable cold weather)
+analysis['temp_heating_x_range'] = analysis['temp_heating'] * analysis['temp_range']
+analysis['temp_very_cold_x_range'] = analysis['temp_very_cold'] * analysis['temp_range']
+print(f'  temp_heating_x_range, temp_very_cold_x_range: холод × амплітуда')
+
+# 2. HDH × Variability
+if 'hdh_18c' in analysis.columns and 'temp_hourly_std' in analysis.columns:
+    analysis['hdh_x_std'] = analysis['hdh_18c'] * analysis['temp_hourly_std']
+    print(f'  hdh_x_std: градусо-години × варіабельність')
+
+# 3. Cold × Frost hours
+if 'hours_below_0c' in analysis.columns:
+    analysis['temp_heating_x_frost_hours'] = (
+        analysis['temp_heating'] * analysis['hours_below_0c']
+    )
+    print(f'  temp_heating_x_frost_hours: опалення × години морозу')
+
+# 4. Min × Average temperature interaction
+if 'temperature_min' in analysis.columns:
+    analysis['tmin_x_tavg'] = analysis['temperature_min'] * analysis['temperature']
+    analysis['tmin_deviation'] = analysis['temperature'] - analysis['temperature_min']
+    print(f'  tmin_x_tavg, tmin_deviation: взаємодія мін × середня')
+
+# 5. Quadratic interactions of important features
+analysis['temp_heating_squared'] = analysis['temp_heating'] ** 2
+if 'hdh_18c' in analysis.columns:
+    analysis['hdh_18c_squared'] = analysis['hdh_18c'] ** 2
+print(f'  temp_heating_squared, hdh_18c_squared: квадратичні взаємодії')
+
+# 6. Difference between HDH with different bases (shows temperature zone)
+if 'hdh_18c' in analysis.columns and 'hdh_15c' in analysis.columns:
+    analysis['hdh_diff_18_15'] = analysis['hdh_18c'] - analysis['hdh_15c']
+    print(f'  hdh_diff_18_15: різниця між HDH 18°C та 15°C')
+
+print(f'\n✅ Phase 3 completed: Added ~10 new interaction features')
+
+print(f'\n🎯 Total new features added: ~60 temperature features')
+print(f'   Phase 1 (Quick Wins): ~35 features')
+print(f'   Phase 2 (High Impact): ~15 features')
+print(f'   Phase 3 (Fine-tuning): ~10 features')
+
+# ============================================================================
 # ГРС-специфічні фічі для єдиної моделі
 # ============================================================================
 # Середній об'єм для кожної ГРС (нормалізація)

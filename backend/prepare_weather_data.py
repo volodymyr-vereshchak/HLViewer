@@ -109,16 +109,44 @@ def aggregate_hourly_to_contractual_daily(hourly_df):
     # Advanced hourly features
     daily['temp_hourly_std'] = df_work['temperature'].resample('D').std()
 
-    # Heating degree hours (sum of max(0, 18 - T_hourly) for all 24 hours)
+    # Heating degree hours (sum of max(0, base - T_hourly) for all 24 hours)
     df_work['hdh_18c'] = np.maximum(0, 18 - df_work['temperature'])
     daily['hdh_18c'] = df_work['hdh_18c'].resample('D').sum()
 
     df_work['hdh_15c'] = np.maximum(0, 15 - df_work['temperature'])
     daily['hdh_15c'] = df_work['hdh_15c'].resample('D').sum()
 
+    # PHASE 2: Additional HDH bases
+    df_work['hdh_12c'] = np.maximum(0, 12 - df_work['temperature'])
+    daily['hdh_12c'] = df_work['hdh_12c'].resample('D').sum()
+
+    df_work['hdh_20c'] = np.maximum(0, 20 - df_work['temperature'])
+    daily['hdh_20c'] = df_work['hdh_20c'].resample('D').sum()
+
+    # Cooling degree hours (for summer - hot water temperature depends on ambient)
+    df_work['cdh_25c'] = np.maximum(0, df_work['temperature'] - 25)
+    daily['cdh_25c'] = df_work['cdh_25c'].resample('D').sum()
+
     # Hours below freezing
     df_work['below_0c'] = (df_work['temperature'] < 0).astype(int)
     daily['hours_below_0c'] = df_work['below_0c'].resample('D').sum()
+
+    # PHASE 2: Extended temperature thresholds
+    daily['hours_below_minus5c'] = (df_work['temperature'] < -5).resample('D').sum()
+    daily['hours_below_minus10c'] = (df_work['temperature'] < -10).resample('D').sum()
+    daily['hours_above_15c'] = (df_work['temperature'] > 15).resample('D').sum()
+    daily['hours_above_20c'] = (df_work['temperature'] > 20).resample('D').sum()
+
+    # PHASE 2: Night temperature features (0:00-6:00 = night)
+    night_mask = df_work.index.hour < 6
+    night_temps = df_work[night_mask]['temperature']
+    if len(night_temps) > 0:
+        daily['temp_night_min'] = night_temps.resample('D').min()
+        daily['temp_night_avg'] = night_temps.resample('D').mean()
+    else:
+        # If no night data, use overall min/avg
+        daily['temp_night_min'] = daily['temperature_min']
+        daily['temp_night_avg'] = daily['temperature']
 
     # Shift index back forward 7 hours to restore contractual day date
     daily.index = daily.index + pd.Timedelta(hours=7)
@@ -148,5 +176,19 @@ print(f"  temp_hourly_std: mean={daily_contractual['temp_hourly_std'].mean():.2f
       f"max={daily_contractual['temp_hourly_std'].max():.2f}")
 print(f"  hdh_18c: mean={daily_contractual['hdh_18c'].mean():.1f}, "
       f"max={daily_contractual['hdh_18c'].max():.1f}")
+print(f"  hdh_15c: mean={daily_contractual['hdh_15c'].mean():.1f}, "
+      f"max={daily_contractual['hdh_15c'].max():.1f}")
+print(f"  hdh_12c: mean={daily_contractual['hdh_12c'].mean():.1f}, "
+      f"max={daily_contractual['hdh_12c'].max():.1f}")
+print(f"  hdh_20c: mean={daily_contractual['hdh_20c'].mean():.1f}, "
+      f"max={daily_contractual['hdh_20c'].max():.1f}")
 print(f"  hours_below_0c: mean={daily_contractual['hours_below_0c'].mean():.1f}, "
       f"max={daily_contractual['hours_below_0c'].max():.0f}")
+print(f"  hours_below_minus5c: mean={daily_contractual['hours_below_minus5c'].mean():.1f}, "
+      f"max={daily_contractual['hours_below_minus5c'].max():.0f}")
+print(f"  hours_above_15c: mean={daily_contractual['hours_above_15c'].mean():.1f}, "
+      f"max={daily_contractual['hours_above_15c'].max():.0f}")
+print(f"  temp_night_min: mean={daily_contractual['temp_night_min'].mean():.2f}, "
+      f"min={daily_contractual['temp_night_min'].min():.2f}")
+print(f"  temp_night_avg: mean={daily_contractual['temp_night_avg'].mean():.2f}, "
+      f"min={daily_contractual['temp_night_avg'].min():.2f}")
