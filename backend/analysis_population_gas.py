@@ -1126,14 +1126,31 @@ y_val_all = validation['population_volume'].values
 X_test_all = test[FEATURE_COLS].values
 y_test_all = test['population_volume'].values
 
+# КРИТИЧНО: Стандартизация фич (приведение к одному масштабу)
+# Новые фичи имеют очень разный масштаб:
+# - temperature: -20 до +35
+# - cumulative_hdd_30d: 0 до 1000+
+# - hdh_18c: 0 до 400+
+# Ridge регрессия чувствительна к масштабу, поэтому стандартизация обязательна
+from sklearn.preprocessing import StandardScaler
+
+scaler = StandardScaler()
+X_train_all_scaled = scaler.fit_transform(X_train_all)
+X_val_all_scaled = scaler.transform(X_val_all)
+X_test_all_scaled = scaler.transform(X_test_all)
+
+print(f'\n=== Стандартизация фич ===')
+print(f'Масштаб фич приведен к mean=0, std=1')
+print(f'Это критично для корректной работы Ridge регрессии')
+
 selected_indices, selected_features, val_mae = greedy_feature_selection(
-    X_train_all, y_train_all,
-    X_val_all, y_val_all,
+    X_train_all_scaled, y_train_all,  # Используем стандартизированные данные
+    X_val_all_scaled, y_val_all,      # Используем стандартизированные данные
     FEATURE_COLS, FEATURE_COLS,
     base_features=['temperature'],
-    threshold_pct=0.5,
-    max_features=15,
-    alpha=10.0
+    threshold_pct=0.05,  # Снижено с 0.5% до 0.05% для более мягкого отбора
+    max_features=40,     # Увеличено с 15 до 40 для большего числа фич
+    alpha=1.0            # Снижено с 10.0 до 1.0 для меньшей регуляризации
 )
 
 # Оновлюємо FEATURE_COLS відібраними фічами
@@ -1148,15 +1165,22 @@ y_train = train_final['population_volume'].values
 X_test = test[FEATURE_COLS].values
 y_test = test['population_volume'].values
 
-# Навчання ЄДИНОЇ моделі з Ridge регрессією (посилена регуляризація)
-model = Ridge(alpha=10.0)
-model.fit(X_train, y_train)
+# Стандартизация для финальной модели
+# ВАЖНО: Фитим scaler на train_final (train + validation), НЕ на всех данных
+scaler_final = StandardScaler()
+X_train_scaled = scaler_final.fit_transform(X_train)
+X_test_scaled = scaler_final.transform(X_test)
+
+# Навчання ЄДИНОЇ моделі з Ridge регрессією (меньшая регуляризация для большего числа фич)
+model = Ridge(alpha=1.0)  # Снижено с 10.0 до 1.0 для согласованности с greedy selection
+model.fit(X_train_scaled, y_train)
+print(f'Параметр регуляризації Ridge: alpha = 1.0 (знижено для кращої роботи з більшою кількістю фіч)')
 
 # Прогноз з клипінгом (прибираємо від'ємні значення)
-y_pred_train = np.maximum(0, model.predict(X_train))
-y_pred_test = np.maximum(0, model.predict(X_test))
+y_pred_train = np.maximum(0, model.predict(X_train_scaled))
+y_pred_test = np.maximum(0, model.predict(X_test_scaled))
 print(f'\nЗастосовано клипінг прогнозів: min(y_pred) = 0 (фізичне обмеження)')
-print(f'Параметр регуляризації Ridge: alpha = 10.0')
+print(f'Використано стандартизацію фіч для коректної роботи Ridge регресії')
 
 # Метрики общие
 mae_test_overall = mean_absolute_error(y_test, y_pred_test)
@@ -1193,8 +1217,12 @@ for lid in sorted(analysis['line_id'].unique()):
     X_test_grs = test_grs[FEATURE_COLS].values
     y_test_grs = test_grs['population_volume'].values
 
-    y_pred_train_grs = np.maximum(0, model.predict(X_train_grs))
-    y_pred_test_grs = np.maximum(0, model.predict(X_test_grs))
+    # Стандартизация для предсказаний (используем тот же scaler_final)
+    X_train_grs_scaled = scaler_final.transform(X_train_grs)
+    X_test_grs_scaled = scaler_final.transform(X_test_grs)
+
+    y_pred_train_grs = np.maximum(0, model.predict(X_train_grs_scaled))
+    y_pred_test_grs = np.maximum(0, model.predict(X_test_grs_scaled))
 
     mae_grs = mean_absolute_error(y_test_grs, y_pred_test_grs)
     r2_train_grs = r2_score(y_train_grs, y_pred_train_grs)
