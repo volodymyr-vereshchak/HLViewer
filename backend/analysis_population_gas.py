@@ -322,8 +322,13 @@ temp_df['temp_kelvin'] = temp_df['temperature'] + 273.15
 # Зберігаємо тільки температурні стовпці для фіч (виключаємо humidity, wind_speed, pressure, cloud_cover)
 weather_extra_cols = [
     'temperature_min', 'temperature_max',
-    'temp_range', 'temp_hourly_std', 'hdh_18c', 'hdh_15c',
-    'hours_below_0c'
+    'temp_range', 'temp_hourly_std',
+    'hdh_18c', 'hdh_15c', 'hdh_12c', 'hdh_20c',  # Расширенные градусо-часы
+    'cdh_25c',  # Градусо-часы охлаждения
+    'hours_below_0c', 'hours_below_minus5c', 'hours_below_minus10c',  # Глубокие морозы
+    'hours_above_15c', 'hours_above_20c',  # Тёплые часы
+    'temp_night_min', 'temp_night_avg',  # Ночные температуры
+    'precipitation'  # Осадки
 ]
 weather_extra_cols = [c for c in weather_extra_cols if c in temp_df.columns]
 
@@ -1107,6 +1112,123 @@ def greedy_feature_selection(X_train, y_train, X_val, y_val, available_features,
 
     return selected_indices, selected_names, best_mae
 
+
+def greedy_feature_selection_r2(X_train, y_train, X_val, y_val, available_features,
+                                feature_names, threshold_delta=0.01, max_features=40, alpha=1.0):
+    """
+    Жадібний відбір фіч на основі R² замість MAE.
+
+    R² більш стабільна метрика при малих обсягах population_volume.
+    MAE може бути оманливою, оскільки абсолютна помилка мала, але відносна велика.
+
+    Parameters:
+    -----------
+    threshold_delta : float
+        Мінімальне покращення R² для додавання фічі (за замовчуванням 0.01 = 1%)
+    max_features : int
+        Максимальна кількість фіч (за замовчуванням 40)
+    alpha : float
+        Параметр регуляризації Ridge (за замовчуванням 1.0)
+
+    Returns:
+    --------
+    selected_indices : list
+        Індекси відібраних фіч
+    selected_names : list
+        Назви відібраних фіч
+    best_r2 : float
+        Найкращий R² на validation set
+    """
+    from sklearn.metrics import r2_score
+
+    print(f'\n=== Greedy Feature Selection based on R² (threshold={threshold_delta}, max={max_features}, alpha={alpha}) ===')
+
+    # ============================================================================
+    # КРОК 1: ЗНАЙТИ НАЙКРАЩУ ПЕРШУ ФІЧУ
+    # ============================================================================
+    print(f'\nКрок 1: Пошук найкращої стартової фічі серед {len(feature_names)} кандидатів...')
+
+    best_first_r2 = -np.inf
+    best_first_idx = None
+
+    # Тестуємо КОЖНУ фічу окремо
+    for idx in range(len(feature_names)):
+        model = Ridge(alpha=alpha)
+        model.fit(X_train[:, [idx]], y_train)
+        y_pred = np.maximum(0, model.predict(X_val[:, [idx]]))
+        r2 = r2_score(y_val, y_pred)
+
+        if r2 > best_first_r2:
+            best_first_r2 = r2
+            best_first_idx = idx
+
+        # Логування прогресу
+        if (idx + 1) % 20 == 0:
+            print(f'  Протестовано {idx + 1}/{len(feature_names)} фіч...')
+
+    # Стартуємо з найкращої фічі
+    selected_indices = [best_first_idx]
+    selected_names = [feature_names[best_first_idx]]
+    remaining_indices = [i for i in range(len(feature_names)) if i != best_first_idx]
+
+    print(f'\nНайкраща стартова фіча: "{feature_names[best_first_idx]}" (R² = {best_first_r2:.4f})')
+
+    best_r2 = best_first_r2
+
+    # ============================================================================
+    # КРОК 2+: ДОДАЄМО ФІЧІ ПО ОДНІЙ
+    # ============================================================================
+    iteration = 1
+    while remaining_indices and len(selected_indices) < max_features:
+        best_improvement = 0
+        best_feature_idx = None
+        best_feature_r2 = best_r2
+
+        # Пробуємо кожну залишкову фічу
+        for idx in remaining_indices:
+            trial_indices = selected_indices + [idx]
+
+            # Навчаємо модель
+            model = Ridge(alpha=alpha)
+            model.fit(X_train[:, trial_indices], y_train)
+            y_pred = np.maximum(0, model.predict(X_val[:, trial_indices]))
+            r2 = r2_score(y_val, y_pred)
+
+            # Обчислюємо покращення R²
+            improvement = r2 - best_r2
+
+            if improvement > best_improvement:
+                best_improvement = improvement
+                best_feature_idx = idx
+                best_feature_r2 = r2
+
+        # Якщо знайдено фічу з достатнім покращенням
+        if best_feature_idx is not None and best_improvement >= threshold_delta:
+            selected_indices.append(best_feature_idx)
+            selected_names.append(feature_names[best_feature_idx])
+            remaining_indices.remove(best_feature_idx)
+
+            print(f'\nІтерація {iteration}: Додано "{feature_names[best_feature_idx]}"')
+            print(f'  R²: {best_r2:.4f} → {best_feature_r2:.4f} (покращення: +{best_improvement:.4f})')
+
+            best_r2 = best_feature_r2
+            iteration += 1
+        else:
+            if best_feature_idx is not None:
+                print(f'\nІтерація {iteration}: Найкраще покращення R² = +{best_improvement:.4f} < {threshold_delta} (поріг)')
+            print(f'Зупинка: немає фіч з достатнім покращенням R²')
+            break
+
+    if len(selected_indices) >= max_features:
+        print(f'\nЗупинка: досягнуто максимальну кількість фіч ({max_features})')
+
+    print(f'\n=== Фінальний набір: {len(selected_names)} фіч, R² = {best_r2:.4f} ===')
+    for i, name in enumerate(selected_names, 1):
+        print(f'  {i}. {name}')
+
+    return selected_indices, selected_names, best_r2
+
+
 # Підготовка даних з розділенням train/validation/test
 analysis_clean = analysis.dropna(subset=['population_volume'] + FEATURE_COLS)
 
@@ -1163,24 +1285,25 @@ print(f'\n=== Стандартизация фич ===')
 print(f'Масштаб фич приведен к mean=0, std=1')
 print(f'Это критично для корректной работы Ridge регрессии')
 
-# ИСПОЛЬЗУЕМ ИСПРАВЛЕННЫЙ GREEDY SELECTION
-# Теперь алгоритм правильно ищет лучшую стартовую фичу вместо привязки к 'temperature'
-print('\n=== ОТБОР ФИЧ С ПОМОЩЬЮ GREEDY SELECTION ===')
+# ИСПОЛЬЗУЕМ GREEDY SELECTION НА ОСНОВЕ R² (НЕ MAE!)
+# R² более стабильна при малых объёмах population_volume
+# MAE обманчива: 8,907 м³ может быть огромной ошибкой при малом потреблении
+print('\n=== ОТБОР ФИЧ С ПОМОЩЬЮ GREEDY SELECTION (R²) ===')
 
-# Вызываем greedy selection с правильным алгоритмом
-selected_indices, selected_features, val_mae = greedy_feature_selection(
+# Вызываем greedy selection на основе R²
+selected_indices, selected_features, val_r2 = greedy_feature_selection_r2(
     X_train_all_scaled, y_train_all,
     X_val_all_scaled, y_val_all,
     FEATURE_COLS, FEATURE_COLS,
-    # Убран параметр base_features - алгоритм сам найдет лучшую первую фичу
-    threshold_pct=0.1,   # 0.1% минимальное улучшение (было 0.05% - слишком строго)
-    max_features=40,      # Максимум 40 фич
-    alpha=1.0             # Ridge регуляризация
+    threshold_delta=0.01,  # Минимальное улучшение R² на 0.01 (1%)
+    max_features=40,       # Максимум 40 фич
+    alpha=1.0              # Ridge регуляризация
 )
 
 # Обновляем FEATURE_COLS выбранными фичами
 FEATURE_COLS = selected_features
-print(f'\n=== Отобрано {len(FEATURE_COLS)} фич с помощью greedy selection ===')
+print(f'\n=== Отобрано {len(FEATURE_COLS)} фич с помощью greedy selection (R²) ===')
+print(f'Validation R² = {val_r2:.4f}')
 
 # Об'єднуємо train + validation для фінального навчання
 train_final = pd.concat([train, validation], ignore_index=True)
@@ -1202,10 +1325,37 @@ model.fit(X_train_scaled, y_train)
 print(f'Параметр регуляризації Ridge: alpha = 1.0 (знижено для кращої роботи з більшою кількістю фіч)')
 
 # Прогноз з клипінгом (прибираємо від'ємні значення)
-y_pred_train = np.maximum(0, model.predict(X_train_scaled))
-y_pred_test = np.maximum(0, model.predict(X_test_scaled))
-print(f'\nЗастосовано клипінг прогнозів: min(y_pred) = 0 (фізичне обмеження)')
-print(f'Використано стандартизацію фіч для коректної роботи Ridge регресії')
+y_pred_train_raw = model.predict(X_train_scaled)
+y_pred_test_raw = model.predict(X_test_scaled)
+
+# ДІАГНОСТИКА: Скільки від'ємних прогнозів до клипінгу
+n_negative_train = (y_pred_train_raw < 0).sum()
+n_negative_test = (y_pred_test_raw < 0).sum()
+
+print(f'\n=== ДІАГНОСТИКА: Від\'ємні прогнози до клипінгу ===')
+print(f'Train: {n_negative_train}/{len(y_pred_train_raw)} ({n_negative_train/len(y_pred_train_raw)*100:.1f}%) від\'ємних прогнозів')
+print(f'Test:  {n_negative_test}/{len(y_pred_test_raw)} ({n_negative_test/len(y_pred_test_raw)*100:.1f}%) від\'ємних прогнозів')
+
+if n_negative_test > 0:
+    print(f'⚠ УВАГА: Від\'ємні прогнози вказують на проблему масштабу даних!')
+
+print(f'\n=== ДІАГНОСТИКА: Масштаб даних ===')
+print(f'Train - Min прогноз (до клипінгу): {y_pred_train_raw.min():.1f} м³')
+print(f'Train - Max прогноз (до клипінгу): {y_pred_train_raw.max():.1f} м³')
+print(f'Test  - Min прогноз (до клипінгу): {y_pred_test_raw.min():.1f} м³')
+print(f'Test  - Max прогноз (до клипінгу): {y_pred_test_raw.max():.1f} м³')
+print(f'\nActual values (y_train):')
+print(f'  Min: {y_train.min():.1f} м³, Max: {y_train.max():.1f} м³')
+print(f'  Mean: {y_train.mean():.1f} м³, Std: {y_train.std():.1f} м³')
+print(f'Actual values (y_test):')
+print(f'  Min: {y_test.min():.1f} м³, Max: {y_test.max():.1f} м³')
+print(f'  Mean: {y_test.mean():.1f} м³, Std: {y_test.std():.1f} м³')
+
+# Застосовуємо клипінг
+y_pred_train = np.maximum(0, y_pred_train_raw)
+y_pred_test = np.maximum(0, y_pred_test_raw)
+print(f'\n✓ Застосовано клипінг прогнозів: min(y_pred) = 0 (фізичне обмеження)')
+print(f'✓ Використано стандартизацію фіч для коректної роботи Ridge регресії')
 
 # Метрики общие
 mae_test_overall = mean_absolute_error(y_test, y_pred_test)
