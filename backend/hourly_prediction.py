@@ -195,7 +195,13 @@ if not WEATHER_HOURLY_FILE.exists():
     print('Используем температуру из архива линий')
     weather_hourly = None
 else:
-    weather_hourly = pd.read_csv(WEATHER_HOURLY_FILE, parse_dates=['datetime'])
+    weather_hourly = pd.read_csv(WEATHER_HOURLY_FILE)
+    # Проверяем название колонки с датой
+    date_col = 'date' if 'date' in weather_hourly.columns else 'datetime'
+    weather_hourly[date_col] = pd.to_datetime(weather_hourly[date_col])
+    # Переименовываем для единообразия
+    if date_col == 'date':
+        weather_hourly = weather_hourly.rename(columns={'date': 'datetime'})
     print(f'✓ Загружено {len(weather_hourly)} записей погоды')
     print(f'✓ Период: {weather_hourly["datetime"].min()} — {weather_hourly["datetime"].max()}')
     print(f'Колонки: {list(weather_hourly.columns)}')
