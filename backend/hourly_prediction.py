@@ -114,6 +114,27 @@ print('='*80)
 physical_target_ids = [lid for lid in TARGET_LINE_IDS if lid < 1000]
 virtual_target_ids = [lid for lid in TARGET_LINE_IDS if lid >= 1000]
 
+# Диагностика: проверяем какие данные есть в hourly_archive
+print(f'\nДиагностика hourly_archive:')
+diag_query = """
+SELECT
+    MIN(ha.period) as min_date,
+    MAX(ha.period) as max_date,
+    COUNT(*) as total_records,
+    COUNT(DISTINCT gvl.line) as unique_lines
+FROM hourly_archive ha
+INNER JOIN gas_volume_line gvl ON ha.line_id = gvl.id
+"""
+with engine.connect() as conn:
+    diag_result = pd.read_sql(text(diag_query), conn)
+    print(diag_result)
+
+# Проверяем какие line есть в БД
+lines_query = "SELECT DISTINCT line FROM gas_volume_line ORDER BY line"
+with engine.connect() as conn:
+    available_lines = pd.read_sql(text(lines_query), conn)
+    print(f'\nДоступные номера линий в БД: {sorted(available_lines["line"].tolist())}')
+
 # SQL запрос для физических линий
 physical_ids_str = ','.join(map(str, physical_target_ids))
 query_physical = f"""
