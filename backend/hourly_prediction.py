@@ -50,7 +50,7 @@ DB_URL = f'postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB
 
 # Файлы данных
 LINE_ID_FILE = DATA_DIR / 'line_id_2025.xlsx'
-ENTERPRISE_FILE = DATA_DIR / 'enterprise.xlsx'
+VOLUME_FILE = DATA_DIR / 'volume_2025.xlsx'
 VIRTUAL_LINES_FILE = DATA_DIR / 'virtual_lines.json'
 WEATHER_HOURLY_FILE = DATA_DIR / 'weather_2025_h.csv'
 
@@ -213,58 +213,103 @@ print('\n' + '='*80)
 print('Загрузка данных по предприятиям...')
 print('='*80)
 
-enterprise_df = pd.read_excel(ENTERPRISE_FILE, sheet_name='volume')
-print(f'Загружено {len(enterprise_df)} строк из {ENTERPRISE_FILE}')
-print(f'Колонки: {list(enterprise_df.columns)}')
+vol_raw = pd.read_excel(VOLUME_FILE, sheet_name='TDSheet')
+print(f'Загружено {len(vol_raw)} строк из {VOLUME_FILE}')
 
-# Проверяем наличие колонки с названием ГРС
-grs_col = None
-for col in ['grs_name', 'ГРС', 'grs', 'GRS']:
-    if col in enterprise_df.columns:
-        grs_col = col
-        break
+# Обработка заголовков (как в оригинальном скрипте)
+cols = list(vol_raw.columns)
+cols[0] = 'enterprise_name'
+cols[1] = 'enterprise_line'
+vol_raw.columns = cols
 
-if grs_col is None:
-    print('⚠ Не найдена колонка с названием ГРС')
-    print(f'Доступные колонки: {list(enterprise_df.columns)}')
+# Фильтруем строки с данными (пропускаем заголовки)
+vol_raw = vol_raw[vol_raw['enterprise_name'].notna()].copy()
+vol_raw = vol_raw[vol_raw['enterprise_name'] != 'Підприємство'].copy()
+
+# Добавляем колонку ГРС и line_id
+if 'ГРС' not in vol_raw.columns:
+    # Пытаемся найти колонку с ГРС
+    for col in vol_raw.columns:
+        if 'грс' in str(col).lower() or 'grs' in str(col).lower():
+            vol_raw = vol_raw.rename(columns={col: 'ГРС'})
+            break
+
+# Если нет колонки ГРС, создаем её из enterprise_line
+if 'ГРС' not in vol_raw.columns:
+    vol_raw['ГРС'] = vol_raw['enterprise_name']
+
+# Маппинг ГРС на line_id
+vol_raw['line_id'] = vol_raw['ГРС'].map(grs_to_lineid)
+
+# Определяем колонки с датами
+date_cols = []
+for col in vol_raw.columns:
+    if isinstance(col, datetime):
+        date_cols.append(col)
+    elif isinstance(col, str) and (col.count('.') == 2 or col.count('/') == 2 or col.count('-') == 2):
+        try:
+            pd.to_datetime(col)
+            date_cols.append(col)
+        except:
+            pass
+
+print(f'Найдено {len(date_cols)} колонок с датами')
+
+if not date_cols:
+    print('⚠ Не найдены колонки с датами')
     enterprise_volumes = pd.DataFrame()
 else:
-    # Фильтруем только нужные ГРС
-    enterprise_df = enterprise_df[enterprise_df[grs_col].isin(grs_to_lineid.keys())].copy()
-    enterprise_df['line_id'] = enterprise_df[grs_col].map(grs_to_lineid)
+    # Преобразуем в длинный формат
+    ent_long = vol_raw.melt(
+        id_vars=['enterprise_name', 'enterprise_line', 'ГРС', 'line_id'],
+        value_vars=date_cols,
+        var_name='date',
+        value_name='enterprise_volume'
+    )
 
-    # Преобразуем в длинный формат (date, line_id, volume)
-    date_cols = [col for col in enterprise_df.columns if isinstance(col, datetime) or
-                 (isinstance(col, str) and ('/' in col or '-' in col or col.isdigit()))]
+    # Преобразование дат и объемов
+    ent_long['date'] = pd.to_datetime(ent_long['date'], errors='coerce')
+    ent_long = ent_long.dropna(subset=['date', 'line_id'])
+    ent_long['enterprise_volume'] = pd.to_numeric(ent_long['enterprise_volume'], errors='coerce').fillna(0)
 
-    if not date_cols:
-        print('⚠ Не найдены колонки с датами')
-        enterprise_volumes = pd.DataFrame()
-    else:
-        # Melt для преобразования в длинный формат
-        enterprise_volumes = enterprise_df.melt(
-            id_vars=['line_id'],
-            value_vars=date_cols,
-            var_name='date',
-            value_name='daily_enterprise_volume'
-        )
+    # Агрегация по line_id и date (суточные объемы)
+    enterprise_volumes = (
+        ent_long
+        .groupby(['line_id', 'date'], as_index=False)['enterprise_volume']
+        .sum()
+        .rename(columns={'enterprise_volume': 'daily_enterprise_volume'})
+    )
 
-        # Преобразование дат
-        enterprise_volumes['date'] = pd.to_datetime(enterprise_volumes['date'], errors='coerce')
-        enterprise_volumes = enterprise_volumes.dropna(subset=['date'])
-        enterprise_volumes['daily_enterprise_volume'] = pd.to_numeric(
-            enterprise_volumes['daily_enterprise_volume'], errors='coerce'
-        ).fillna(0)
+    # Ремаппинг физических line_id → виртуальных
+    phys_to_virt = {}
+    for vid, phys_ids in VIRTUAL_LINES.items():
+        for pid in phys_ids:
+            phys_to_virt[pid] = vid
 
-        # Фильтрация по периоду
-        enterprise_volumes = enterprise_volumes[
-            (enterprise_volumes['date'] >= TRAIN_START) &
-            (enterprise_volumes['date'] <= TRAIN_END)
-        ]
+    if phys_to_virt:
+        remapped = enterprise_volumes['line_id'].map(phys_to_virt)
+        has_remap = remapped.notna()
+        if has_remap.any():
+            enterprise_volumes.loc[has_remap, 'line_id'] = remapped[has_remap].astype(int)
+            # Повторная агрегация после ремаппинга
+            enterprise_volumes = (
+                enterprise_volumes
+                .groupby(['line_id', 'date'], as_index=False)['daily_enterprise_volume']
+                .sum()
+            )
+            print(f'Ремаппинг enterprise: {has_remap.sum()} записей физических линий → виртуальные')
 
-        print(f'\n✓ Обработано {len(enterprise_volumes)} суточных записей по предприятиям')
-        print(f'✓ Уникальных line_id: {enterprise_volumes["line_id"].nunique()}')
+    # Фильтрация по периоду
+    enterprise_volumes = enterprise_volumes[
+        (enterprise_volumes['date'] >= TRAIN_START) &
+        (enterprise_volumes['date'] <= TRAIN_END)
+    ]
+
+    print(f'\n✓ Обработано {len(enterprise_volumes)} суточных записей по предприятиям')
+    print(f'✓ Уникальных line_id: {enterprise_volumes["line_id"].nunique()}')
+    if len(enterprise_volumes) > 0:
         print(f'✓ Период: {enterprise_volumes["date"].min()} — {enterprise_volumes["date"].max()}')
+        print(f'✓ line_id в данных: {sorted(enterprise_volumes["line_id"].unique())}')
 
 # ============================================================================
 # Блок 6: Объединение данных и создание признаков
