@@ -80,7 +80,7 @@ if VIRTUAL_LINES_FILE.exists():
         VIRTUAL_LINES[vid] = info['physical_line_ids']
     print(f'\nЗагружено {len(VIRTUAL_LINES)} виртуальных линий:')
     for vid, phys in VIRTUAL_LINES.items():
-        print(f'  {vid} → физические линии {phys}')
+        print(f'  {vid} -> физические линии {phys}')
 
 # Расширенный набор line_id
 expanded_line_ids = set(TARGET_LINE_IDS)
@@ -89,7 +89,7 @@ for vid in TARGET_LINE_IDS:
         expanded_line_ids.update(VIRTUAL_LINES[vid])
 
 # ============================================================================
-# Блок 2: Маппинг ГРС → line_id
+# Блок 2: Маппинг ГРС -> line_id
 # ============================================================================
 grs_map_df = pd.read_excel(LINE_ID_FILE, sheet_name='line_id', header=None, names=['grs_name', 'line_id'])
 print(f'\nВсего записей в файле маппинга: {len(grs_map_df)}')
@@ -100,9 +100,9 @@ grs_map_df = grs_map_df.reset_index(drop=True)
 grs_to_lineid = dict(zip(grs_map_df['grs_name'], grs_map_df['line_id']))
 lineid_to_grs = dict(zip(grs_map_df['line_id'], grs_map_df['grs_name']))
 
-print(f'\nМаппинг ГРС → line_id:')
+print(f'\nМаппинг ГРС -> line_id:')
 for grs, lid in sorted(grs_to_lineid.items(), key=lambda x: x[1]):
-    print(f'  {grs:30} → {lid}')
+    print(f'  {grs:30} -> {lid}')
 
 # ============================================================================
 # Блок 3: Загрузка часовых данных по линиям из БД
@@ -135,14 +135,14 @@ with engine.connect() as conn:
     df_physical = pd.read_sql(text(query_physical), conn)
 
 print(f'Загружено {len(df_physical)} записей для физических линий')
-print(f'Период: {df_physical["datetime"].min()} — {df_physical["datetime"].max()}')
+print(f'Период: {df_physical["datetime"].min()} - {df_physical["datetime"].max()}')
 print(f'Уникальных line_id: {df_physical["line_id"].nunique()}')
 
 # Обработка виртуальных линий
 df_virtual_list = []
 for vid in virtual_target_ids:
     if vid not in VIRTUAL_LINES:
-        print(f'⚠ Виртуальная линия {vid} не найдена в конфигурации')
+        print(f'[!] Виртуальная линия {vid} не найдена в конфигурации')
         continue
 
     phys_ids = VIRTUAL_LINES[vid]
@@ -179,9 +179,9 @@ else:
 hourly_lines['datetime'] = pd.to_datetime(hourly_lines['datetime'])
 hourly_lines = hourly_lines.sort_values(['line_id', 'datetime']).reset_index(drop=True)
 
-print(f'\n✓ Всего часовых записей по линиям: {len(hourly_lines)}')
-print(f'✓ Уникальных line_id: {hourly_lines["line_id"].nunique()}')
-print(f'✓ Диапазон дат: {hourly_lines["datetime"].min()} — {hourly_lines["datetime"].max()}')
+print(f'\n[OK] Всего часовых записей по линиям: {len(hourly_lines)}')
+print(f'[OK] Уникальных line_id: {hourly_lines["line_id"].nunique()}')
+print(f'[OK] Диапазон дат: {hourly_lines["datetime"].min()} - {hourly_lines["datetime"].max()}')
 
 # ============================================================================
 # Блок 4: Загрузка часовых данных о погоде
@@ -191,7 +191,7 @@ print('Загрузка часовых данных о погоде...')
 print('='*80)
 
 if not WEATHER_HOURLY_FILE.exists():
-    print(f'⚠ Файл часовой погоды не найден: {WEATHER_HOURLY_FILE}')
+    print(f'[!] Файл часовой погоды не найден: {WEATHER_HOURLY_FILE}')
     print('Используем температуру из архива линий')
     weather_hourly = None
 else:
@@ -202,8 +202,8 @@ else:
     # Переименовываем для единообразия
     if date_col == 'date':
         weather_hourly = weather_hourly.rename(columns={'date': 'datetime'})
-    print(f'✓ Загружено {len(weather_hourly)} записей погоды')
-    print(f'✓ Период: {weather_hourly["datetime"].min()} — {weather_hourly["datetime"].max()}')
+    print(f'[OK] Загружено {len(weather_hourly)} записей погоды')
+    print(f'[OK] Период: {weather_hourly["datetime"].min()} - {weather_hourly["datetime"].max()}')
     print(f'Колонки: {list(weather_hourly.columns)}')
 
 # ============================================================================
@@ -256,7 +256,7 @@ for col in vol_raw.columns:
 print(f'Найдено {len(date_cols)} колонок с датами')
 
 if not date_cols:
-    print('⚠ Не найдены колонки с датами')
+    print('[!] Не найдены колонки с датами')
     enterprise_volumes = pd.DataFrame()
 else:
     # Преобразуем в длинный формат
@@ -280,7 +280,7 @@ else:
         .rename(columns={'enterprise_volume': 'daily_enterprise_volume'})
     )
 
-    # Ремаппинг физических line_id → виртуальных
+    # Ремаппинг физических line_id -> виртуальных
     phys_to_virt = {}
     for vid, phys_ids in VIRTUAL_LINES.items():
         for pid in phys_ids:
@@ -297,7 +297,7 @@ else:
                 .groupby(['line_id', 'date'], as_index=False)['daily_enterprise_volume']
                 .sum()
             )
-            print(f'Ремаппинг enterprise: {has_remap.sum()} записей физических линий → виртуальные')
+            print(f'Ремаппинг enterprise: {has_remap.sum()} записей физических линий -> виртуальные')
 
     # Фильтрация по периоду
     enterprise_volumes = enterprise_volumes[
@@ -305,11 +305,11 @@ else:
         (enterprise_volumes['date'] <= TRAIN_END)
     ]
 
-    print(f'\n✓ Обработано {len(enterprise_volumes)} суточных записей по предприятиям')
-    print(f'✓ Уникальных line_id: {enterprise_volumes["line_id"].nunique()}')
+    print(f'\n[OK] Обработано {len(enterprise_volumes)} суточных записей по предприятиям')
+    print(f'[OK] Уникальных line_id: {enterprise_volumes["line_id"].nunique()}')
     if len(enterprise_volumes) > 0:
-        print(f'✓ Период: {enterprise_volumes["date"].min()} — {enterprise_volumes["date"].max()}')
-        print(f'✓ line_id в данных: {sorted(enterprise_volumes["line_id"].unique())}')
+        print(f'[OK] Период: {enterprise_volumes["date"].min()} - {enterprise_volumes["date"].max()}')
+        print(f'[OK] line_id в данных: {sorted(enterprise_volumes["line_id"].unique())}')
 
 # ============================================================================
 # Блок 6: Объединение данных и создание признаков
@@ -367,8 +367,8 @@ if weather_hourly is not None and 'temperature' in weather_hourly.columns:
     hourly_data['temperature'] = hourly_data['weather_temp'].fillna(hourly_data['temperature'])
     hourly_data = hourly_data.drop(columns=['weather_temp'])
 
-print(f'\n✓ Создано {len(hourly_data)} часовых записей')
-print(f'✓ Колонки: {list(hourly_data.columns)}')
+print(f'\n[OK] Создано {len(hourly_data)} часовых записей')
+print(f'[OK] Колонки: {list(hourly_data.columns)}')
 print(f'\nПроверка отрицательных значений после клипа:')
 print(f'  Минимум population_volume: {hourly_data["population_volume"].min():.2f}')
 print(f'  Количество нулевых: {(hourly_data["population_volume"] == 0).sum()}')
@@ -376,7 +376,7 @@ print(f'  Количество нулевых: {(hourly_data["population_volume"
 # Удаляем записи с пропусками в целевой переменной или температуре
 hourly_data = hourly_data.dropna(subset=['population_volume', 'temperature'])
 
-print(f'✓ После удаления пропусков: {len(hourly_data)} записей')
+print(f'[OK] После удаления пропусков: {len(hourly_data)} записей')
 
 # ============================================================================
 # Блок 7: Подготовка данных для моделирования
@@ -413,7 +413,7 @@ train_data = hourly_data[
 ].copy()
 
 print(f'\nДанные для обучения и валидации:')
-print(f'  Период: {TRAIN_START.strftime("%Y-%m-%d")} — {TRAIN_END.strftime("%Y-%m-%d")}')
+print(f'  Период: {TRAIN_START.strftime("%Y-%m-%d")} - {TRAIN_END.strftime("%Y-%m-%d")}')
 print(f'  Всего записей: {len(train_data)}')
 print(f'  Уникальных линий: {train_data["line_id"].nunique()}')
 
@@ -501,7 +501,7 @@ results = []
 
 for line_id in sorted(train_data['line_id'].unique()):
     print(f'\n{"="*80}')
-    print(f'ЛИНИЯ {line_id} — {lineid_to_grs.get(line_id, "Unknown")}')
+    print(f'ЛИНИЯ {line_id} - {lineid_to_grs.get(line_id, "Unknown")}')
     print(f'{"="*80}')
 
     # Фильтруем данные для текущей линии
@@ -510,7 +510,7 @@ for line_id in sorted(train_data['line_id'].unique()):
     print(f'Записей для обучения: {len(line_train)}')
 
     if len(line_train) < 100:
-        print(f'⚠ Недостаточно данных для линии {line_id}, пропускаем')
+        print(f'[!] Недостаточно данных для линии {line_id}, пропускаем')
         continue
 
     # Подготовка матриц
@@ -593,7 +593,7 @@ for line_id in sorted(train_data['line_id'].unique()):
 
     # Визуализация
     fig, axes = plt.subplots(2, 2, figsize=(15, 10))
-    fig.suptitle(f'Линия {line_id} — {lineid_to_grs.get(line_id, "Unknown")}', fontsize=14, weight='bold')
+    fig.suptitle(f'Линия {line_id} - {lineid_to_grs.get(line_id, "Unknown")}', fontsize=14, weight='bold')
 
     # График 1: Факт vs Прогноз
     axes[0, 0].scatter(y_train, y_pred, alpha=0.5, s=10)
@@ -642,7 +642,7 @@ for line_id in sorted(train_data['line_id'].unique()):
     output_file = OUTPUT_DIR / f'line_{line_id}_results.png'
     plt.savefig(output_file, dpi=150, bbox_inches='tight')
     plt.close()
-    print(f'\n✓ График сохранен: {output_file}')
+    print(f'\n[OK] График сохранен: {output_file}')
 
 # ============================================================================
 # Блок 10: Сводка результатов
@@ -686,9 +686,9 @@ if results:
         })
         summary_df.to_excel(writer, sheet_name='Сводка', index=False)
 
-    print(f'\n✓ Результаты сохранены: {output_excel}')
+    print(f'\n[OK] Результаты сохранены: {output_excel}')
 else:
-    print('\n⚠ Нет результатов для сохранения')
+    print('\n[!] Нет результатов для сохранения')
 
 print('\n' + '='*80)
 print('ЗАВЕРШЕНО')
