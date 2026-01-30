@@ -58,7 +58,10 @@ WEATHER_HOURLY_FILE = DATA_DIR / 'weather_2025_h.csv'
 TRAIN_START = pd.to_datetime('2025-01-01')
 TRAIN_END = pd.to_datetime('2025-12-31')
 
-# Целевые линии (ИСКЛЮЧЕНЫ 20 и 22)
+# Целевые линии - ID из таблицы gas_volume_line (ИСКЛЮЧЕНЫ 20 и 22)
+# Для виртуальных линий (>=1000): ID берутся из virtual_lines.json
+# Для физических линий (<1000): указывайте ID из gas_volume_line, НЕ номер линии!
+# Используйте check_db_structure.py чтобы увидеть доступные ID
 TARGET_LINE_IDS = [1003, 1004, 16, 21, 23, 24, 25]
 
 # Создать директорию для вывода
@@ -129,26 +132,35 @@ with engine.connect() as conn:
     diag_result = pd.read_sql(text(diag_query), conn)
     print(diag_result)
 
-# Проверяем какие line есть в БД
-lines_query = "SELECT DISTINCT line FROM gas_volume_line ORDER BY line"
+# Проверяем какие ID линий есть в БД с данными
+lines_query = """
+SELECT gvl.id, gvl.line, gvl.name, COUNT(ha.id) as records
+FROM gas_volume_line gvl
+LEFT JOIN hourly_archive ha ON ha.line_id = gvl.id
+WHERE ha.period >= '{0}' AND ha.period <= '{1}'
+GROUP BY gvl.id, gvl.line, gvl.name
+ORDER BY gvl.id
+""".format(TRAIN_START, TRAIN_END)
 with engine.connect() as conn:
     available_lines = pd.read_sql(text(lines_query), conn)
-    print(f'\nДоступные номера линий в БД: {sorted(available_lines["line"].tolist())}')
+    print(f'\nДоступные ID линий с данными в БД:')
+    print(available_lines.to_string(index=False))
 
-# SQL запрос для физических линий
+# SQL запрос для физических линий (по ID, не по line!)
 physical_ids_str = ','.join(map(str, physical_target_ids))
 query_physical = f"""
 SELECT
-    ha.line_id,
+    gvl.id as line_id,
+    gvl.name as line_name,
     ha.period as datetime,
     ha.volume,
     ha.temperature
 FROM hourly_archive ha
 INNER JOIN gas_volume_line gvl ON ha.line_id = gvl.id
-WHERE gvl.line IN ({physical_ids_str})
+WHERE gvl.id IN ({physical_ids_str})
   AND ha.period >= '{TRAIN_START}'
   AND ha.period <= '{TRAIN_END}'
-ORDER BY ha.line_id, ha.period
+ORDER BY gvl.id, ha.period
 """
 
 print(f'\nЗапрос часовых данных для физических линий: {physical_target_ids}')
@@ -169,6 +181,7 @@ for vid in virtual_target_ids:
     phys_ids = VIRTUAL_LINES[vid]
     phys_ids_str = ','.join(map(str, phys_ids))
 
+    # ВАЖНО: phys_ids должны быть ID из gas_volume_line, не номера линий!
     query_virt = f"""
     SELECT
         ha.period as datetime,
@@ -176,7 +189,7 @@ for vid in virtual_target_ids:
         AVG(ha.temperature) as temperature
     FROM hourly_archive ha
     INNER JOIN gas_volume_line gvl ON ha.line_id = gvl.id
-    WHERE gvl.line IN ({phys_ids_str})
+    WHERE gvl.id IN ({phys_ids_str})
       AND ha.period >= '{TRAIN_START}'
       AND ha.period <= '{TRAIN_END}'
     GROUP BY ha.period
@@ -539,10 +552,10 @@ for line_id in sorted(train_data['line_id'].unique()):
     y_train = line_train['population_volume'].values
 
     print(f'\nСтатистика целевой переменной:')
-    print(f'  Min: {y_train.min():.2f} м³')
-    print(f'  Max: {y_train.max():.2f} м³')
-    print(f'  Mean: {y_train.mean():.2f} м³')
-    print(f'  Std: {y_train.std():.2f} м³')
+    print(f'  Min: {y_train.min():.2f} м^3')
+    print(f'  Max: {y_train.max():.2f} м^3')
+    print(f'  Mean: {y_train.mean():.2f} м^3')
+    print(f'  Std: {y_train.std():.2f} м^3')
 
     # Стандартизация признаков
     scaler = StandardScaler()
@@ -588,12 +601,12 @@ for line_id in sorted(train_data['line_id'].unique()):
     print(f'{"="*60}')
     print(f'Метрики на тренировочных данных:')
     print(f'  R²:   {r2:.4f}')
-    print(f'  MAE:  {mae:.2f} м³')
-    print(f'  RMSE: {rmse:.2f} м³')
+    print(f'  MAE:  {mae:.2f} м^3')
+    print(f'  RMSE: {rmse:.2f} м^3')
     print(f'  MAPE: {mape:.2f}%')
     print(f'\nОтрицательных прогнозов (до клипа): {n_negative}/{len(y_pred_raw)} ({pct_negative:.1f}%)')
-    print(f'Min прогноз (до клипа): {y_pred_raw.min():.2f} м³')
-    print(f'Max прогноз (до клипа): {y_pred_raw.max():.2f} м³')
+    print(f'Min прогноз (до клипа): {y_pred_raw.min():.2f} м^3')
+    print(f'Max прогноз (до клипа): {y_pred_raw.max():.2f} м^3')
 
     # Сохраняем результаты
     results.append({
@@ -619,8 +632,8 @@ for line_id in sorted(train_data['line_id'].unique()):
     # График 1: Факт vs Прогноз
     axes[0, 0].scatter(y_train, y_pred, alpha=0.5, s=10)
     axes[0, 0].plot([y_train.min(), y_train.max()], [y_train.min(), y_train.max()], 'r--', lw=2)
-    axes[0, 0].set_xlabel('Факт (м³)')
-    axes[0, 0].set_ylabel('Прогноз (м³)')
+    axes[0, 0].set_xlabel('Факт (м^3)')
+    axes[0, 0].set_ylabel('Прогноз (м^3)')
     axes[0, 0].set_title(f'Факт vs Прогноз (R²={r2:.4f})')
     axes[0, 0].grid(True, alpha=0.3)
 
@@ -632,7 +645,7 @@ for line_id in sorted(train_data['line_id'].unique()):
         y_pred_week = np.maximum(0, y_pred_week)
         axes[0, 1].plot(first_week['datetime'], y_pred_week, label='Прогноз', linewidth=1, alpha=0.7)
         axes[0, 1].set_xlabel('Дата и время')
-        axes[0, 1].set_ylabel('Объем (м³)')
+        axes[0, 1].set_ylabel('Объем (м^3)')
         axes[0, 1].set_title('Первые 7 дней (часовые данные)')
         axes[0, 1].legend()
         axes[0, 1].grid(True, alpha=0.3)
@@ -642,7 +655,7 @@ for line_id in sorted(train_data['line_id'].unique()):
     errors = y_train - y_pred
     axes[1, 0].hist(errors, bins=50, edgecolor='black', alpha=0.7)
     axes[1, 0].axvline(0, color='r', linestyle='--', linewidth=2)
-    axes[1, 0].set_xlabel('Ошибка (м³)')
+    axes[1, 0].set_xlabel('Ошибка (м^3)')
     axes[1, 0].set_ylabel('Частота')
     axes[1, 0].set_title(f'Распределение ошибок (MAE={mae:.2f})')
     axes[1, 0].grid(True, alpha=0.3)
@@ -680,8 +693,8 @@ if results:
 
     print('\nСредние метрики:')
     print(f'  R²:   {results_df["r2"].mean():.4f} ± {results_df["r2"].std():.4f}')
-    print(f'  MAE:  {results_df["mae"].mean():.2f} ± {results_df["mae"].std():.2f} м³')
-    print(f'  RMSE: {results_df["rmse"].mean():.2f} ± {results_df["rmse"].std():.2f} м³')
+    print(f'  MAE:  {results_df["mae"].mean():.2f} ± {results_df["mae"].std():.2f} м^3')
+    print(f'  RMSE: {results_df["rmse"].mean():.2f} ± {results_df["rmse"].std():.2f} м^3')
     print(f'  MAPE: {results_df["mape"].mean():.2f} ± {results_df["mape"].std():.2f}%')
 
     # Сохранение результатов в Excel
