@@ -440,19 +440,31 @@ print(f'\nДоступные признаки ({len(available_in_data)}):')
 for feat in available_in_data:
     print(f'  - {feat}')
 
-# Используем весь период для обучения (валидация на нем же)
+# Разделение на train/test
+# Train: до ноября 2025 включительно
+# Test: декабрь 2025
+SPLIT_DATE = pd.to_datetime('2025-12-01')
+
 train_data = hourly_data[
     (hourly_data['datetime'] >= TRAIN_START) &
+    (hourly_data['datetime'] < SPLIT_DATE)
+].copy()
+
+test_data = hourly_data[
+    (hourly_data['datetime'] >= SPLIT_DATE) &
     (hourly_data['datetime'] <= TRAIN_END)
 ].copy()
 
-print(f'\nДанные для обучения и валидации:')
-print(f'  Период: {TRAIN_START.strftime("%Y-%m-%d")} - {TRAIN_END.strftime("%Y-%m-%d")}')
-print(f'  Всего записей: {len(train_data)}')
-print(f'  Уникальных линий: {train_data["line_id"].nunique()}')
+print(f'\nРазделение данных:')
+print(f'  Train: {TRAIN_START.strftime("%Y-%m-%d")} - {(SPLIT_DATE - pd.Timedelta(days=1)).strftime("%Y-%m-%d")} ({len(train_data)} записей)')
+print(f'  Test:  {SPLIT_DATE.strftime("%Y-%m-%d")} - {TRAIN_END.strftime("%Y-%m-%d")} ({len(test_data)} записей)')
+print(f'  Уникальных линий в train: {train_data["line_id"].nunique()}')
+print(f'  Уникальных линий в test: {test_data["line_id"].nunique()}')
 
 if len(train_data) == 0:
     raise ValueError('Нет данных для обучения!')
+if len(test_data) == 0:
+    raise ValueError('Нет данных для тестирования!')
 
 # ============================================================================
 # Блок 8: Функция подбора признаков по R²
@@ -540,28 +552,45 @@ for line_id in sorted(train_data['line_id'].unique()):
 
     # Фильтруем данные для текущей линии
     line_train = train_data[train_data['line_id'] == line_id].copy()
+    line_test = test_data[test_data['line_id'] == line_id].copy()
 
-    print(f'Записей для обучения: {len(line_train)}')
+    print(f'Train: {len(line_train)} записей')
+    print(f'Test:  {len(line_test)} записей')
 
     if len(line_train) < 100:
         print(f'[!] Недостаточно данных для линии {line_id}, пропускаем')
         continue
 
-    # Подготовка матриц
+    if len(line_test) == 0:
+        print(f'[!] Нет тестовых данных для линии {line_id}, пропускаем')
+        continue
+
+    # Подготовка матриц для train
     X_train = line_train[available_in_data].values
     y_train = line_train['population_volume'].values
 
-    print(f'\nСтатистика целевой переменной:')
+    # Подготовка матриц для test
+    X_test = line_test[available_in_data].values
+    y_test = line_test['population_volume'].values
+
+    print(f'\nСтатистика целевой переменной (train):')
     print(f'  Min: {y_train.min():.2f} м^3')
     print(f'  Max: {y_train.max():.2f} м^3')
     print(f'  Mean: {y_train.mean():.2f} м^3')
     print(f'  Std: {y_train.std():.2f} м^3')
 
-    # Стандартизация признаков
+    print(f'\nСтатистика целевой переменной (test):')
+    print(f'  Min: {y_test.min():.2f} м^3')
+    print(f'  Max: {y_test.max():.2f} м^3')
+    print(f'  Mean: {y_test.mean():.2f} м^3')
+    print(f'  Std: {y_test.std():.2f} м^3')
+
+    # Стандартизация признаков (fit на train, transform на train и test)
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
 
-    # Подбор признаков
+    # Подбор признаков на train данных
     selected_features, best_r2 = greedy_feature_selection_r2(
         X_train_scaled,
         y_train,
@@ -576,88 +605,114 @@ for line_id in sorted(train_data['line_id'].unique()):
     # Обучение финальной модели на выбранных признаках
     selected_indices = [available_in_data.index(f) for f in selected_features]
     X_train_selected = X_train_scaled[:, selected_indices]
+    X_test_selected = X_test_scaled[:, selected_indices]
 
     model = LinearRegression()
     model.fit(X_train_selected, y_train)
 
-    # Предсказание на тренировочных данных (валидация на них же)
-    y_pred_raw = model.predict(X_train_selected)
+    # Предсказание на train
+    y_pred_train_raw = model.predict(X_train_selected)
+    y_pred_train = np.maximum(0, y_pred_train_raw)
 
-    # Клип по 0
-    y_pred = np.maximum(0, y_pred_raw)
+    # Предсказание на test
+    y_pred_test_raw = model.predict(X_test_selected)
+    y_pred_test = np.maximum(0, y_pred_test_raw)
 
-    # Метрики
-    mae = mean_absolute_error(y_train, y_pred)
-    rmse = np.sqrt(mean_squared_error(y_train, y_pred))
-    r2 = r2_score(y_train, y_pred)
-    mape = np.mean(np.abs((y_train - y_pred) / (y_train + 1e-10))) * 100
+    # Метрики на train
+    mae_train = mean_absolute_error(y_train, y_pred_train)
+    rmse_train = np.sqrt(mean_squared_error(y_train, y_pred_train))
+    r2_train = r2_score(y_train, y_pred_train)
+    mape_train = np.mean(np.abs((y_train - y_pred_train) / (y_train + 1e-10))) * 100
+
+    # Метрики на test
+    mae_test = mean_absolute_error(y_test, y_pred_test)
+    rmse_test = np.sqrt(mean_squared_error(y_test, y_pred_test))
+    r2_test = r2_score(y_test, y_pred_test)
+    mape_test = np.mean(np.abs((y_test - y_pred_test) / (y_test + 1e-10))) * 100
 
     # Статистика отрицательных прогнозов
-    n_negative = (y_pred_raw < 0).sum()
-    pct_negative = (n_negative / len(y_pred_raw)) * 100
+    n_negative_train = (y_pred_train_raw < 0).sum()
+    pct_negative_train = (n_negative_train / len(y_pred_train_raw)) * 100
+    n_negative_test = (y_pred_test_raw < 0).sum()
+    pct_negative_test = (n_negative_test / len(y_pred_test_raw)) * 100
 
     print(f'\n{"="*60}')
     print(f'РЕЗУЛЬТАТЫ ДЛЯ ЛИНИИ {line_id}')
     print(f'{"="*60}')
-    print(f'Метрики на тренировочных данных:')
-    print(f'  R²:   {r2:.4f}')
-    print(f'  MAE:  {mae:.2f} м^3')
-    print(f'  RMSE: {rmse:.2f} м^3')
-    print(f'  MAPE: {mape:.2f}%')
-    print(f'\nОтрицательных прогнозов (до клипа): {n_negative}/{len(y_pred_raw)} ({pct_negative:.1f}%)')
-    print(f'Min прогноз (до клипа): {y_pred_raw.min():.2f} м^3')
-    print(f'Max прогноз (до клипа): {y_pred_raw.max():.2f} м^3')
+    print(f'\nМетрики на TRAIN:')
+    print(f'  R²:   {r2_train:.4f}')
+    print(f'  MAE:  {mae_train:.2f} м^3')
+    print(f'  RMSE: {rmse_train:.2f} м^3')
+    print(f'  MAPE: {mape_train:.2f}%')
+    print(f'  Отрицательных прогнозов: {n_negative_train}/{len(y_pred_train_raw)} ({pct_negative_train:.1f}%)')
+
+    print(f'\nМетрики на TEST:')
+    print(f'  R²:   {r2_test:.4f}')
+    print(f'  MAE:  {mae_test:.2f} м^3')
+    print(f'  RMSE: {rmse_test:.2f} м^3')
+    print(f'  MAPE: {mape_test:.2f}%')
+    print(f'  Отрицательных прогнозов: {n_negative_test}/{len(y_pred_test_raw)} ({pct_negative_test:.1f}%)')
+
+    print(f'\nДиапазон прогнозов (test, до клипа):')
+    print(f'  Min: {y_pred_test_raw.min():.2f} м^3')
+    print(f'  Max: {y_pred_test_raw.max():.2f} м^3')
 
     # Сохраняем результаты
     results.append({
         'line_id': line_id,
         'grs_name': lineid_to_grs.get(line_id, 'Unknown'),
-        'n_samples': len(line_train),
+        'n_train': len(line_train),
+        'n_test': len(line_test),
         'n_features': len(selected_features),
         'features': ', '.join(selected_features),
-        'r2': r2,
-        'mae': mae,
-        'rmse': rmse,
-        'mape': mape,
-        'n_negative': n_negative,
-        'pct_negative': pct_negative,
-        'min_pred_raw': y_pred_raw.min(),
-        'max_pred_raw': y_pred_raw.max()
+        'r2_train': r2_train,
+        'mae_train': mae_train,
+        'rmse_train': rmse_train,
+        'mape_train': mape_train,
+        'r2_test': r2_test,
+        'mae_test': mae_test,
+        'rmse_test': rmse_test,
+        'mape_test': mape_test,
+        'n_negative_train': n_negative_train,
+        'pct_negative_train': pct_negative_train,
+        'n_negative_test': n_negative_test,
+        'pct_negative_test': pct_negative_test
     })
 
     # Визуализация
     fig, axes = plt.subplots(2, 2, figsize=(15, 10))
     fig.suptitle(f'Линия {line_id} - {lineid_to_grs.get(line_id, "Unknown")}', fontsize=14, weight='bold')
 
-    # График 1: Факт vs Прогноз
-    axes[0, 0].scatter(y_train, y_pred, alpha=0.5, s=10)
-    axes[0, 0].plot([y_train.min(), y_train.max()], [y_train.min(), y_train.max()], 'r--', lw=2)
+    # График 1: Факт vs Прогноз на TEST
+    axes[0, 0].scatter(y_test, y_pred_test, alpha=0.5, s=10, label='Test')
+    axes[0, 0].plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--', lw=2)
     axes[0, 0].set_xlabel('Факт (м^3)')
     axes[0, 0].set_ylabel('Прогноз (м^3)')
-    axes[0, 0].set_title(f'Факт vs Прогноз (R²={r2:.4f})')
+    axes[0, 0].set_title(f'Факт vs Прогноз TEST (R²={r2_test:.4f})')
     axes[0, 0].grid(True, alpha=0.3)
+    axes[0, 0].legend()
 
-    # График 2: Временной ряд (первые 7 дней)
-    first_week = line_train.head(24*7)
-    if len(first_week) > 0:
-        axes[0, 1].plot(first_week['datetime'], first_week['population_volume'], label='Факт', linewidth=1)
-        y_pred_week = model.predict(scaler.transform(first_week[available_in_data].values)[:, selected_indices])
+    # График 2: Временной ряд на TEST (первые 7 дней декабря)
+    test_week = line_test.head(24*7)
+    if len(test_week) > 0:
+        axes[0, 1].plot(test_week['datetime'], test_week['population_volume'], label='Факт', linewidth=1.5)
+        y_pred_week = model.predict(scaler.transform(test_week[available_in_data].values)[:, selected_indices])
         y_pred_week = np.maximum(0, y_pred_week)
-        axes[0, 1].plot(first_week['datetime'], y_pred_week, label='Прогноз', linewidth=1, alpha=0.7)
+        axes[0, 1].plot(test_week['datetime'], y_pred_week, label='Прогноз', linewidth=1.5, alpha=0.7)
         axes[0, 1].set_xlabel('Дата и время')
         axes[0, 1].set_ylabel('Объем (м^3)')
-        axes[0, 1].set_title('Первые 7 дней (часовые данные)')
+        axes[0, 1].set_title('TEST: Первые 7 дней декабря')
         axes[0, 1].legend()
         axes[0, 1].grid(True, alpha=0.3)
         axes[0, 1].tick_params(axis='x', rotation=45)
 
-    # График 3: Распределение ошибок
-    errors = y_train - y_pred
-    axes[1, 0].hist(errors, bins=50, edgecolor='black', alpha=0.7)
+    # График 3: Распределение ошибок на TEST
+    errors_test = y_test - y_pred_test
+    axes[1, 0].hist(errors_test, bins=50, edgecolor='black', alpha=0.7, color='green')
     axes[1, 0].axvline(0, color='r', linestyle='--', linewidth=2)
     axes[1, 0].set_xlabel('Ошибка (м^3)')
     axes[1, 0].set_ylabel('Частота')
-    axes[1, 0].set_title(f'Распределение ошибок (MAE={mae:.2f})')
+    axes[1, 0].set_title(f'Распределение ошибок TEST (MAE={mae_test:.2f})')
     axes[1, 0].grid(True, alpha=0.3)
 
     # График 4: Важность признаков (коэффициенты)
@@ -688,36 +743,61 @@ print('='*80)
 if results:
     results_df = pd.DataFrame(results)
 
-    print('\nМетрики по линиям:')
-    print(results_df[['line_id', 'grs_name', 'n_samples', 'n_features', 'r2', 'mae', 'rmse', 'mape']].to_string(index=False))
+    print('\nМетрики по линиям (TRAIN vs TEST):')
+    display_cols = ['line_id', 'grs_name', 'n_train', 'n_test', 'r2_train', 'r2_test', 'mae_train', 'mae_test']
+    print(results_df[display_cols].to_string(index=False))
 
-    print('\nСредние метрики:')
-    print(f'  R²:   {results_df["r2"].mean():.4f} ± {results_df["r2"].std():.4f}')
-    print(f'  MAE:  {results_df["mae"].mean():.2f} ± {results_df["mae"].std():.2f} м^3')
-    print(f'  RMSE: {results_df["rmse"].mean():.2f} ± {results_df["rmse"].std():.2f} м^3')
-    print(f'  MAPE: {results_df["mape"].mean():.2f} ± {results_df["mape"].std():.2f}%')
+    print('\nСредние метрики на TRAIN:')
+    print(f'  R²:   {results_df["r2_train"].mean():.4f} ± {results_df["r2_train"].std():.4f}')
+    print(f'  MAE:  {results_df["mae_train"].mean():.2f} ± {results_df["mae_train"].std():.2f} м^3')
+    print(f'  RMSE: {results_df["rmse_train"].mean():.2f} ± {results_df["rmse_train"].std():.2f} м^3')
+
+    print('\nСредние метрики на TEST:')
+    print(f'  R²:   {results_df["r2_test"].mean():.4f} ± {results_df["r2_test"].std():.4f}')
+    print(f'  MAE:  {results_df["mae_test"].mean():.2f} ± {results_df["mae_test"].std():.2f} м^3')
+    print(f'  RMSE: {results_df["rmse_test"].mean():.2f} ± {results_df["rmse_test"].std():.2f} м^3')
 
     # Сохранение результатов в Excel
     output_excel = OUTPUT_DIR / 'hourly_prediction_results.xlsx'
     with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
-        results_df.to_excel(writer, sheet_name='Метрики по линиям', index=False)
+        results_df.to_excel(writer, sheet_name='Результаты', index=False)
 
-        # Добавляем сводку
-        summary_df = pd.DataFrame({
-            'Метрика': ['R²', 'MAE', 'RMSE', 'MAPE'],
-            'Среднее': [
-                results_df['r2'].mean(),
-                results_df['mae'].mean(),
-                results_df['rmse'].mean(),
-                results_df['mape'].mean()
+        # Сводка по train
+        summary_train_df = pd.DataFrame({
+            'Метрика': ['R2', 'MAE', 'RMSE', 'MAPE'],
+            'Среднее_Train': [
+                results_df['r2_train'].mean(),
+                results_df['mae_train'].mean(),
+                results_df['rmse_train'].mean(),
+                results_df['mape_train'].mean()
             ],
-            'Стд. откл.': [
-                results_df['r2'].std(),
-                results_df['mae'].std(),
-                results_df['rmse'].std(),
-                results_df['mape'].std()
+            'Std_Train': [
+                results_df['r2_train'].std(),
+                results_df['mae_train'].std(),
+                results_df['rmse_train'].std(),
+                results_df['mape_train'].std()
             ]
         })
+
+        # Сводка по test
+        summary_test_df = pd.DataFrame({
+            'Метрика': ['R2', 'MAE', 'RMSE', 'MAPE'],
+            'Среднее_Test': [
+                results_df['r2_test'].mean(),
+                results_df['mae_test'].mean(),
+                results_df['rmse_test'].mean(),
+                results_df['mape_test'].mean()
+            ],
+            'Std_Test': [
+                results_df['r2_test'].std(),
+                results_df['mae_test'].std(),
+                results_df['rmse_test'].std(),
+                results_df['mape_test'].std()
+            ]
+        })
+
+        # Объединяем сводки
+        summary_df = summary_train_df.merge(summary_test_df, on='Метрика')
         summary_df.to_excel(writer, sheet_name='Сводка', index=False)
 
     print(f'\n[OK] Результаты сохранены: {output_excel}')
