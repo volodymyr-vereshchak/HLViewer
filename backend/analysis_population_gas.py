@@ -18,6 +18,10 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, r2_score
 import json
 import warnings
+
+# Исправление кодировки Windows консоли для корректного отображения кириллицы и эмодзи
+from utils.encoding_fix import setup_console_encoding
+setup_console_encoding()
 from pathlib import Path
 import os
 from dotenv import load_dotenv
@@ -49,9 +53,9 @@ VOLUME_FILE = DATA_DIR / 'volume_2025.xlsx'
 VIRTUAL_LINES_FILE = DATA_DIR / 'virtual_lines.json'
 WEATHER_FILE = DATA_DIR / 'weather_2025_daily_contractual.csv'
 TRAIN_START = pd.to_datetime('2025-01-01')
-TRAIN_END = pd.to_datetime('2025-12-31')
-TEST_START = pd.to_datetime('2026-01-01')
-TEST_END = pd.to_datetime('2026-01-31')
+TRAIN_END = pd.to_datetime('2025-11-30')   # 11 месяцев для train
+TEST_START = pd.to_datetime('2025-12-01')  # Декабрь для test
+TEST_END = pd.to_datetime('2025-12-31')
 
 # Створити директорію для виводу
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -60,7 +64,7 @@ engine = create_engine(DB_URL)
 print('DB engine створено:', engine.url)
 
 # ============================================================================
-# Блок 2 — Маппінг ГРС → line_id (з підтримкою віртуальних ліній)
+# Блок 2 — Маппінг ГРС -> line_id (з підтримкою віртуальних ліній)
 # ============================================================================
 
 # Цільові ГРС (1003 — Вольнянськ, 1004 — Новомиколаївка; це віртуальні лінії)
@@ -77,9 +81,9 @@ if VIRTUAL_LINES_FILE.exists():
         VIRTUAL_LINES[vid] = info['physical_line_ids']
     print(f'Завантажено {len(VIRTUAL_LINES)} віртуальних ліній:')
     for vid, phys in VIRTUAL_LINES.items():
-        print(f'  {vid} → фізичні лінії {phys}')
+        print(f'  {vid} -> фізичні лінії {phys}')
 else:
-    print(f'⚠ Файл віртуальних ліній не знайдено: {VIRTUAL_LINES_FILE}')
+    print(f'[WARNING] Файл віртуальних ліній не знайдено: {VIRTUAL_LINES_FILE}')
 
 # Розширений набір line_id для фільтрації Excel (цільові + фізичні компоненти віртуальних)
 expanded_line_ids = set(TARGET_LINE_IDS)
@@ -95,9 +99,9 @@ print(f'\nВсього записів у файлі маппінгу: {len(grs_m
 grs_map_df = grs_map_df[grs_map_df['line_id'].isin(expanded_line_ids)].copy()
 grs_map_df = grs_map_df.reset_index(drop=True)
 
-# Словник: назва ГРС → line_id (включає фізичні компоненти для enterprise mapping)
+# Словник: назва ГРС -> line_id (включає фізичні компоненти для enterprise mapping)
 grs_to_lineid = dict(zip(grs_map_df['grs_name'], grs_map_df['line_id']))
-# Зворотній словник: line_id → назва ГРС
+# Зворотній словник: line_id -> назва ГРС
 lineid_to_grs = dict(zip(grs_map_df['line_id'], grs_map_df['grs_name']))
 
 # Додати імена віртуальних ліній з JSON (якщо відсутні в Excel)
@@ -109,18 +113,18 @@ for vid in TARGET_LINE_IDS:
             grs_name = f'ГРС {vl_name}'
             lineid_to_grs[vid] = grs_name
             grs_to_lineid[grs_name] = vid
-            print(f'  Додано віртуальну лінію з JSON: {grs_name} → line_id={vid}')
+            print(f'  Додано віртуальну лінію з JSON: {grs_name} -> line_id={vid}')
 
 print(f'\nЦільових ГРС: {len(TARGET_LINE_IDS)}')
 for lid in TARGET_LINE_IDS:
     virt_label = ' [virtual]' if lid >= 1000 else ''
-    print(f'  {lineid_to_grs.get(lid, "?")} → line_id={lid}{virt_label}')
+    print(f'  {lineid_to_grs.get(lid, "?")} -> line_id={lid}{virt_label}')
 
 # Перевірка дублікатів назв
 target_map = grs_map_df[grs_map_df['line_id'].isin(TARGET_LINE_IDS)]
 dup_names = target_map['grs_name'].duplicated(keep=False)
 if dup_names.any():
-    print('\n⚠ Знайдено дублікати назв ГРС:')
+    print('\n[WARNING] Знайдено дублікати назв ГРС:')
     print(target_map[dup_names])
 else:
     print('\nДублікатів назв ГРС не знайдено.')
@@ -144,7 +148,7 @@ vol_raw.columns = cols
 
 # Парсинг колонок дат: формат 'DD.MM.YYYY г.' або 'DD.MM.YYYY р.'
 date_cols = []
-date_map = {}  # col_name → datetime
+date_map = {}  # col_name -> datetime
 for c in vol_raw.columns[3:]:
     c_str = str(c).strip()
     # Обробка формату 'DD.MM.YYYY г.' (українська) або 'DD.MM.YYYY р.' (російська)
@@ -162,7 +166,7 @@ if len(date_cols) > 0:
     print(f'Перша дата: {date_map[date_cols[0]].date()}')
     print(f'Остання дата: {date_map[date_cols[-1]].date()}')
 else:
-    print('⚠ Не знайдено жодної колонки з датами!')
+    print('[WARNING] Не знайдено жодної колонки з датами!')
     exit(1)
 
 # Фільтрація тільки за ГРС з маппінгу
@@ -174,7 +178,7 @@ print(f'ГРС у відфільтрованих даних: {sorted(vol_filtere
 # Додаємо line_id
 vol_filtered['line_id'] = vol_filtered['grs'].map(grs_to_lineid)
 
-# Перетворення wide → long через pd.melt()
+# Перетворення wide -> long через pd.melt()
 ent_long = vol_filtered.melt(
     id_vars=['enterprise_name', 'enterprise_line', 'grs', 'line_id'],
     value_vars=date_cols,
@@ -182,7 +186,7 @@ ent_long = vol_filtered.melt(
     value_name='enterprise_volume'
 )
 
-# Конвертація назви колонки → дата
+# Конвертація назви колонки -> дата
 ent_long['date'] = pd.to_datetime(ent_long['date_col'].map(date_map)).dt.normalize()
 ent_long['enterprise_volume'] = pd.to_numeric(ent_long['enterprise_volume'], errors='coerce').fillna(0)
 
@@ -193,9 +197,9 @@ enterprise_daily = (
     .sum()
 )
 
-# Ремапінг фізичних line_id → віртуальних для enterprise_daily
+# Ремапінг фізичних line_id -> віртуальних для enterprise_daily
 # (якщо enterprise Excel має дані під фізичними лініями, що входять у віртуальну)
-phys_to_virt = {}  # physical_line_id → virtual_line_id
+phys_to_virt = {}  # physical_line_id -> virtual_line_id
 for vid, phys_ids in VIRTUAL_LINES.items():
     if vid in TARGET_LINE_IDS:
         for pid in phys_ids:
@@ -206,13 +210,13 @@ if phys_to_virt:
     has_remap = remapped.notna()
     if has_remap.any():
         enterprise_daily.loc[has_remap, 'line_id'] = remapped[has_remap].astype(int)
-        # Ре-агрегація після ремапінгу (можуть бути кілька фізичних ліній → одна віртуальна)
+        # Ре-агрегація після ремапінгу (можуть бути кілька фізичних ліній -> одна віртуальна)
         enterprise_daily = (
             enterprise_daily
             .groupby(['line_id', 'date'], as_index=False)['enterprise_volume']
             .sum()
         )
-        print(f'Ремапінг enterprise: {has_remap.sum()} записів фізичних ліній → віртуальні')
+        print(f'Ремапінг enterprise: {has_remap.sum()} записів фізичних ліній -> віртуальні')
 
 print(f'enterprise_daily: {enterprise_daily.shape}')
 print(f'line_id у даних: {sorted(enterprise_daily["line_id"].unique())}')
@@ -231,7 +235,7 @@ for vid in virtual_target_ids:
     if vid in VIRTUAL_LINES:
         all_physical_ids.update(VIRTUAL_LINES[vid])
     else:
-        print(f'⚠ Віртуальна лінія {vid} не знайдена в конфігурації!')
+        print(f'[WARNING] Віртуальна лінія {vid} не знайдена в конфігурації!')
 all_physical_ids = sorted(all_physical_ids)
 
 print(f'\nФізичні цільові line_id: {physical_target_ids}')
@@ -264,13 +268,13 @@ for vid in virtual_target_ids:
     phys_ids = VIRTUAL_LINES[vid]
     virt_data = line_volumes_raw[line_volumes_raw['line_id'].isin(phys_ids)].copy()
     if virt_data.empty:
-        print(f'⚠ Немає даних для віртуальної лінії {vid} (фізичні: {phys_ids})')
+        print(f'[WARNING] Немає даних для віртуальної лінії {vid} (фізичні: {phys_ids})')
         continue
     # Перевірка наявності всіх фізичних ліній
     found_phys = sorted(virt_data['line_id'].unique())
     missing_phys = set(phys_ids) - set(found_phys)
     if missing_phys:
-        print(f'⚠ Віртуальна лінія {vid}: відсутні фізичні лінії {missing_phys} у БД')
+        print(f'[WARNING] Віртуальна лінія {vid}: відсутні фізичні лінії {missing_phys} у БД')
     # Агрегація: SUM volume по даті
     virt_agg = virt_data.groupby('date', as_index=False)['line_volume'].sum()
     virt_agg['line_id'] = vid
@@ -291,7 +295,7 @@ print(f'line_id: {sorted(line_volumes["line_id"].unique())}')
 # Перевірка яких line_id немає в результаті
 missing_in_result = set(TARGET_LINE_IDS) - set(line_volumes['line_id'].unique())
 if missing_in_result:
-    print(f'⚠ Наступні line_id відсутні: {missing_in_result}')
+    print(f'[WARNING] Наступні line_id відсутні: {missing_in_result}')
     for lid in missing_in_result:
         print(f'  line_id={lid} ({lineid_to_grs.get(lid, "?")})')
 else:
@@ -314,9 +318,9 @@ temp_df = pd.read_csv(WEATHER_FILE, parse_dates=['date'])
 temp_df['date'] = pd.to_datetime(temp_df['date']).dt.normalize()
 print(f'Записів температури: {len(temp_df)}')
 print(f'Діапазон дат: {temp_df["date"].min().date()} .. {temp_df["date"].max().date()}')
-print(f'Температура (°C): min={temp_df["temperature"].min():.1f}, max={temp_df["temperature"].max():.1f}, mean={temp_df["temperature"].mean():.1f}')
+print(f'Температура ( C): min={temp_df["temperature"].min():.1f}, max={temp_df["temperature"].max():.1f}, mean={temp_df["temperature"].mean():.1f}')
 
-# Конвертація °C -> K
+# Конвертація  C -> K
 temp_df['temp_kelvin'] = temp_df['temperature'] + 273.15
 
 # Зберігаємо тільки температурні стовпці для фіч (виключаємо humidity, wind_speed, pressure, cloud_cover)
@@ -354,7 +358,7 @@ print(f'merged: {merged.shape}')
 print(f'Рядків з population_volume < 0: {(merged["population_volume"] < 0).sum()}')
 if (merged['population_volume'] < 0).any():
     neg = merged[merged['population_volume'] < 0]
-    print('⚠ Від\'ємні значення population_volume:')
+    print('[WARNING] Від\'ємні значення population_volume:')
     for lid in neg['line_id'].unique():
         cnt = len(neg[neg['line_id'] == lid])
         print(f'  line_id={lid} ({lineid_to_grs.get(lid, "?")}): {cnt} днів')
@@ -415,19 +419,19 @@ analysis['temp_kelvin_squared'] = analysis['temp_kelvin'] ** 2
 # ============================================================================
 # Кусочно-линейные температурные фичи (учет физики процесса)
 # ============================================================================
-# Зона сильного отопления: чем холоднее, тем больше газа (активна при t < 15°C)
+# Зона сильного отопления: чем холоднее, тем больше газа (активна при t < 15 C)
 analysis['temp_heating'] = np.maximum(0, 15 - analysis['temperature'])
 
-# Переходная зона: 15-25°C (линейная зависимость)
+# Переходная зона: 15-25 C (линейная зависимость)
 analysis['temp_transition'] = np.clip(analysis['temperature'], 15, 25) - 15
 
-# Летняя зона: выше 25°C газ почти не зависит от температуры (только ГВС)
+# Летняя зона: выше 25 C газ почти не зависит от температуры (только ГВС)
 analysis['temp_summer'] = np.maximum(0, analysis['temperature'] - 25)
 
 # Дополнительные кусочные фичи для разных температурных режимов
-analysis['temp_very_cold'] = np.maximum(0, -analysis['temperature'])  # активна при t < 0°C
-analysis['temp_cold'] = np.maximum(0, 10 - analysis['temperature'])   # активна при t < 10°C
-analysis['temp_moderate'] = np.maximum(0, analysis['temperature'] - 10) * (analysis['temperature'] <= 20)  # 10-20°C
+analysis['temp_very_cold'] = np.maximum(0, -analysis['temperature'])  # активна при t < 0 C
+analysis['temp_cold'] = np.maximum(0, 10 - analysis['temperature'])   # активна при t < 10 C
+analysis['temp_moderate'] = np.maximum(0, analysis['temperature'] - 10) * (analysis['temperature'] <= 20)  # 10-20 C
 
 # Фічі на основі мінімальної та максимальної температури
 if 'temperature_min' in analysis.columns:
@@ -472,16 +476,16 @@ if 'temp_hourly_std' in analysis.columns:
 # Heating degree hours
 if 'hdh_18c' in analysis.columns:
     analysis['hdh_18c'] = analysis['hdh_18c'].fillna(0)
-    print(f'  hdh_18c: градусо-години опалення (база 18°C)')
+    print(f'  hdh_18c: градусо-години опалення (база 18 C)')
 
 if 'hdh_15c' in analysis.columns:
     analysis['hdh_15c'] = analysis['hdh_15c'].fillna(0)
-    print(f'  hdh_15c: градусо-години опалення (база 15°C)')
+    print(f'  hdh_15c: градусо-години опалення (база 15 C)')
 
 # Hours below freezing
 if 'hours_below_0c' in analysis.columns:
     analysis['hours_below_0c'] = analysis['hours_below_0c'].fillna(0)
-    print(f'  hours_below_0c: кількість годин з T < 0°C')
+    print(f'  hours_below_0c: кількість годин з T < 0 C')
 
 # ============================================================================
 # PHASE 1: Quick Wins - Temperature lag features and rolling statistics
@@ -585,7 +589,7 @@ analysis['temp_zscore_14d'] = (
     (analysis['temperature'] - analysis['temp_ma14']) /
     (analysis['temp_std14'] + 1e-6)
 )
-print(f'  temp_zscore_7d, temp_zscore_14d: z-score (скільки σ від середнього)')
+print(f'  temp_zscore_7d, temp_zscore_14d: z-score (скільки sigma від середнього)')
 
 print('\n=== Phase 1: Max Temperature Features ===')
 
@@ -601,15 +605,15 @@ if 'temperature_max' in analysis.columns:
     # Daytime warming relative to average
     analysis['daytime_warming'] = analysis['temperature_max'] - analysis['temperature']
 
-    # Min × Max interaction
+    # Min x Max interaction
     analysis['tmin_x_tmax'] = analysis['temperature_min'] * analysis['temperature_max']
 
     print(f'  tmax_heating, tmax_summer: кусочні фічі від макс. температури')
     print(f'  temp_asymmetry: добова асиметрія (tmax - tmin)')
     print(f'  daytime_warming: денне прогрівання')
-    print(f'  tmin_x_tmax: взаємодія мін × макс')
+    print(f'  tmin_x_tmax: взаємодія мін x макс')
 
-print(f'\n✅ Phase 1 completed: Added ~35 new temperature features')
+print(f'\n[OK] Phase 1 completed: Added ~35 new temperature features')
 
 # ============================================================================
 # PHASE 2: High Impact - Temperature inertia and cumulative features
@@ -664,7 +668,7 @@ analysis['warm_spell_15c'] = (
     analysis.groupby('line_id')['temperature']
     .transform(lambda x: warm_spell_length(x, threshold=15))
 )
-print(f'  warm_spell_15c: дні підряд з теплом (>15°C)')
+print(f'  warm_spell_15c: дні підряд з теплом (>15 C)')
 
 # 5. Exponentially weighted cumulative HDD (recent days weigh more)
 analysis['ewm_hdd_7d'] = (
@@ -678,35 +682,35 @@ if 'temp_night_min' in analysis.columns:
     analysis['night_heating'] = np.maximum(0, 15 - analysis['temp_night_min'])
     print(f'  night_heating: потреба в опаленні на основі нічного мінімуму')
 
-print(f'\n✅ Phase 2 completed: Added ~15 new inertia features')
+print(f'\n[OK] Phase 2 completed: Added ~15 new inertia features')
 
 # ============================================================================
 # PHASE 3: Fine-tuning - Temperature zone interactions
 # ============================================================================
 print('\n=== Phase 3: Temperature Interaction Features ===')
 
-# 1. Cold × Amplitude (unstable cold weather)
+# 1. Cold x Amplitude (unstable cold weather)
 analysis['temp_heating_x_range'] = analysis['temp_heating'] * analysis['temp_range']
 analysis['temp_very_cold_x_range'] = analysis['temp_very_cold'] * analysis['temp_range']
-print(f'  temp_heating_x_range, temp_very_cold_x_range: холод × амплітуда')
+print(f'  temp_heating_x_range, temp_very_cold_x_range: холод x амплітуда')
 
-# 2. HDH × Variability
+# 2. HDH x Variability
 if 'hdh_18c' in analysis.columns and 'temp_hourly_std' in analysis.columns:
     analysis['hdh_x_std'] = analysis['hdh_18c'] * analysis['temp_hourly_std']
-    print(f'  hdh_x_std: градусо-години × варіабельність')
+    print(f'  hdh_x_std: градусо-години x варіабельність')
 
-# 3. Cold × Frost hours
+# 3. Cold x Frost hours
 if 'hours_below_0c' in analysis.columns:
     analysis['temp_heating_x_frost_hours'] = (
         analysis['temp_heating'] * analysis['hours_below_0c']
     )
-    print(f'  temp_heating_x_frost_hours: опалення × години морозу')
+    print(f'  temp_heating_x_frost_hours: опалення x години морозу')
 
-# 4. Min × Average temperature interaction
+# 4. Min x Average temperature interaction
 if 'temperature_min' in analysis.columns:
     analysis['tmin_x_tavg'] = analysis['temperature_min'] * analysis['temperature']
     analysis['tmin_deviation'] = analysis['temperature'] - analysis['temperature_min']
-    print(f'  tmin_x_tavg, tmin_deviation: взаємодія мін × середня')
+    print(f'  tmin_x_tavg, tmin_deviation: взаємодія мін x середня')
 
 # 5. Quadratic interactions of important features
 analysis['temp_heating_squared'] = analysis['temp_heating'] ** 2
@@ -717,11 +721,11 @@ print(f'  temp_heating_squared, hdh_18c_squared: квадратичні взає
 # 6. Difference between HDH with different bases (shows temperature zone)
 if 'hdh_18c' in analysis.columns and 'hdh_15c' in analysis.columns:
     analysis['hdh_diff_18_15'] = analysis['hdh_18c'] - analysis['hdh_15c']
-    print(f'  hdh_diff_18_15: різниця між HDH 18°C та 15°C')
+    print(f'  hdh_diff_18_15: різниця між HDH 18 C та 15 C')
 
-print(f'\n✅ Phase 3 completed: Added ~10 new interaction features')
+print(f'\n[OK] Phase 3 completed: Added ~10 new interaction features')
 
-print(f'\n🎯 Total new features added: ~60 temperature features')
+print(f'\n[*] Total new features added: ~60 temperature features')
 print(f'   Phase 1 (Quick Wins): ~35 features')
 print(f'   Phase 2 (High Impact): ~15 features')
 print(f'   Phase 3 (Fine-tuning): ~10 features')
@@ -731,6 +735,27 @@ print(f'   Phase 3 (Fine-tuning): ~10 features')
 # ============================================================================
 # line_id як категоріальну фічу (для лінійної регресії просто числову)
 analysis['line_id_feature'] = analysis['line_id']
+
+# ============================================================================
+# PHASE 4.5: GRS-specific Z-score Normalization
+# ============================================================================
+print('\n=== PHASE 4.5: GRS-specific Z-score Normalization ===')
+
+# Список фич для ГРС-специфичной нормализации
+features_to_normalize = ['population_volume', 'temp_heating', 'hdh_18c', 'temp_ma7']
+
+for feature in features_to_normalize:
+    if feature in analysis.columns:
+        zscore_col = f'{feature}_grs_zscore'
+        analysis[zscore_col] = (
+            analysis.groupby('line_id')[feature]
+            .transform(lambda x: (x - x.mean()) / (x.std() + 1e-6))
+        )
+        print(f'  Создан признак: {zscore_col}')
+    else:
+        print(f'  [WARNING] Признак {feature} не найден, пропускаем')
+
+print(f'Добавлено {len(features_to_normalize)} GRS-specific z-score признаков')
 
 print(f'analysis з новими фічами: {analysis.shape}')
 print(f'Додано {analysis.shape[1] - 8} нових фіч')  # -8 оригінальних колонок
@@ -885,7 +910,7 @@ else:
 
 FEATURE_COLS = [
     # Базовые температурные фичи
-    'temperature',        # Основная температура (°C)
+    'temperature',        # Основная температура ( C)
     'temp_kelvin',        # Температура в Кельвинах
     'temp_kelvin_squared', # Температура в Кельвинах в квадрате
     'temp_diff',         # Разница с предыдущим днем
@@ -893,12 +918,12 @@ FEATURE_COLS = [
     'temp_ma7',          # Скользящее среднее 7 дней
 
     # Кусочно-линейные температурные зоны
-    'temp_heating',      # Зона отопления (активна при t < 15°C)
-    'temp_transition',   # Переходная зона (15-25°C)
-    'temp_summer',       # Летняя зона (t > 25°C)
-    'temp_very_cold',    # Очень холодно (t < 0°C)
-    'temp_cold',         # Холодно (t < 10°C)
-    'temp_moderate',     # Умеренно (10-20°C)
+    'temp_heating',      # Зона отопления (активна при t < 15 C)
+    'temp_transition',   # Переходная зона (15-25 C)
+    'temp_summer',       # Летняя зона (t > 25 C)
+    'temp_very_cold',    # Очень холодно (t < 0 C)
+    'temp_cold',         # Холодно (t < 10 C)
+    'temp_moderate',     # Умеренно (10-20 C)
 
     # Календарные признаки
     'day_of_week',       # День недели (0-6)
@@ -909,6 +934,12 @@ FEATURE_COLS = [
     # ГРС идентификатор (для различения разных ГРС)
     'line_id_feature',   # ID ГРС
 ]
+
+# Добавляем GRS-specific z-score признаки (созданные в PHASE 4.5)
+grs_zscore_features = ['temp_heating_grs_zscore', 'hdh_18c_grs_zscore', 'temp_ma7_grs_zscore']
+for feat in grs_zscore_features:
+    if feat in analysis.columns:
+        FEATURE_COLS.append(feat)
 
 # Додаткові температурні фічі з Meteostat (min/max/range)
 WEATHER_FEATURE_COLS = [
@@ -989,6 +1020,36 @@ for feat in PHASE3_INTERACTION_FEATURES:
     if feat in analysis.columns:
         FEATURE_COLS.append(feat)
 
+# ============================================================================
+# PHASE 3.5: Additional Polynomial Feature Interactions
+# ============================================================================
+print('\n=== PHASE 3.5: Additional Polynomial Feature Interactions ===')
+
+# Важные пары для взаимодействий (на основе domain knowledge)
+important_pairs = [
+    ('temp_heating', 'cumulative_hdd_7d'),
+    ('temp_ma7', 'temp_std7'),
+    ('hours_below_0c', 'temp_min7'),
+    ('temp_lag1', 'temp_accel'),
+    ('hdh_18c', 'temp_range7'),
+    ('cold_spell_0c', 'temp_very_cold'),
+]
+
+for feat1, feat2 in important_pairs:
+    if feat1 in analysis.columns and feat2 in analysis.columns:
+        interaction_name = f'{feat1}_x_{feat2}'
+        analysis[interaction_name] = analysis[feat1] * analysis[feat2]
+        FEATURE_COLS.append(interaction_name)
+        print(f'  Создан признак: {interaction_name}')
+    else:
+        if feat1 not in analysis.columns:
+            print(f'  [WARNING] Признак {feat1} не найден')
+        if feat2 not in analysis.columns:
+            print(f'  [WARNING] Признак {feat2} не найден')
+
+created_interactions = len([p for p in important_pairs if p[0] in analysis.columns and p[1] in analysis.columns])
+print(f'Добавлено {created_interactions} полиномиальных взаимодействий')
+
 print(f'\n=== Фичи для модели (БЕЗ pop_volume): {len(FEATURE_COLS)} фич ===')
 print(f'Доступні фичи за категоріями:')
 print(f'  - Базові температурні: 13')
@@ -1007,6 +1068,50 @@ print(f'Фічі: {", ".join(FEATURE_COLS)}')
 
 from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_absolute_error
+
+# ============================================================================
+# PHASE 4: Grid Search для оптимизации Ridge alpha
+# ============================================================================
+
+def optimize_ridge_alpha(X_train, y_train, X_val, y_val):
+    """
+    Подбор оптимального alpha для Ridge регрессии через Grid Search.
+
+    Parameters:
+    -----------
+    X_train, y_train : Training data
+    X_val, y_val : Validation data
+
+    Returns:
+    --------
+    best_alpha : float
+        Оптимальное значение alpha
+    best_mae : float
+        Лучшее значение MAE на валидации
+    """
+    alphas = [0.1, 1.0, 5.0, 10.0, 20.0, 50.0, 100.0]
+    best_alpha = None
+    best_mae = float('inf')
+    results = []
+
+    for alpha in alphas:
+        model = Ridge(alpha=alpha)
+        model.fit(X_train, y_train)
+        y_pred = np.maximum(0, model.predict(X_val))
+        mae = mean_absolute_error(y_val, y_pred)
+        results.append((alpha, mae))
+
+        if mae < best_mae:
+            best_mae = mae
+            best_alpha = alpha
+
+    # Вывод результатов
+    print(f'  Grid Search результаты:')
+    for alpha, mae in results:
+        marker = ' <-- BEST' if alpha == best_alpha else ''
+        print(f'    alpha={alpha:6.1f} -> MAE={mae:7.2f}{marker}')
+
+    return best_alpha, best_mae
 
 def greedy_feature_selection(X_train, y_train, X_val, y_val, available_features,
                              feature_names, threshold_pct=0.5, max_features=15, alpha=10.0):
@@ -1093,7 +1198,7 @@ def greedy_feature_selection(X_train, y_train, X_val, y_val, available_features,
             remaining_indices.remove(best_feature_idx)
 
             print(f'\nІтерація {iteration}: Додано "{feature_names[best_feature_idx]}"')
-            print(f'  MAE: {best_mae:.2f} → {best_feature_mae:.2f} (покращення: {best_improvement:.2f}%)')
+            print(f'  MAE: {best_mae:.2f} -> {best_feature_mae:.2f} (покращення: {best_improvement:.2f}%)')
 
             best_mae = best_feature_mae
             iteration += 1
@@ -1116,15 +1221,15 @@ def greedy_feature_selection(X_train, y_train, X_val, y_val, available_features,
 def greedy_feature_selection_r2(X_train, y_train, X_val, y_val, available_features,
                                 feature_names, threshold_delta=0.01, max_features=40, alpha=1.0):
     """
-    Жадібний відбір фіч на основі R² замість MAE.
+    Жадібний відбір фіч на основі R^2 замість MAE.
 
-    R² більш стабільна метрика при малих обсягах population_volume.
+    R^2 більш стабільна метрика при малих обсягах population_volume.
     MAE може бути оманливою, оскільки абсолютна помилка мала, але відносна велика.
 
     Parameters:
     -----------
     threshold_delta : float
-        Мінімальне покращення R² для додавання фічі (за замовчуванням 0.01 = 1%)
+        Мінімальне покращення R^2 для додавання фічі (за замовчуванням 0.01 = 1%)
     max_features : int
         Максимальна кількість фіч (за замовчуванням 40)
     alpha : float
@@ -1137,11 +1242,11 @@ def greedy_feature_selection_r2(X_train, y_train, X_val, y_val, available_featur
     selected_names : list
         Назви відібраних фіч
     best_r2 : float
-        Найкращий R² на validation set
+        Найкращий R^2 на validation set
     """
     from sklearn.metrics import r2_score
 
-    print(f'\n=== Greedy Feature Selection based on R² (threshold={threshold_delta}, max={max_features}, alpha={alpha}) ===')
+    print(f'\n=== Greedy Feature Selection based on R^2 (threshold={threshold_delta}, max={max_features}, alpha={alpha}) ===')
 
     # ============================================================================
     # КРОК 1: ЗНАЙТИ НАЙКРАЩУ ПЕРШУ ФІЧУ
@@ -1171,7 +1276,7 @@ def greedy_feature_selection_r2(X_train, y_train, X_val, y_val, available_featur
     selected_names = [feature_names[best_first_idx]]
     remaining_indices = [i for i in range(len(feature_names)) if i != best_first_idx]
 
-    print(f'\nНайкраща стартова фіча: "{feature_names[best_first_idx]}" (R² = {best_first_r2:.4f})')
+    print(f'\nНайкраща стартова фіча: "{feature_names[best_first_idx]}" (R^2 = {best_first_r2:.4f})')
 
     best_r2 = best_first_r2
 
@@ -1194,7 +1299,7 @@ def greedy_feature_selection_r2(X_train, y_train, X_val, y_val, available_featur
             y_pred = np.maximum(0, model.predict(X_val[:, trial_indices]))
             r2 = r2_score(y_val, y_pred)
 
-            # Обчислюємо покращення R²
+            # Обчислюємо покращення R^2
             improvement = r2 - best_r2
 
             if improvement > best_improvement:
@@ -1209,20 +1314,20 @@ def greedy_feature_selection_r2(X_train, y_train, X_val, y_val, available_featur
             remaining_indices.remove(best_feature_idx)
 
             print(f'\nІтерація {iteration}: Додано "{feature_names[best_feature_idx]}"')
-            print(f'  R²: {best_r2:.4f} → {best_feature_r2:.4f} (покращення: +{best_improvement:.4f})')
+            print(f'  R^2: {best_r2:.4f} -> {best_feature_r2:.4f} (покращення: +{best_improvement:.4f})')
 
             best_r2 = best_feature_r2
             iteration += 1
         else:
             if best_feature_idx is not None:
-                print(f'\nІтерація {iteration}: Найкраще покращення R² = +{best_improvement:.4f} < {threshold_delta} (поріг)')
-            print(f'Зупинка: немає фіч з достатнім покращенням R²')
+                print(f'\nІтерація {iteration}: Найкраще покращення R^2 = +{best_improvement:.4f} < {threshold_delta} (поріг)')
+            print(f'Зупинка: немає фіч з достатнім покращенням R^2')
             break
 
     if len(selected_indices) >= max_features:
         print(f'\nЗупинка: досягнуто максимальну кількість фіч ({max_features})')
 
-    print(f'\n=== Фінальний набір: {len(selected_names)} фіч, R² = {best_r2:.4f} ===')
+    print(f'\n=== Фінальний набір: {len(selected_names)} фіч, R^2 = {best_r2:.4f} ===')
     for i, name in enumerate(selected_names, 1):
         print(f'  {i}. {name}')
 
@@ -1285,25 +1390,30 @@ print(f'\n=== Стандартизация фич ===')
 print(f'Масштаб фич приведен к mean=0, std=1')
 print(f'Это критично для корректной работы Ridge регрессии')
 
-# ИСПОЛЬЗУЕМ GREEDY SELECTION НА ОСНОВЕ R² (НЕ MAE!)
-# R² более стабильна при малых объёмах population_volume
-# MAE обманчива: 8,907 м³ может быть огромной ошибкой при малом потреблении
-print('\n=== ОТБОР ФИЧ С ПОМОЩЬЮ GREEDY SELECTION (R²) ===')
+# ИСПОЛЬЗУЕМ GREEDY SELECTION НА ОСНОВЕ R^2 (НЕ MAE!)
+# R^2 более стабильна при малых объёмах population_volume
+# MAE обманчива: 8,907 m^3 может быть огромной ошибкой при малом потреблении
+print('\n=== ИСПОЛЬЗОВАНИЕ ВСЕХ ФИЧ БЕЗ GREEDY SELECTION ===')
 
-# Вызываем greedy selection на основе R²
-selected_indices, selected_features, val_r2 = greedy_feature_selection_r2(
-    X_train_all_scaled, y_train_all,
-    X_val_all_scaled, y_val_all,
-    FEATURE_COLS, FEATURE_COLS,
-    threshold_delta=0.01,  # Минимальное улучшение R² на 0.01 (1%)
-    max_features=40,       # Максимум 40 фич
-    alpha=1.0              # Ridge регуляризация
-)
+# ОТКЛЮЧАЕМ GREEDY SELECTION - используем все фичи!
+# Ridge регуляризация сама отфильтрует неважные фичи через коэффициенты
+print(f'Используем ВСЕ {len(FEATURE_COLS)} фич с Ridge регуляризацией')
+print('Ridge автоматически снизит веса неважных фич')
 
-# Обновляем FEATURE_COLS выбранными фичами
-FEATURE_COLS = selected_features
-print(f'\n=== Отобрано {len(FEATURE_COLS)} фич с помощью greedy selection (R²) ===')
-print(f'Validation R² = {val_r2:.4f}')
+# Проверяем качество на validation с всеми фичами
+from sklearn.metrics import r2_score
+model_test = Ridge(alpha=10.0)
+model_test.fit(X_train_all_scaled, y_train_all)
+y_val_pred = np.maximum(0, model_test.predict(X_val_all_scaled))
+val_r2 = r2_score(y_val_all, y_val_pred)
+print(f'Validation R^2 (все фичи): {val_r2:.4f}')
+
+# НЕ обновляем FEATURE_COLS - оставляем все фичи!
+print(f'\n=== Используем все {len(FEATURE_COLS)} фич ===')
+for i, feat in enumerate(FEATURE_COLS[:20], 1):
+    print(f'  {i}. {feat}')
+if len(FEATURE_COLS) > 20:
+    print(f'  ... и еще {len(FEATURE_COLS) - 20} фич')
 
 # Об'єднуємо train + validation для фінального навчання
 train_final = pd.concat([train, validation], ignore_index=True)
@@ -1337,25 +1447,25 @@ print(f'Train: {n_negative_train}/{len(y_pred_train_raw)} ({n_negative_train/len
 print(f'Test:  {n_negative_test}/{len(y_pred_test_raw)} ({n_negative_test/len(y_pred_test_raw)*100:.1f}%) від\'ємних прогнозів')
 
 if n_negative_test > 0:
-    print(f'⚠ УВАГА: Від\'ємні прогнози вказують на проблему масштабу даних!')
+    print(f'[WARNING] УВАГА: Від\'ємні прогнози вказують на проблему масштабу даних!')
 
 print(f'\n=== ДІАГНОСТИКА: Масштаб даних ===')
-print(f'Train - Min прогноз (до клипінгу): {y_pred_train_raw.min():.1f} м³')
-print(f'Train - Max прогноз (до клипінгу): {y_pred_train_raw.max():.1f} м³')
-print(f'Test  - Min прогноз (до клипінгу): {y_pred_test_raw.min():.1f} м³')
-print(f'Test  - Max прогноз (до клипінгу): {y_pred_test_raw.max():.1f} м³')
+print(f'Train - Min прогноз (до клипінгу): {y_pred_train_raw.min():.1f} m^3')
+print(f'Train - Max прогноз (до клипінгу): {y_pred_train_raw.max():.1f} m^3')
+print(f'Test  - Min прогноз (до клипінгу): {y_pred_test_raw.min():.1f} m^3')
+print(f'Test  - Max прогноз (до клипінгу): {y_pred_test_raw.max():.1f} m^3')
 print(f'\nActual values (y_train):')
-print(f'  Min: {y_train.min():.1f} м³, Max: {y_train.max():.1f} м³')
-print(f'  Mean: {y_train.mean():.1f} м³, Std: {y_train.std():.1f} м³')
+print(f'  Min: {y_train.min():.1f} m^3, Max: {y_train.max():.1f} m^3')
+print(f'  Mean: {y_train.mean():.1f} m^3, Std: {y_train.std():.1f} m^3')
 print(f'Actual values (y_test):')
-print(f'  Min: {y_test.min():.1f} м³, Max: {y_test.max():.1f} м³')
-print(f'  Mean: {y_test.mean():.1f} м³, Std: {y_test.std():.1f} м³')
+print(f'  Min: {y_test.min():.1f} m^3, Max: {y_test.max():.1f} m^3')
+print(f'  Mean: {y_test.mean():.1f} m^3, Std: {y_test.std():.1f} m^3')
 
 # Застосовуємо клипінг
 y_pred_train = np.maximum(0, y_pred_train_raw)
 y_pred_test = np.maximum(0, y_pred_test_raw)
-print(f'\n✓ Застосовано клипінг прогнозів: min(y_pred) = 0 (фізичне обмеження)')
-print(f'✓ Використано стандартизацію фіч для коректної роботи Ridge регресії')
+print(f'\n[OK] Застосовано клипінг прогнозів: min(y_pred) = 0 (фізичне обмеження)')
+print(f'[OK] Використано стандартизацію фіч для коректної роботи Ridge регресії')
 
 # Метрики общие
 mae_test_overall = mean_absolute_error(y_test, y_pred_test)
@@ -1363,10 +1473,10 @@ r2_train_overall = r2_score(y_train, y_pred_train)
 r2_test_overall = r2_score(y_test, y_pred_test)
 
 print(f'\n=== ЗАГАЛЬНІ МЕТРИКИ (всі ГРС разом) ===')
-print(f'R²_train: {r2_train_overall:.4f}')
-print(f'R²_test:  {r2_test_overall:.4f}')
-print(f'MAE_test: {mae_test_overall:.2f} м³')
-print(f'Різниця R²_train - R²_test: {r2_train_overall - r2_test_overall:.4f}')
+print(f'R^2_train: {r2_train_overall:.4f}')
+print(f'R^2_test:  {r2_test_overall:.4f}')
+print(f'MAE_test: {mae_test_overall:.2f} m^3')
+print(f'Різниця R^2_train - R^2_test: {r2_train_overall - r2_test_overall:.4f}')
 
 # Важность фич (абсолютное значение коэффициентов)
 feature_importance_global = dict(zip(FEATURE_COLS, np.abs(model.coef_)))
@@ -1384,7 +1494,7 @@ for lid in sorted(analysis['line_id'].unique()):
     test_grs = test[test['line_id'] == lid]
 
     if len(test_grs) < 1:
-        print(f'⚠ line_id={lid}: немає тестових даних, пропуск')
+        print(f'[WARNING] line_id={lid}: немає тестових даних, пропуск')
         continue
 
     X_train_grs = train_grs[FEATURE_COLS].values
@@ -1416,11 +1526,115 @@ for lid in sorted(analysis['line_id'].unique()):
     # Сохраняем данные для графиков
     models[lid] = (model, train_grs, test_grs, X_train_grs, X_test_grs, y_train_grs, y_test_grs)
 
-    print(f'{lineid_to_grs.get(lid, lid)} (line_id={lid}): R²_train={r2_train_grs:.4f}, R²_test={r2_test_grs:.4f}, MAE={mae_grs:.2f} м³')
+    print(f'{lineid_to_grs.get(lid, lid)} (line_id={lid}): R^2_train={r2_train_grs:.4f}, R^2_test={r2_test_grs:.4f}, MAE={mae_grs:.2f} m^3')
 
 reg_df = pd.DataFrame(reg_results)
 print('\n=== Таблиця результатів для кожної ГРС (базова модель) ===')
 print(reg_df)
+
+# ============================================================================
+# Блок 8.3 — PHASE 4: Per-GRS Models with Optimized Alpha
+# ============================================================================
+
+print('\n' + '='*80)
+print('PHASE 4: Навчання окремих моделей для кожної ГРС з оптимізацією alpha')
+print('='*80)
+
+reg_results_optimized = []
+models_optimized = {}
+
+for lid in sorted(analysis['line_id'].unique()):
+    train_grs = train[train['line_id'] == lid]
+    test_grs = test[test['line_id'] == lid]
+
+    if len(test_grs) < 1:
+        print(f'[WARNING] line_id={lid}: немає тестових даних, пропуск')
+        continue
+
+    # Разделим train на train/val для оптимизации alpha
+    # 80/20 split
+    split_idx = int(len(train_grs) * 0.8)
+    train_grs_split = train_grs.iloc[:split_idx]
+    val_grs = train_grs.iloc[split_idx:]
+
+    if len(val_grs) < 3:
+        # Недостаточно данных для валидации, используем alpha=10.0 по умолчанию
+        best_alpha = 10.0
+        print(f'{lineid_to_grs.get(lid, lid)} (line_id={lid}): Недостаточно данных для валидации, alpha=10.0 (по умолчанию)')
+    else:
+        # Подготовка данных для оптимизации alpha
+        X_train_opt = train_grs_split[FEATURE_COLS].values
+        y_train_opt = train_grs_split['population_volume'].values
+        X_val_opt = val_grs[FEATURE_COLS].values
+        y_val_opt = val_grs['population_volume'].values
+
+        # Стандартизация
+        scaler_opt = StandardScaler()
+        X_train_opt_scaled = scaler_opt.fit_transform(X_train_opt)
+        X_val_opt_scaled = scaler_opt.transform(X_val_opt)
+
+        # Оптимизация alpha
+        print(f'\n{lineid_to_grs.get(lid, lid)} (line_id={lid}):')
+        best_alpha, best_mae_val = optimize_ridge_alpha(X_train_opt_scaled, y_train_opt,
+                                                         X_val_opt_scaled, y_val_opt)
+
+    # Обучаем финальную модель на всех train данных с оптимальным alpha
+    X_train_grs = train_grs[FEATURE_COLS].values
+    y_train_grs = train_grs['population_volume'].values
+    X_test_grs = test_grs[FEATURE_COLS].values
+    y_test_grs = test_grs['population_volume'].values
+
+    # Стандартизация
+    scaler_grs = StandardScaler()
+    X_train_grs_scaled = scaler_grs.fit_transform(X_train_grs)
+    X_test_grs_scaled = scaler_grs.transform(X_test_grs)
+
+    # Обучение модели с оптимальным alpha
+    model_opt = Ridge(alpha=best_alpha)
+    model_opt.fit(X_train_grs_scaled, y_train_grs)
+
+    # Предсказания
+    y_pred_train_grs = np.maximum(0, model_opt.predict(X_train_grs_scaled))
+    y_pred_test_grs = np.maximum(0, model_opt.predict(X_test_grs_scaled))
+
+    # Метрики
+    mae_grs = mean_absolute_error(y_test_grs, y_pred_test_grs)
+    r2_train_grs = r2_score(y_train_grs, y_pred_train_grs)
+    r2_test_grs = r2_score(y_test_grs, y_pred_test_grs)
+
+    # Сравнение с базовой моделью
+    base_r2 = reg_df[reg_df['line_id'] == lid]['R2_test'].values[0] if len(reg_df[reg_df['line_id'] == lid]) > 0 else 0
+    improvement = r2_test_grs - base_r2
+
+    reg_results_optimized.append({
+        'line_id': lid,
+        'GRS': lineid_to_grs.get(lid, '?'),
+        'optimal_alpha': best_alpha,
+        'MAE_test': round(mae_grs, 2),
+        'R2_train': round(r2_train_grs, 4),
+        'R2_test': round(r2_test_grs, 4),
+        'R2_base': round(base_r2, 4),
+        'R2_improvement': round(improvement, 4),
+        'N_train': len(train_grs),
+        'N_test': len(test_grs),
+    })
+
+    # Сохраняем модель
+    models_optimized[lid] = (model_opt, scaler_grs, train_grs, test_grs, X_train_grs, X_test_grs, y_train_grs, y_test_grs)
+
+    improvement_marker = '[+]' if improvement > 0 else '[-]'
+    print(f'{lineid_to_grs.get(lid, lid)}: alpha={best_alpha}, R^2_test={r2_test_grs:.4f}, '
+          f'улучшение={improvement:+.4f} {improvement_marker}')
+
+reg_df_optimized = pd.DataFrame(reg_results_optimized)
+print('\n=== Таблиця результатів (оптимізація alpha для кожної ГРС) ===')
+print(reg_df_optimized)
+
+mean_r2_base = reg_df['R2_test'].mean()
+mean_r2_optimized = reg_df_optimized['R2_test'].mean()
+print(f'\nСередній R^2 (base): {mean_r2_base:.4f}')
+print(f'Середній R^2 (optimized): {mean_r2_optimized:.4f}')
+print(f'Загальне покращення: {mean_r2_optimized - mean_r2_base:+.4f}')
 
 # ============================================================================
 # Блок 8.5 — Two-Stage Model: Корректирующие модели для каждой ГРС
@@ -1428,7 +1642,7 @@ print(reg_df)
 
 print('\n' + '='*80)
 print('STAGE 2: Навчання корректуючих моделей для кожної ГРС')
-print('(корекція застосовується тільки якщо покращує R² на тесті)')
+print('(корекція застосовується тільки якщо покращує R^2 на тесті)')
 print('='*80)
 
 # Упрощенный набір фіч для корекції (тільки ті, що є в FEATURE_COLS після greedy selection)
@@ -1540,9 +1754,9 @@ for lid in sorted(analysis['line_id'].unique()):
                              y_pred_test_final)
 
     print(f'{lineid_to_grs.get(lid, lid)} (line_id={lid}): [{status}]')
-    print(f'  Base:      R²_test={r2_test_base:.4f}, MAE={mae_test_base:.2f}')
-    print(f'  Corrected: R²_test={r2_test_grs_corrected:.4f}, MAE={mae_grs_corrected:.2f}')
-    print(f'  ΔR²={r2_improvement:+.4f} → {"застосовано корекцію" if use_correction else "залишено базову модель"}')
+    print(f'  Base:      R^2_test={r2_test_base:.4f}, MAE={mae_test_base:.2f}')
+    print(f'  Corrected: R^2_test={r2_test_grs_corrected:.4f}, MAE={mae_grs_corrected:.2f}')
+    print(f'  DeltaR^2={r2_improvement:+.4f} -> {"застосовано корекцію" if use_correction else "залишено базову модель"}')
 
 reg_df_corrected = pd.DataFrame(reg_results_corrected)
 print('\n=== Таблиця результатів (найкраща модель для кожної ГРС) ===')
@@ -1566,21 +1780,21 @@ r2_test_overall_best = r2_score(all_y_test, all_y_pred_best)
 mae_test_overall_best = mean_absolute_error(all_y_test, all_y_pred_best)
 
 print('\n=== ЗАГАЛЬНЕ ПОРІВНЯННЯ ===')
-print(f'{"Модель":<40} {"R²_test":<10} {"MAE_test":<10}')
+print(f'{"Модель":<40} {"R^2_test":<10} {"MAE_test":<10}')
 print('-' * 60)
 print(f'{"Базова (Ridge unified)":<40} {r2_test_overall:.4f}    {mae_test_overall:.2f}')
 print(f'{"Найкраща (selective correction)":<40} {r2_test_overall_best:.4f}    {mae_test_overall_best:.2f}')
 print(f'{"Покращення":<40} {r2_test_overall_best - r2_test_overall:+.4f}   {mae_test_overall_best - mae_test_overall:+.2f}')
 print()
 
-# Скільки ГРС досягли R² > 0.75
+# Скільки ГРС досягли R^2 > 0.75
 good_grs = (reg_df_corrected['R2_test'] >= 0.75).sum()
-print(f'ГРС з R²_test >= 0.75: {good_grs}/{len(reg_df_corrected)}')
+print(f'ГРС з R^2_test >= 0.75: {good_grs}/{len(reg_df_corrected)}')
 bad_grs = reg_df_corrected[reg_df_corrected['R2_test'] < 0.75]
 if len(bad_grs) > 0:
-    print(f'ГРС з R²_test < 0.75:')
+    print(f'ГРС з R^2_test < 0.75:')
     for _, row in bad_grs.iterrows():
-        print(f'  - {row["GRS"]}: R²={row["R2_test"]:.4f}')
+        print(f'  - {row["GRS"]}: R^2={row["R2_test"]:.4f}')
 
 # Графік regression_lines: scatter + крива регресії (температура vs об'єм)
 print('\n=== Створення графіка regression_lines ===')
@@ -1640,7 +1854,7 @@ for i, lid in enumerate(unique_lids):
             # Heating degree hours: sum over 24 hours of max(0, 18 - T_hourly)
             synthetic[col] = np.maximum(0, (18 - temp_range) * 24)
         elif col == 'hdh_15c':
-            # Heating degree hours with 15°C base
+            # Heating degree hours with 15 C base
             synthetic[col] = np.maximum(0, (15 - temp_range) * 24)
         elif col == 'hours_below_0c':
             # Hours below freezing: 0 if temp >= 0, otherwise proportional estimate
@@ -1657,8 +1871,8 @@ for i, lid in enumerate(unique_lids):
 
     # Якщо для цієї ГРС застосована корекція — додаємо її
     if lid in correction_models:
-        # Отримуємо модель та її колонки
-        correction_model_obj, correction_cols_used = correction_models[lid]
+        # Отримуємо модель, scaler та її колонки
+        correction_model_obj, scaler_correction_obj, correction_cols_used = correction_models[lid]
 
         # Перевіряємо, чи всі необхідні колонки є в synthetic
         missing_cols = [col for col in correction_cols_used if col not in synthetic.columns]
@@ -1678,15 +1892,15 @@ for i, lid in enumerate(unique_lids):
     else:
         ax.plot(temp_range, y_synthetic, 'r-', linewidth=2, label='Base model', zorder=2)
 
-    # R² та модель
+    # R^2 та модель
     row_grs = reg_df_corrected[reg_df_corrected['line_id'] == lid].iloc[0]
     r2_val = row_grs['R2_test']
     used_corr = row_grs['used_correction']
     model_label = 'corrected' if used_corr else 'base'
 
-    ax.set_title(f'{grs_name} [{model_label}]\nR²_test={r2_val:.4f}')
-    ax.set_xlabel('Температура (°C)')
-    ax.set_ylabel('Об\'єм населення (м³)')
+    ax.set_title(f'{grs_name} [{model_label}]\nR^2_test={r2_val:.4f}')
+    ax.set_xlabel('Температура ( C)')
+    ax.set_ylabel('Об\'єм населення (m^3)')
     ax.legend(fontsize=8, loc='upper right')
     ax.grid(alpha=0.2)
 
@@ -1721,9 +1935,9 @@ print('\n=== Створення графіків actual vs predicted ===')
 fig, ax = plt.subplots(figsize=(8, 6))
 ax.scatter(all_y_test, all_y_pred_best, alpha=0.5, s=20, edgecolors='k', linewidths=0.5, color='steelblue', label='Best model')
 ax.plot([min(all_y_test), max(all_y_test)], [min(all_y_test), max(all_y_test)], 'r--', lw=2, label='Ідеальний прогноз')
-ax.set_xlabel('Фактичний об\'єм (м³)')
-ax.set_ylabel('Прогнозований об\'єм (м³)')
-ax.set_title(f'Selective correction (тест: {TEST_START}..{TEST_END})\nR²={r2_test_overall_best:.4f}, MAE={mae_test_overall_best:.0f} м³')
+ax.set_xlabel('Фактичний об\'єм (m^3)')
+ax.set_ylabel('Прогнозований об\'єм (m^3)')
+ax.set_title(f'Selective correction (тест: {TEST_START}..{TEST_END})\nR^2={r2_test_overall_best:.4f}, MAE={mae_test_overall_best:.0f} m^3')
 ax.legend()
 ax.grid(alpha=0.3)
 plt.tight_layout()
@@ -1759,9 +1973,9 @@ for i, (lid, (base_model, corr_model, train_grs, test_grs, X_train, X_test, y_tr
     mae_test_val = row_grs['MAE_test']
     model_label = 'corrected' if used_corr else 'base'
 
-    ax.set_title(f'{lineid_to_grs.get(lid, lid)} — Січень 2026 [{model_label}]\nR²={r2_test_val:.4f}, MAE={mae_test_val:.0f}')
+    ax.set_title(f'{lineid_to_grs.get(lid, lid)} — Січень 2026 [{model_label}]\nR^2={r2_test_val:.4f}, MAE={mae_test_val:.0f}')
     ax.set_xlabel('Дата')
-    ax.set_ylabel('Об\'єм населення (м³)')
+    ax.set_ylabel('Об\'єм населення (m^3)')
     ax.legend(fontsize=8)
     ax.tick_params(axis='x', rotation=45)
 
@@ -1788,7 +2002,7 @@ for lid, (model, train, test, X_train, X_test, y_train, y_test) in sorted(models
 # Блок 9 — Зведені результати
 # ============================================================================
 
-# Фінальна таблиця: GRS, Pearson r, p-value, MAE, R² test (найкраща модель)
+# Фінальна таблиця: GRS, Pearson r, p-value, MAE, R^2 test (найкраща модель)
 final = corr_df[['line_id', 'GRS', 'Pearson_r', 'p_value', 'Significant']].merge(
     reg_df_corrected[['line_id', 'MAE_test_base', 'MAE_test', 'R2_test_base', 'R2_test', 'R2_improvement', 'R2_train', 'used_correction']],
     on='line_id',
@@ -1833,11 +2047,11 @@ for _, row in final.iterrows():
         r2_train = row['R2_train']
         used_corr = row.get('used_correction', False)
         model_type = 'corrected' if used_corr else 'base'
-        print(f'  Регресія [{model_type}]: R²_test={r2:.4f}, R²_train={r2_train:.4f}, MAE_test={mae:.2f} м³')
+        print(f'  Регресія [{model_type}]: R^2_test={r2:.4f}, R^2_train={r2_train:.4f}, MAE_test={mae:.2f} m^3')
         if used_corr:
             r2_base = row.get('R2_test_base', 'N/A')
             improvement = row.get('R2_improvement', 0)
-            print(f'  Покращення: Base R²={r2_base:.4f} -> Corrected R²={r2:.4f} (delta={improvement:+.4f})')
+            print(f'  Покращення: Base R^2={r2_base:.4f} -> Corrected R^2={r2:.4f} (delta={improvement:+.4f})')
     print()
 
 # Експорт у Excel
@@ -1849,22 +2063,22 @@ feature_imp_df = pd.DataFrame([
 ])
 
 overall_metrics_df = pd.DataFrame([{
-    'Metric': 'Base Model - R²_train',
+    'Metric': 'Base Model - R^2_train',
     'Value': round(r2_train_overall, 4)
 }, {
-    'Metric': 'Base Model - R²_test',
+    'Metric': 'Base Model - R^2_test',
     'Value': round(r2_test_overall, 4)
 }, {
     'Metric': 'Base Model - MAE_test',
     'Value': round(mae_test_overall, 2)
 }, {
-    'Metric': 'Best (selective) - R²_test',
+    'Metric': 'Best (selective) - R^2_test',
     'Value': round(r2_test_overall_best, 4)
 }, {
     'Metric': 'Best (selective) - MAE_test',
     'Value': round(mae_test_overall_best, 2)
 }, {
-    'Metric': 'Improvement - delta R²',
+    'Metric': 'Improvement - delta R^2',
     'Value': round(r2_test_overall_best - r2_test_overall, 4)
 }, {
     'Metric': 'Improvement - delta MAE',
@@ -1882,7 +2096,7 @@ overall_metrics_df = pd.DataFrame([{
     'Metric': 'GRS with base model kept',
     'Value': n_base
 }, {
-    'Metric': 'GRS with R² >= 0.75',
+    'Metric': 'GRS with R^2 >= 0.75',
     'Value': good_grs
 }])
 
@@ -1891,6 +2105,7 @@ with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
     overall_metrics_df.to_excel(writer, sheet_name='Overall_Metrics', index=False)
     corr_df.to_excel(writer, sheet_name='Correlation', index=False)
     reg_df.to_excel(writer, sheet_name='Regression_Base', index=False)
+    reg_df_optimized.to_excel(writer, sheet_name='Regression_Optimized_Alpha', index=False)
     reg_df_corrected.to_excel(writer, sheet_name='Regression_Best', index=False)
     feature_imp_df.to_excel(writer, sheet_name='Feature_Importance', index=False)
     enterprise_daily.to_excel(writer, sheet_name='Enterprise_Daily', index=False)
@@ -1901,7 +2116,7 @@ print(f'Графіки збережено у директорії {OUTPUT_DIR}/'
 print(f'{"="*80}')
 print(f'\n=== ПІДСУМОК ===')
 print(f'Модель: Ridge з кусочно-лінійними температурними фічами')
-print(f'Корекція: застосовується вибірково (тільки де покращує R² на тесті)')
+print(f'Корекція: застосовується вибірково (тільки де покращує R^2 на тесті)')
 print(f'  Корекція застосована: {n_corrected}/{len(reg_df_corrected)} ГРС')
 print(f'  Базова модель збережена: {n_base}/{len(reg_df_corrected)} ГРС')
 print(f'\nДані:')
@@ -1910,11 +2125,11 @@ print(f'  Тестова вибірка: {len(test)} семплів')
 print(f'  Базова модель - фіч: {len(FEATURE_COLS)}')
 print(f'  Коррекція - фіч: {len(CORRECTION_COLS)}')
 print(f'\nЗагальні метрики:')
-print(f'  Базова модель:         R²={r2_test_overall:.4f}, MAE={mae_test_overall:.2f} м³')
-print(f'  Selective correction:  R²={r2_test_overall_best:.4f}, MAE={mae_test_overall_best:.2f} м³')
-print(f'  Покращення:            delta R²={r2_test_overall_best - r2_test_overall:+.4f}, delta MAE={mae_test_overall_best - mae_test_overall:+.2f} м³')
+print(f'  Базова модель:         R^2={r2_test_overall:.4f}, MAE={mae_test_overall:.2f} m^3')
+print(f'  Selective correction:  R^2={r2_test_overall_best:.4f}, MAE={mae_test_overall_best:.2f} m^3')
+print(f'  Покращення:            delta R^2={r2_test_overall_best - r2_test_overall:+.4f}, delta MAE={mae_test_overall_best - mae_test_overall:+.2f} m^3')
 print(f'\nДосягнуто цілі:')
-print(f'  ГРС з R²_test >= 0.75: {good_grs}/{len(reg_df_corrected)}')
+print(f'  ГРС з R^2_test >= 0.75: {good_grs}/{len(reg_df_corrected)}')
 if len(bad_grs) > 0:
-    print(f'  Проблемні ГРС (R² < 0.75): {", ".join(bad_grs["GRS"].tolist())}')
+    print(f'  Проблемні ГРС (R^2 < 0.75): {", ".join(bad_grs["GRS"].tolist())}')
 print(f'\nАналіз завершено успішно!')
