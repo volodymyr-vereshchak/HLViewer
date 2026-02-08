@@ -49,6 +49,19 @@ services:
       sh -c "./wait_for_it.sh db:5432 -- sh -c 'cd backend && alembic upgrade head && cd .. && uvicorn backend.api.main:app --host 0.0.0.0 --port 8000 --reload'"
     restart: always
 
+  frontend:
+    build:
+      context: ../frontend/react-frontend
+      dockerfile: Dockerfile
+    container_name: frontend_app
+    ports:
+      - "3000:80"
+    depends_on:
+      - fastapi
+    networks:
+      - hostlib_network
+    restart: always
+
 networks:
   hostlib_network:
     external: true
