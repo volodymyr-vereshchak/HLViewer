@@ -161,14 +161,12 @@ def load_mappings(force_reload: bool = False) -> Optional[pd.DataFrame]:
         # active: Get from Active column (1 = active, 0 = inactive)
         df["active"] = df["Active"] == 1
 
-        # Data cleaning - remove rows without line_id mapping
+        # Log records without line_id mapping (kept for display, not used for polling)
         missing_line_count = df["line_id"].isna().sum()
         if missing_line_count > 0:
-            logger.warning(f"Skipped {missing_line_count} records without line_id mapping")
+            logger.info(f"{missing_line_count} records without line_id mapping (will be shown as 'without line')")
             missing_enterprises = df[df["line_id"].isna()]["enterprise_name"].unique()
             logger.debug(f"Enterprises without line_id: {', '.join(missing_enterprises[:10])}")
-
-        df = df.dropna(subset=["line_id"])
 
         # Remove rows without mfDev or typeDev
         invalid_mapping = df[df["mfDev"].isna() | df["typeDev"].isna()]
@@ -186,8 +184,8 @@ def load_mappings(force_reload: bool = False) -> Optional[pd.DataFrame]:
         # Select and order columns
         result_df = df[["line_id", "serNum", "mfDev", "typeDev", "chNum", "enterprise_name", "active"]].copy()
 
-        # Convert data types
-        result_df["line_id"] = result_df["line_id"].astype(int)
+        # Convert data types (line_id can be NaN for unmapped enterprises)
+        result_df["line_id"] = result_df["line_id"].astype("Int64")  # nullable integer
         result_df["serNum"] = result_df["serNum"].astype(int)
         result_df["mfDev"] = result_df["mfDev"].astype(int)
         result_df["typeDev"] = result_df["typeDev"].astype(int)
@@ -283,8 +281,9 @@ def validate_mappings() -> Dict[str, any]:
                 f"Found {len(duplicates)} duplicate device entries"
             )
 
-        # Check for invalid values
-        if (df["line_id"] <= 0).any():
+        # Check for invalid values (skip NaN line_ids - those are valid unmapped enterprises)
+        valid_line_ids = df["line_id"].dropna()
+        if (valid_line_ids <= 0).any():
             errors.append("Found line_id values <= 0")
 
         if (df["serNum"] < 0).any():
@@ -303,7 +302,7 @@ def validate_mappings() -> Dict[str, any]:
             "valid": len(errors) == 0,
             "total_mappings": len(df),
             "active_mappings": len(df[df["active"]]),
-            "lines_covered": sorted(df["line_id"].unique().tolist()),
+            "lines_covered": sorted(df["line_id"].dropna().unique().tolist()),
             "errors": errors
         }
 

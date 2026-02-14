@@ -6,6 +6,7 @@ and aggregating by line_id and date.
 """
 
 import logging
+import pandas as pd
 from datetime import datetime, date
 from typing import List, Optional
 from collections import defaultdict
@@ -354,9 +355,10 @@ class EnterpriseRouter:
         # Convert DataFrame to list of EnterpriseMapping objects
         result = []
         for _, row in df.iterrows():
+            line_id_val = None if pd.isna(row["line_id"]) else int(row["line_id"])
             result.append(
                 EnterpriseMapping(
-                    line_id=int(row["line_id"]),
+                    line_id=line_id_val,
                     serNum=int(row["serNum"]),
                     mfDev=int(row["mfDev"]),
                     typeDev=int(row["typeDev"]),
@@ -366,8 +368,8 @@ class EnterpriseRouter:
                 )
             )
 
-        # Sort by line_id and enterprise_name
-        result.sort(key=lambda x: (x.line_id, x.enterprise_name))
+        # Sort: enterprises with line_id first (by line_id, name), then without line_id (by name)
+        result.sort(key=lambda x: (x.line_id is None, x.line_id or 0, x.enterprise_name))
 
         logger.info(f"Returning {len(result)} enterprise mappings")
 

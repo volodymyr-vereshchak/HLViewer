@@ -109,7 +109,7 @@ class EnterpriseMapping(BaseModel):
         }
     )
 
-    line_id: int = Field(description="Gas line ID")
+    line_id: Optional[int] = Field(None, description="Gas line ID (None if enterprise has no line mapping)")
     serNum: int = Field(description="Device serial number")
     mfDev: int = Field(description="Manufacturer device code")
     typeDev: int = Field(description="Device type code")
