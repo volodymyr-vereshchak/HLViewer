@@ -41,6 +41,11 @@ MANIFEST
 # Prediction output
 /backend/data/*_output/
 /backend/data/hourly_prediction_results.xlsx
+*.parquet
+
+# Pobut large data files
+/backend/pobut/data/input/
+/backend/pobut/data/output/
 
 # Logs
 *.log
