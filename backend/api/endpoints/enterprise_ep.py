@@ -364,7 +364,8 @@ class EnterpriseRouter:
                     typeDev=int(row["typeDev"]),
                     chNum=int(row["chNum"]),
                     enterprise_name=str(row["enterprise_name"]),
-                    active=bool(row["active"])
+                    active=bool(row["active"]),
+                    enabled=bool(row["enabled"])
                 )
             )
 

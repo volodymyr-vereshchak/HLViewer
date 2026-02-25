@@ -104,7 +104,8 @@ class EnterpriseMapping(BaseModel):
                 "typeDev": 1,
                 "chNum": 1,
                 "enterprise_name": "ТОВ Завод №1",
-                "active": True
+                "active": True,
+                "enabled": True
             }
         }
     )
@@ -116,3 +117,4 @@ class EnterpriseMapping(BaseModel):
     chNum: int = Field(description="Channel number")
     enterprise_name: str = Field(description="Enterprise name")
     active: bool = Field(description="Whether the enterprise is active")
+    enabled: bool = Field(description="Whether the metering point is enabled (Включена/Відключена)")

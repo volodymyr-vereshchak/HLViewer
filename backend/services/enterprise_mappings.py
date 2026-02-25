@@ -161,6 +161,9 @@ def load_mappings(force_reload: bool = False) -> Optional[pd.DataFrame]:
         # active: Get from Active column (1 = active, 0 = inactive)
         df["active"] = df["Active"] == 1
 
+        # enabled: Get from "Статус точки обліку" column ("Включена" = enabled)
+        df["enabled"] = df["Статус точки обліку"] == "Включена"
+
         # Log records without line_id mapping (kept for display, not used for polling)
         missing_line_count = df["line_id"].isna().sum()
         if missing_line_count > 0:
@@ -182,7 +185,7 @@ def load_mappings(force_reload: bool = False) -> Optional[pd.DataFrame]:
         df = df.dropna(subset=["mfDev", "typeDev"])
 
         # Select and order columns
-        result_df = df[["line_id", "serNum", "mfDev", "typeDev", "chNum", "enterprise_name", "active"]].copy()
+        result_df = df[["line_id", "serNum", "mfDev", "typeDev", "chNum", "enterprise_name", "active", "enabled"]].copy()
 
         # Convert data types (line_id can be NaN for unmapped enterprises)
         result_df["line_id"] = result_df["line_id"].astype("Int64")  # nullable integer
@@ -191,6 +194,7 @@ def load_mappings(force_reload: bool = False) -> Optional[pd.DataFrame]:
         result_df["typeDev"] = result_df["typeDev"].astype(int)
         result_df["chNum"] = result_df["chNum"].astype(int)
         result_df["active"] = result_df["active"].astype(bool)
+        result_df["enabled"] = result_df["enabled"].astype(bool)
 
         # Update cache
         _mappings_cache["data"] = result_df
