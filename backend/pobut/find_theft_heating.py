@@ -5,12 +5,16 @@ find_theft_heating.py
 Аналіз окремо по ГРС.
 
 Індикатори підозрілості:
-  A) Питоме споживання < X% медіани по ГРС + consumer_type
-  B) Нульовий білінг у пікові зимові місяці (Гру/Січ/Лют)
-  C) Частка опалювальних місяців у річному обсязі < норми
-  D) Аномально низьке абсолютне питоме (< 5 м³/м²/рік)
+  A) Питоме споживання < X% медіани по ГРС + consumer_type  (макс 4 бали)
+  B) Нульовий білінг у пікові зимові місяці (Гру/Січ/Лют)  (макс 3 бали)
+  D) Аномально низьке абсолютне питоме (< 5 м³/м²/рік)     (макс 2 бали)
+  E) Для модемних: billing/modem_actual < норми              (макс 3 бали)
 
-Оцінка (0–10):  score = A_pts + B_pts + C_pts + D_pts
+ВИКЛЮЧЕНО (heat_share на основі місяців ОПЛАТИ — ненадійно через те,
+що деякі абоненти платять за зиму влітку або раз на квартал).
+Замість нього: основний сигнал — питоме споживання (A+D).
+
+Оцінка (0–9+):  score = A_pts + B_pts + D_pts [+ E_pts для модемних]
 Рівень:  Критичний ≥7 | Високий ≥4 | Середній ≥2 | Низький ≥1
 """
 import sys, io, os
@@ -37,8 +41,9 @@ HEAT_IDX   = [9, 10, 11, 0, 1, 2]   # Жов–Бер
 
 # Пороги оцінки
 RATIO_PTS  = [(0.20, 4), (0.30, 3), (0.40, 2), (0.50, 1)]  # ratio < threshold → pts
-ABS_LOW    = 5.0   # м³/м²/рік — критично низьке абсолютне споживання
-HEAT_SHARE_LOW = 0.45  # частка опал. місяців < цього → підозріло
+ABS_LOW    = 5.0   # м³/м²/рік — критично низьке абсолютне питоме споживання
+# Порогів heat_share більше немає — дати платежів ненадійні (платять влітку за зиму)
+MODEM_BILL_PTS = [(0.50, 3), (0.70, 2), (0.85, 1)]   # billing/modem_actual < thr → pts
 
 UA = {1:'Січ',2:'Лют',3:'Бер',4:'Кві',5:'Тра',6:'Чер',
       7:'Лип',8:'Сер',9:'Вер',10:'Жов',11:'Лис',12:'Гру'}
@@ -78,14 +83,36 @@ op = ap[
 print(f"  ОП-абонентів з білінгом: {len(op):,}")
 print(f"  ГРС: {op['grs'].nunique()}")
 
-# Modem IDs — для позначки (мають реал-тайм дані)
-md_raw = pd.read_csv(MODEM_FILE, sep=';', low_memory=False, usecols=[0])
-md_raw.columns = ['account_id']
+# Modem дані — реальний річний об'єм (для порівняння з billing)
+from pobut_predictor import META_COLS
+md_raw = pd.read_csv(MODEM_FILE, sep=';', low_memory=False)
+md_raw.columns = META_COLS + list(md_raw.columns[len(META_COLS):])
 md_raw['account_id'] = pd.to_numeric(md_raw['account_id'], errors='coerce')
-modem_ids = set(md_raw['account_id'].dropna().astype(int))
+md_date_cols = sorted(
+    [c for c in md_raw.columns if isinstance(c, str) and c.count('.')==2
+     and len(c)==10 and c.endswith('.2025')],
+    key=lambda c: (int(c[6:]), int(c[3:5]), int(c[:2]))
+)
+for c in md_date_cols:
+    md_raw[c] = pd.to_numeric(md_raw[c], errors='coerce').fillna(0)
+md_raw['modem_annual'] = md_raw[md_date_cols].sum(axis=1)
+modem_annual = (md_raw[['account_id','modem_annual']]
+                .dropna(subset=['account_id'])
+                .groupby('account_id')['modem_annual'].sum()
+                .reset_index())
+modem_annual['account_id'] = modem_annual['account_id'].astype(int)
+modem_ids = set(modem_annual['account_id'])
 
+op = op.merge(modem_annual, on='account_id', how='left')
 op['is_modem'] = op['account_id'].isin(modem_ids)
+# ratio billing/modem (тільки якщо modem_annual > 50 м³, щоб уникнути шуму)
+op['ratio_bill_modem'] = np.where(
+    op['is_modem'] & (op['modem_annual'] > 50),
+    op['annual'] / op['modem_annual'],
+    np.nan
+)
 print(f"  З них модемних: {op['is_modem'].sum():,}")
+print(f"  Модемних з річним > 50 м³: {(op['is_modem'] & (op['modem_annual'] > 50)).sum():,}")
 
 
 # ── 2. Питомі метрики ─────────────────────────────────────────────────────────
@@ -101,7 +128,8 @@ op['specific'] = op['annual'] / op['heated_area']
 winter_vals = m_vals[:, WINTER_IDX]   # (N, 3)
 op['winter_zero_months'] = (winter_vals == 0).sum(axis=1).astype(int)
 
-# Частка опалювальних місяців у річному об'ємі
+# Частка опалювальних місяців у BILLING (інформаційно, НЕ в оцінці —
+# ненадійна через billing timing: платять влітку за зиму)
 heat_vals = m_vals[:, HEAT_IDX]       # (N, 6)
 op['heat_share'] = heat_vals.sum(axis=1) / np.maximum(op['annual'].values, 1)
 
@@ -138,29 +166,34 @@ print("\n=== 4. Розрахунок оцінки підозрілості ===")
 def compute_score(row):
     score = 0
 
-    # A) ratio до медіани
+    # A) ratio до медіани ГРС+consumer_type (головний сигнал)
     r = row['ratio_to_ref']
     for thr, pts in RATIO_PTS:
         if r < thr:
             score += pts
             break
 
-    # B) зимові нулі
+    # B) зимові нулі (Гру/Січ/Лют) — поведінковий сигнал:
+    #    не пускають взимку, щоб відмотати показники навесні
     wz = int(row['winter_zero_months'])
     if wz == 3:   score += 3
     elif wz == 2: score += 2
     elif wz == 1: score += 1
 
-    # C) низька частка опалювальних місяців
-    hs = row['heat_share']
-    if hs < HEAT_SHARE_LOW:
-        score += 2
-    elif hs < 0.60:
-        score += 1
+    # C) heat_share ВИКЛЮЧЕНО — базується на датах платежів,
+    #    які не відповідають місяцям фактичного споживання
 
-    # D) абсолютно низьке питоме
+    # D) абсолютно низьке питоме споживання
     if row['specific'] < ABS_LOW:
         score += 2
+
+    # E) модемні: billing < фактичного об'єму по модему
+    rbm = row['ratio_bill_modem']
+    if not np.isnan(rbm):
+        for thr, pts in MODEM_BILL_PTS:
+            if rbm < thr:
+                score += pts
+                break
 
     return score
 
@@ -261,9 +294,9 @@ def level_fill(lvl):
 
 HDR = ['ГРС', 'Тип', 'Прилади', 'account_id', 'Площа м²',
        'Річний м³', 'Питоме м³/м²', 'Еталон м³/м²', 'Ratio',
-       'Зим.нулів', 'Опал.частка', 'Ненульових міс.',
+       'Зим.нулів', 'Опал.частка(інф)', 'Ненульових міс.',
        'Макс.місяць', *MONTH_UA,
-       'Оцінка', 'Рівень', 'Модем']
+       'Оцінка', 'Рівень', 'Модем', 'Bill/Modem']
 
 wb = Workbook()
 
@@ -322,6 +355,14 @@ for ri, row in enumerate(out.itertuples(index=False), 2):
     lc.alignment = Alignment(horizontal='center')
 
     ws1.cell(ri, 28, '✓' if row.is_modem else '').alignment = Alignment(horizontal='center')
+
+    rbm = row.ratio_bill_modem
+    if not (rbm != rbm):  # not NaN
+        bmc = ws1.cell(ri, 29, round(float(rbm), 3))
+        bmc.number_format = '0.000'
+        bmc.alignment = Alignment(horizontal='center')
+        if float(rbm) < 0.70:
+            bmc.font = Font(bold=True, color='CC0000')
 
     if fill:
         for ci in range(1, 29):
