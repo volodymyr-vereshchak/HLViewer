@@ -124,9 +124,10 @@ m_vals = op[MONTH_COLS].values.astype(np.float64)  # (N, 12)
 # Питоме річне споживання
 op['specific'] = op['annual'] / op['heated_area']
 
-# Зимові нулі (Гру/Січ/Лют)
+# Зимові нулі (Гру/Січ/Лют) — рахуємо ≤0 як "нульовий":
+# сторновані платежі (від'ємні значення) теж означають відсутність реальної оплати
 winter_vals = m_vals[:, WINTER_IDX]   # (N, 3)
-op['winter_zero_months'] = (winter_vals == 0).sum(axis=1).astype(int)
+op['winter_zero_months'] = (winter_vals <= 0).sum(axis=1).astype(int)
 
 # Частка опалювальних місяців у BILLING (інформаційно, НЕ в оцінці —
 # ненадійна через billing timing: платять влітку за зиму)
@@ -345,7 +346,11 @@ for ri, row in enumerate(out.itertuples(index=False), 2):
 
     for mi, mc in enumerate(MONTH_COLS, 14):
         v = getattr(row, mc)
-        ws1.cell(ri, mi, round(v, 1) if v > 0 else '').number_format = '#,##0.0'
+        if v != 0:
+            cell = ws1.cell(ri, mi, round(v, 1))
+            cell.number_format = '#,##0.0'
+            if v < 0:
+                cell.font = Font(color='CC0000', italic=True)  # сторно — червоний курсив
 
     sc = ws1.cell(ri, 26, int(row.score))
     sc.font = Font(bold=True)
@@ -477,7 +482,11 @@ for grs in sorted(real_suspects['grs'].unique()):
         ws.cell(ri2, 9, round(row.heat_share, 2)).number_format = '0.00'
         for mi, mc in enumerate(MONTH_COLS, 10):
             v = getattr(row, mc)
-            ws.cell(ri2, mi, round(v, 1) if v > 0 else '')
+            if v != 0:
+                cell = ws.cell(ri2, mi, round(v, 1))
+                cell.number_format = '#,##0.0'
+                if v < 0:
+                    cell.font = Font(color='CC0000', italic=True)
         sc2 = ws.cell(ri2, 22, int(row.score))
         sc2.font = Font(bold=True); sc2.alignment = Alignment(horizontal='center')
         lc2 = ws.cell(ri2, 23, row.level); lc2.alignment = Alignment(horizontal='center')
@@ -529,7 +538,11 @@ for ri, row in enumerate(exc_out.itertuples(index=False), 2):
     ws_exc.cell(ri, 13, row.max_month_name)
     for mi, mc in enumerate(MONTH_COLS, 14):
         v = getattr(row, mc)
-        ws_exc.cell(ri, mi, round(v, 1) if v > 0 else '')
+        if v != 0:
+            cell = ws_exc.cell(ri, mi, round(v, 1))
+            cell.number_format = '#,##0.0'
+            if v < 0:
+                cell.font = Font(color='CC0000', italic=True)
     ws_exc.cell(ri, 26, int(row.score))
     ws_exc.cell(ri, 27, row.level)
     ws_exc.cell(ri, 28, '✓' if row.is_modem else '')
