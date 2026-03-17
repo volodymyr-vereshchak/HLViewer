@@ -1,7 +1,7 @@
 from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import Index
-from sqlmodel import Field, Relationship, UniqueConstraint
+from sqlmodel import Field, Relationship, SQLModel, UniqueConstraint
 
 from .base_model import HlBaseModel
 
@@ -34,6 +34,7 @@ class Lumg(LumgBase, table=True):
     gas_volume_calcs: list["GasVolumeCalc"] = Relationship(
         back_populates="lumg", cascade_delete=True
     )
+    data_path: Optional["LumgDataPath"] = Relationship(back_populates="lumg")
 
 
 class LumgList(LumgBase):
@@ -48,3 +49,26 @@ class LumgCreate(LumgBase):
 class LumgUpdate(LumgBase):
     name: str | None = None
     branch_id: int | None = None
+
+
+class LumgDataPath(HlBaseModel, table=True):
+    __tablename__ = "lumg_data_path"
+
+    id: int | None = Field(default=None, primary_key=True)
+    lumg_id: int = Field(foreign_key="lumg.id", ondelete="CASCADE", unique=True)
+    path: str = Field(max_length=1024)
+    active: bool = Field(default=True)
+
+    lumg: Optional["Lumg"] = Relationship(back_populates="data_path")
+
+
+class LumgDataPathRead(SQLModel):
+    id: int
+    lumg_id: int
+    path: str
+    active: bool
+
+
+class LumgDataPathUpsert(SQLModel):
+    path: str
+    active: bool = True

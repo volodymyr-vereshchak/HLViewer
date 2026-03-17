@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 backend_settings = {
+    "DEBUG": os.getenv("DEBUG", "false"),
     "POSTGRES_USER": os.getenv("POSTGRES_USER"),
     "POSTGRES_PASSWORD": os.getenv("POSTGRES_PASSWORD"),
     "DB_HOST": os.getenv("DB_HOST"),

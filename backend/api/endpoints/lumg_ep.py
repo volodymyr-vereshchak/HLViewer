@@ -1,10 +1,11 @@
 from fastapi import APIRouter, status, HTTPException
+from sqlmodel import select
 
 from backend.db.dao.custom_exceptions import DatabaseIntegrityError
 from backend.db.dao.lumg_dao import LumgDao
 from backend.db.engine import DbEngine, async_session_factory
 from backend.db.models import LumgCreate, LumgList
-from backend.db.models.lumg_model import LumgUpdate
+from backend.db.models.lumg_model import LumgUpdate, LumgDataPath, LumgDataPathRead, LumgDataPathUpsert
 
 
 class LumgRouter:
@@ -34,11 +35,33 @@ class LumgRouter:
             response_model=LumgList,
             status_code=status.HTTP_202_ACCEPTED,
         )
-
         self.router.add_api_route(
             path="/lumgs/{lumg_id}",
             tags=["lumg"],
             endpoint=self.delete_lumg,
+            methods=["DELETE"],
+            status_code=status.HTTP_204_NO_CONTENT,
+        )
+        self.router.add_api_route(
+            path="/lumgs/{lumg_id}/data-path",
+            tags=["lumg"],
+            endpoint=self.get_data_path,
+            methods=["GET"],
+            response_model=LumgDataPathRead,
+            status_code=status.HTTP_200_OK,
+        )
+        self.router.add_api_route(
+            path="/lumgs/{lumg_id}/data-path",
+            tags=["lumg"],
+            endpoint=self.upsert_data_path,
+            methods=["PUT"],
+            response_model=LumgDataPathRead,
+            status_code=status.HTTP_200_OK,
+        )
+        self.router.add_api_route(
+            path="/lumgs/{lumg_id}/data-path",
+            tags=["lumg"],
+            endpoint=self.delete_data_path,
             methods=["DELETE"],
             status_code=status.HTTP_204_NO_CONTENT,
         )
@@ -69,6 +92,43 @@ class LumgRouter:
         if not delete_lumg:
             raise HTTPException(status_code=404, detail="Lumg not found")
         return {"ok": True}
+
+    async def get_data_path(self, lumg_id: int):
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(LumgDataPath).where(LumgDataPath.lumg_id == lumg_id)
+            )
+            data_path = result.scalars().first()
+        if not data_path:
+            raise HTTPException(status_code=404, detail="Data path not found")
+        return data_path
+
+    async def upsert_data_path(self, lumg_id: int, body: LumgDataPathUpsert):
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(LumgDataPath).where(LumgDataPath.lumg_id == lumg_id)
+            )
+            data_path = result.scalars().first()
+            if data_path:
+                data_path.path = body.path
+                data_path.active = body.active
+            else:
+                data_path = LumgDataPath(lumg_id=lumg_id, path=body.path, active=body.active)
+                session.add(data_path)
+            await session.commit()
+            await session.refresh(data_path)
+        return data_path
+
+    async def delete_data_path(self, lumg_id: int):
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(LumgDataPath).where(LumgDataPath.lumg_id == lumg_id)
+            )
+            data_path = result.scalars().first()
+            if not data_path:
+                raise HTTPException(status_code=404, detail="Data path not found")
+            await session.delete(data_path)
+            await session.commit()
 
 
 lumg_router = LumgRouter().router
