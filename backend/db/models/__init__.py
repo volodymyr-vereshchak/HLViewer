@@ -61,3 +61,22 @@ from .params_model import Param, ParamList, ParamCreate, PARAM_CONSTRAINT
 from .line_model import Line, LineList, LineCreate, LineUpdate, LINE_CONSTRAINT
 
 from .telegram_user_model import TelegramUser, TelegramUserList, TelegramUserCreate
+
+from .grmu_branch_model import (
+    GrmuBranch,
+    GrmuBranchBase,
+    GrmuBranchList,
+    GrmuBranchCreate,
+    GrmuBranchUpdate,
+    GrmuBranchDpdCredential,
+    GrmuBranchDpdCredentialCreate,
+    GrmuBranchDpdCredentialUpdate,
+    GrmuBranchDeviceMapping,
+    GrmuBranchDeviceMappingList,
+    GrmuBranchDeviceMappingCreate,
+    VirtualLine,
+    VirtualLineList,
+    VirtualLineCreate,
+    VirtualLineMember,
+    VirtualLineMemberList,
+)

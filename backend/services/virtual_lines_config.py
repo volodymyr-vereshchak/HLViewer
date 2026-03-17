@@ -1,8 +1,9 @@
 """
 Virtual Lines Configuration Manager
 
-This module handles loading and caching of JSON file containing
-virtual lines (rings) configuration.
+Provides two back-ends:
+  * File-based  — original JSON cache (kept for backward compat / fallback)
+  * DB-backed   — async functions that query virtual_line + virtual_line_member
 """
 
 import os
@@ -10,6 +11,7 @@ import json
 import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Set
+
 from backend.settings import backend_settings
 
 logger = logging.getLogger(__name__)
@@ -263,4 +265,133 @@ def validate_config() -> Dict:
             "hidden_physical_lines": [],
             "errors": [str(e)],
             "warnings": []
+        }
+
+
+# ─── DB-backed async functions ────────────────────────────────────────────────
+
+
+async def get_active_virtual_lines_db(session) -> Dict:
+    """
+    Return active virtual lines from the DB as a dict compatible with
+    the file-based get_active_virtual_lines() return format:
+
+        { "<id>": { "name": ..., "physical_line_ids": [...], "active": True, ... }, ... }
+
+    The key is the string representation of the DB primary key.
+    """
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlmodel import select
+    from backend.db.models.grmu_branch_model import VirtualLine, VirtualLineMember
+
+    stmt = (
+        select(VirtualLine)
+        .where(VirtualLine.active == True)  # noqa: E712
+    )
+    result = await session.execute(stmt)
+    vlines = result.scalars().all()
+
+    out: Dict = {}
+    for vl in vlines:
+        # Fetch members for this virtual line
+        members_stmt = (
+            select(VirtualLineMember)
+            .where(VirtualLineMember.virtual_line_id == vl.id)
+            .order_by(VirtualLineMember.sort_order)
+        )
+        members_result = await session.execute(members_stmt)
+        members = members_result.scalars().all()
+
+        out[str(vl.id)] = {
+            "name": vl.name,
+            "physical_line_ids": [m.line_id for m in members],
+            "active": vl.active,
+            "description": vl.description,
+            "branch_id": vl.branch_id,
+        }
+
+    logger.debug("Loaded %d active virtual lines from DB", len(out))
+    return out
+
+
+async def get_physical_lines_in_rings_db(session) -> Set[int]:
+    """Return physical line IDs that belong to any active virtual line (DB)."""
+    virtual_lines = await get_active_virtual_lines_db(session)
+    physical_ids: Set[int] = set()
+    for vl_data in virtual_lines.values():
+        physical_ids.update(vl_data["physical_line_ids"])
+    return physical_ids
+
+
+async def resolve_virtual_to_physical_db(line_ids: List[int], session) -> List[int]:
+    """
+    Expand virtual line IDs to their physical members (DB version).
+
+    IDs not found in the DB virtual_line table are passed through unchanged
+    (treated as physical line IDs).
+    """
+    from sqlmodel import select
+    from backend.db.models.grmu_branch_model import VirtualLine
+
+    # Check which IDs are virtual lines in the DB
+    stmt = select(VirtualLine).where(
+        VirtualLine.id.in_(line_ids),
+        VirtualLine.active == True,  # noqa: E712
+    )
+    result = await session.execute(stmt)
+    db_vlines = {vl.id: vl for vl in result.scalars().all()}
+
+    virtual_lines_full = await get_active_virtual_lines_db(session) if db_vlines else {}
+
+    physical_ids: List[int] = []
+    for lid in line_ids:
+        if lid in db_vlines:
+            physical_ids.extend(virtual_lines_full.get(str(lid), {}).get("physical_line_ids", []))
+        else:
+            physical_ids.append(lid)
+
+    return physical_ids
+
+
+async def validate_config_db(session) -> Dict:
+    """Validate virtual lines configuration stored in the DB."""
+    errors: List[str] = []
+    warnings: List[str] = []
+
+    try:
+        all_lines_dict = await get_active_virtual_lines_db(session)
+
+        # Check for physical lines used in multiple virtual lines
+        physical_usage: Dict[int, List[str]] = {}
+        for vline_id_str, vline_data in all_lines_dict.items():
+            for pline_id in vline_data["physical_line_ids"]:
+                physical_usage.setdefault(pline_id, []).append(vline_id_str)
+
+        for pline_id, vline_ids in physical_usage.items():
+            if len(vline_ids) > 1:
+                errors.append(
+                    f"Physical line {pline_id} is used in multiple active virtual lines: {vline_ids}"
+                )
+
+        hidden_lines = sorted(
+            {pid for data in all_lines_dict.values() for pid in data["physical_line_ids"]}
+        )
+
+        return {
+            "valid": len(errors) == 0,
+            "virtual_lines_count": len(all_lines_dict),
+            "active_count": len(all_lines_dict),
+            "hidden_physical_lines": hidden_lines,
+            "errors": errors,
+            "warnings": warnings,
+        }
+
+    except Exception as e:
+        return {
+            "valid": False,
+            "virtual_lines_count": 0,
+            "active_count": 0,
+            "hidden_physical_lines": [],
+            "errors": [str(e)],
+            "warnings": [],
         }

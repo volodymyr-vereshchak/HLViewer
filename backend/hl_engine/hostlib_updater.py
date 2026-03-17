@@ -12,19 +12,24 @@ from backend.db.models import HourlyArchiveList
 from backend.settings import backend_settings
 from backend.telegram_notifier.email_notifier import EmailNotifier
 from backend.telegram_notifier.telegram_norifier import TelegramBot
-from backend.services.virtual_lines_config import get_active_virtual_lines
+from backend.services.virtual_lines_config import (
+    get_active_virtual_lines,
+    get_active_virtual_lines_db,
+)
 
 
 class HostlibUpdater:
     @staticmethod
-    def aggregate_virtual_lines(df: pd.DataFrame) -> pd.DataFrame:
+    async def aggregate_virtual_lines(df: pd.DataFrame) -> pd.DataFrame:
         """
         Aggregate physical lines into virtual lines in DataFrame.
 
-        For virtual lines (id >= 1000):
+        For virtual lines:
         - Sum volumes from constituent physical lines
         - Average pressure and temperature
         - Use max density
+
+        Tries DB first, falls back to JSON config.
 
         Args:
             df: DataFrame with hourly archive data (physical lines)
@@ -32,7 +37,10 @@ class HostlibUpdater:
         Returns:
             DataFrame with aggregated data for virtual lines
         """
-        virtual_lines = get_active_virtual_lines()
+        async with async_session_factory() as session:
+            virtual_lines = await get_active_virtual_lines_db(session)
+        if not virtual_lines:
+            virtual_lines = get_active_virtual_lines()  # JSON fallback
 
         result_rows = []
         for vline_id_str, vline_data in virtual_lines.items():
@@ -80,7 +88,14 @@ class HostlibUpdater:
     @staticmethod
     async def get_line_name(line_id: int) -> str:
         """Get line name for physical or virtual line."""
-        # Check if virtual line
+        # Check DB virtual lines first
+        async with async_session_factory() as session:
+            from backend.db.models.grmu_branch_model import VirtualLine
+            vl = await session.get(VirtualLine, line_id)
+            if vl:
+                return vl.name
+
+        # Fallback for JSON-based virtual lines (id >= 1000)
         if line_id >= 1000:
             virtual_lines = get_active_virtual_lines()
             vline_data = virtual_lines.get(str(line_id))
@@ -94,9 +109,15 @@ class HostlibUpdater:
             return line.name if line else f"Линия {line_id}"
 
     @staticmethod
-    async def create_message(df: pd.DataFrame):
-        lines = backend_settings.get("LINES_IDS")
-        high_p_lines = backend_settings.get("HIGH_P_LINES_IDS")
+    async def create_message(df: pd.DataFrame, line_flags: dict) -> str:
+        """
+        Build Telegram notification message.
+
+        Args:
+            df: Combined DataFrame (physical + virtual lines)
+            line_flags: {line_id: is_high_pressure} for all lines to include in report
+        """
+        lines = list(line_flags.keys())
         attention_text = emoji.emojize(":red_circle:")
         message = "Объем по ГРС за последние 24 часа:\n"
         df_lines = df[df.line_id.isin(lines)]
@@ -132,7 +153,7 @@ class HostlibUpdater:
             )
             if df_len != 24:
                 message += attention_text
-            if line_id not in high_p_lines:
+            if not line_flags.get(line_id, False):
                 message += "<b>{}</b>: {:,} м³; Pвых: {} кг/см²\n\n".format(
                     line_name, round(volume, 3), round(p_out, 3)
                 ).replace(",", " ")
@@ -144,9 +165,15 @@ class HostlibUpdater:
         return message
 
     @staticmethod
-    async def create_email_message(df: pd.DataFrame):
-        lines = backend_settings.get("LINES_IDS")
-        high_p_lines = backend_settings.get("HIGH_P_LINES_IDS")
+    async def create_email_message(df: pd.DataFrame, line_flags: dict) -> str:
+        """
+        Build HTML email notification message.
+
+        Args:
+            df: Combined DataFrame (physical + virtual lines)
+            line_flags: {line_id: is_high_pressure} for all lines to include in report
+        """
+        lines = list(line_flags.keys())
         df_lines = df[df.line_id.isin(lines)]
         volume_lines = df_lines.volume.sum()
         start_lines = df_lines.period.min()
@@ -197,7 +224,7 @@ class HostlibUpdater:
             if df_len != 24:
                 pass
             formated_volume = "{:,}".format(volume).replace(",", " ")
-            if line_id not in high_p_lines:
+            if not line_flags.get(line_id, False):
                 message += f"""
                                 <tr>
                                     <td><b>{line_name}</b></td>
@@ -233,11 +260,40 @@ class HostlibUpdater:
         ]
         df_physical = pd.DataFrame(extracted_data).sort_values("period")
 
-        # Aggregate virtual lines and combine with physical lines
-        df_virtual = self.aggregate_virtual_lines(df_physical)
+        # Build line_flags from DB (include_in_report / is_high_pressure)
+        from sqlmodel import select
+        from backend.db.models.line_model import Line
+        from backend.db.models.grmu_branch_model import VirtualLine
 
-        # Get physical lines that are NOT in virtual lines
-        virtual_lines = get_active_virtual_lines()
+        async with async_session_factory() as session:
+            phys_result = await session.execute(
+                select(Line).where(Line.include_in_report == True)  # noqa: E712
+            )
+            phys_lines = phys_result.scalars().all()
+
+            virt_result = await session.execute(
+                select(VirtualLine).where(VirtualLine.include_in_report == True)  # noqa: E712
+            )
+            virt_lines = virt_result.scalars().all()
+
+        line_flags = {l.id: l.is_high_pressure for l in phys_lines}
+        line_flags.update({vl.id: vl.is_high_pressure for vl in virt_lines})
+
+        # Fallback to settings if DB has no flagged lines yet (pre-migration or empty DB)
+        if not line_flags:
+            lines_ids = backend_settings.get("LINES_IDS", [])
+            high_p = set(backend_settings.get("HIGH_P_LINES_IDS", []))
+            line_flags = {lid: (lid in high_p) for lid in lines_ids}
+
+        # Aggregate virtual lines and combine with physical lines
+        df_virtual = await self.aggregate_virtual_lines(df_physical)
+
+        # Get physical lines that are NOT in virtual lines (use DB, fallback to JSON)
+        async with async_session_factory() as session:
+            virtual_lines = await get_active_virtual_lines_db(session)
+        if not virtual_lines:
+            virtual_lines = get_active_virtual_lines()
+
         physical_in_virtual = set()
         for vline_data in virtual_lines.values():
             physical_in_virtual.update(vline_data["physical_line_ids"])
@@ -247,9 +303,9 @@ class HostlibUpdater:
         # Combine physical (not in virtual) + virtual lines
         df = pd.concat([df_physical_filtered, df_virtual], ignore_index=True).sort_values("period")
 
-        message = await self.create_message(df)
+        message = await self.create_message(df, line_flags)
         await self.send_telegram_message(message)
-        # message = await self.create_email_message(df)
+        # message = await self.create_email_message(df, line_flags)
         # self.send_email_message(message)
 
 

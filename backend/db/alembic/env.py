@@ -46,6 +46,19 @@ from db.models import (
     Param,
     ParamList,
     ParamCreate,
+    GrmuBranch,
+    GrmuBranchList,
+    GrmuBranchCreate,
+    GrmuBranchDpdCredential,
+    GrmuBranchDpdCredentialCreate,
+    GrmuBranchDeviceMapping,
+    GrmuBranchDeviceMappingList,
+    GrmuBranchDeviceMappingCreate,
+    VirtualLine,
+    VirtualLineList,
+    VirtualLineCreate,
+    VirtualLineMember,
+    VirtualLineMemberList,
 )
 
 from settings import backend_settings

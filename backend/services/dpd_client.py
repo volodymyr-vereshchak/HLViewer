@@ -22,16 +22,63 @@ logger = logging.getLogger(__name__)
 class DPDClient:
     """Async HTTP client for DPD API with JWT authentication."""
 
-    def __init__(self):
-        self.base_url = backend_settings["DPD_API_BASE_URL"]
-        self.auth_url = backend_settings["DPD_AUTH_URL"]
-        self.username = backend_settings["DPD_USERNAME"]
-        self.password = backend_settings["DPD_PASSWORD"]
-        self.timeout = backend_settings["DPD_TIMEOUT"]
+    def __init__(
+        self,
+        *,
+        base_url: Optional[str] = None,
+        auth_url: Optional[str] = None,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        timeout: Optional[int] = None,
+    ):
+        """
+        Create a DPDClient instance.
+
+        All parameters are optional and fall back to the values in backend_settings
+        (dev credentials).  For production, prefer the async factory
+        DPDClient.for_branch(branch_id, session) which loads credentials from the DB.
+        """
+        self.base_url = base_url or backend_settings["DPD_API_BASE_URL"]
+        self.auth_url = auth_url or backend_settings["DPD_AUTH_URL"]
+        self.username = username or backend_settings["DPD_USERNAME"]
+        self.password = password or backend_settings["DPD_PASSWORD"]
+        self.timeout = timeout or backend_settings["DPD_TIMEOUT"]
 
         self.access_token: Optional[str] = None
         self.refresh_token: Optional[str] = None
         self._authenticated: bool = False
+
+    @classmethod
+    async def for_branch(cls, branch_id: int, session) -> "DPDClient":
+        """
+        Async factory: load credentials from grmu_branch_dpd_credential for
+        the given branch_id and return a configured DPDClient.
+
+        Falls back to settings if no DB credential is found.
+        """
+        from sqlmodel import select
+        from backend.db.models.grmu_branch_model import GrmuBranchDpdCredential
+
+        stmt = select(GrmuBranchDpdCredential).where(
+            GrmuBranchDpdCredential.branch_id == branch_id
+        )
+        result = await session.execute(stmt)
+        cred = result.scalars().first()
+
+        if not cred:
+            raise ValueError(
+                f"No DPD credentials configured for branch_id={branch_id}. "
+                "Add a row to grmu_branch_dpd_credential."
+            )
+
+        logger.debug("Loaded DPD credentials from DB for branch_id=%d", branch_id)
+        return cls(
+            base_url=cred.api_base_url,
+            auth_url=cred.auth_url,
+            username=cred.username,
+            password=cred.password,
+            timeout=cred.timeout_sec,
+        )
 
     async def _authenticate(self):
         """Authenticate with DPD API and get JWT tokens."""

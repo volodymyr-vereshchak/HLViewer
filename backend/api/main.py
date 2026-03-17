@@ -22,6 +22,7 @@ from backend.api.endpoints import (
     virtual_lines_ep,
     hourly_virtual_ep,
     daily_virtual_ep,
+    grmu_branch_ep,
 )
 from backend.api.endpoints import gas_volume_calc_type_ep, day_archive_ep
 from backend.hl_engine.hostlib_updater import HostlibUpdater
@@ -80,6 +81,10 @@ tags_metadata = [
         "name": "daily_virtual",
         "description": "Operations with daily archives supporting virtual lines.",
     },
+    {
+        "name": "grmu_branch",
+        "description": "Operations with GRMU branches (Філіали ГРМУ) and their device mappings.",
+    },
 ]
 
 
@@ -132,3 +137,4 @@ app.include_router(enterprise_virtual_ep.enterprise_virtual_router)
 app.include_router(virtual_lines_ep.virtual_lines_router)
 app.include_router(hourly_virtual_ep.hourly_virtual_router)
 app.include_router(daily_virtual_ep.daily_virtual_router)
+app.include_router(grmu_branch_ep.grmu_branch_router)

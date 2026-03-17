@@ -17,6 +17,8 @@ class LineBase(HlBaseModel):
     line: int
     meter: bool
     name: str = Field(max_length=255)
+    include_in_report: bool = Field(default=False)
+    is_high_pressure: bool = Field(default=False)
 
 
 LINE_CONSTRAINT = ["gas_volume_calc_id", "line"]
@@ -35,6 +37,8 @@ class Line(LineBase, table=True):
         Index("idx_line_name", "name"),
         # Индекс для поиска по meter
         Index("idx_line_meter", "meter"),
+        Index("idx_line_include_in_report", "include_in_report"),
+        Index("idx_line_is_high_pressure", "is_high_pressure"),
     )
 
     id: int | None = Field(default=None, primary_key=True)
