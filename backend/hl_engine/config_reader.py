@@ -81,7 +81,7 @@ class ConfigReader:
             line_dao = LineDao(session=session)
             lumg_name = data["lumg_name"]
             lumg_db = await lumg_dao.update_if_exist(lumg_name)
-            lumg_id = 1  # lumg_db.id
+            lumg_id = lumg_db.id if lumg_db else 1
 
             for flow in data["flows"]:
                 lines = flow.pop("lines")

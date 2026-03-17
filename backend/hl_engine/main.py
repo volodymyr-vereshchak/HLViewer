@@ -1,6 +1,7 @@
 import asyncio
-import os
+from types import SimpleNamespace
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import select
 
 from backend.db.dao.daily_archive_dao import DailyArchiveDao
 from backend.db.dao.edit_archive_dao import EditArchiveDao
@@ -15,6 +16,7 @@ from backend.db.models import (
     SYS_ARCHIVE_CONSTRAINT,
     PARAM_CONSTRAINT,
 )
+from backend.db.models.lumg_model import LumgDataPath
 from backend.hl_engine.daily_engine import DailyEngine
 from backend.hl_engine.edit_engine import EditEngine
 from backend.hl_engine.hourly_engine import HourlyEngine
@@ -35,35 +37,46 @@ async def update_archive(archive_gen, dao, constraint_list: list, session):
 
 
 async def update_worker(
-    engine, path: str, archive_dao, constraint, chunk_size: int, session: AsyncSession
+    engine, path: str, archive_dao, constraint, chunk_size: int, session: AsyncSession, lumg_id: int = 1
 ):
-    archive_engine = engine(path=path, chunk_size=chunk_size, session=session)
+    archive_engine = engine(path=path, chunk_size=chunk_size, session=session, lumg_id=lumg_id)
     archives_gen = archive_engine.read()
     await update_archive(archives_gen, archive_dao, constraint, session)
 
 
 async def update_hostlibs(session: AsyncSession):
-    path = backend_settings.get("HOSTLIB_PATH")
+    result = await session.execute(
+        select(LumgDataPath).where(LumgDataPath.active == True)
+    )
+    lumg_paths = result.scalars().all()
+
+    # Fallback to env var for backwards compatibility (if table is empty)
+    if not lumg_paths:
+        env_path = backend_settings.get("HOSTLIB_PATH")
+        if env_path:
+            lumg_paths = [SimpleNamespace(lumg_id=1, path=env_path)]
+
     chunk_size = backend_settings.get("CHUNK_SIZE")
+    workers = [
+        (DailyEngine, DailyArchiveDao, DAILY_ARCHIVE_CONSTRAINT),
+        (HourlyEngine, HourlyArchiveDao, HOURLY_ARCHIVE_CONSTRAINT),
+        (EditEngine, EditArchiveDao, EDIT_ARCHIVE_CONSTRAINT),
+        (SysEngine, SysArchiveDao, SYS_ARCHIVE_CONSTRAINT),
+        (ParamEngine, ParamDao, PARAM_CONSTRAINT),
+    ]
 
-    with UnzipUtils(path) as unzip_utils:
-        workers = [
-            (DailyEngine, DailyArchiveDao, DAILY_ARCHIVE_CONSTRAINT),
-            (HourlyEngine, HourlyArchiveDao, HOURLY_ARCHIVE_CONSTRAINT),
-            (EditEngine, EditArchiveDao, EDIT_ARCHIVE_CONSTRAINT),
-            (SysEngine, SysArchiveDao, SYS_ARCHIVE_CONSTRAINT),
-            (ParamEngine, ParamDao, PARAM_CONSTRAINT),
-        ]
-
-        for engine, archive_dao, constraint in workers:
-            await update_worker(
-                engine,
-                unzip_utils.temp_path,
-                archive_dao,
-                constraint,
-                chunk_size,
-                session,
-            )
+    for lumg_path in lumg_paths:
+        with UnzipUtils(lumg_path.path) as unzip_utils:
+            for engine, archive_dao, constraint in workers:
+                await update_worker(
+                    engine,
+                    unzip_utils.temp_path,
+                    archive_dao,
+                    constraint,
+                    chunk_size,
+                    session,
+                    lumg_id=lumg_path.lumg_id,
+                )
 
 
 if __name__ == "__main__":
