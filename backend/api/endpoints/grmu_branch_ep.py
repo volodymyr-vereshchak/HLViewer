@@ -69,6 +69,20 @@ async def create_branch(data: GrmuBranchCreate):
     return branch
 
 
+@router.delete(
+    "/{branch_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a branch",
+)
+async def delete_branch(branch_id: int):
+    async with async_session_factory() as session:
+        branch = await session.get(GrmuBranch, branch_id)
+        if not branch:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Branch not found")
+        await session.delete(branch)
+        await session.commit()
+
+
 @router.patch(
     "/{branch_id}",
     response_model=GrmuBranchList,

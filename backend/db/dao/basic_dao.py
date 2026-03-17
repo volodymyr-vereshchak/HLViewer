@@ -140,7 +140,7 @@ class BasicDao:
         return db_item
 
     async def delete_item(self, item_id: int):
-        db_item = self.get_by_id(item_id)
+        db_item = await self.get_by_id(item_id)
         if db_item:
             await self.session.delete(db_item)
             await self.session.commit()

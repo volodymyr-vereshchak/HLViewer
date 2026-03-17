@@ -1,0 +1,65 @@
+services:
+  db_v2:
+    image: postgres:15
+    container_name: postgres_db_v2
+    environment:
+      POSTGRES_DB: hostlib_db_v2
+      POSTGRES_USER: diakonx
+      POSTGRES_PASSWORD: assemblerwog359
+    ports:
+      - "5434:5432"
+    networks:
+      - hostlib_network_v2
+    restart: always
+
+  fastapi_v2:
+    build:
+      context: .
+    image: hlviewer-fastapi-v2
+    container_name: fastapi_app_v2
+    volumes:
+      - .:/app
+    working_dir: /app
+    env_file:
+      - .env.v2
+    environment:
+      - DB_HOST=db_v2
+      - DB_PORT=5432
+      - DATABASE_URL=postgresql+asyncpg://diakonx:assemblerwog359@db_v2:5432/hostlib_db_v2
+
+    ports:
+      - "8001:8001"
+    depends_on:
+      - db_v2
+    networks:
+      - hostlib_network_v2
+    command: >
+      sh -c "./wait_for_it.sh db_v2:5432 --
+             sh -c 'cd backend &&
+                    alembic upgrade head &&
+                    cd .. &&
+                    python -m backend.db.preload_db.preload_db &&
+                    uvicorn backend.api.main:app --host 0.0.0.0 --port 8001 --reload'"
+    restart: always
+
+  frontend_v2:
+    build:
+      context: ../frontend/react-frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ""
+    image: hlviewer-frontend-v2
+    container_name: frontend_app_v2
+    volumes:
+      - ../frontend/react-frontend/nginx.v2.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "3001:80"
+    depends_on:
+      - fastapi_v2
+    networks:
+      - hostlib_network_v2
+    restart: always
+
+networks:
+  hostlib_network_v2:
+    driver: bridge

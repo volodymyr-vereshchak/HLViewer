@@ -23,6 +23,7 @@ from backend.api.endpoints import (
     hourly_virtual_ep,
     daily_virtual_ep,
     grmu_branch_ep,
+    auth_ep,
 )
 from backend.api.endpoints import gas_volume_calc_type_ep, day_archive_ep
 from backend.hl_engine.hostlib_updater import HostlibUpdater
@@ -111,6 +112,8 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
         "http://localhost:8050",
         "http://localhost:8060",
         "http://127.0.0.1:8050",
@@ -138,3 +141,4 @@ app.include_router(virtual_lines_ep.virtual_lines_router)
 app.include_router(hourly_virtual_ep.hourly_virtual_router)
 app.include_router(daily_virtual_ep.daily_virtual_router)
 app.include_router(grmu_branch_ep.grmu_branch_router)
+app.include_router(auth_ep.auth_router)

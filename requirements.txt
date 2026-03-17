@@ -37,7 +37,7 @@ mypy-extensions==1.0.0
 numpy==2.2.0
 oauthlib==3.2.2
 packaging==24.2
-pandas==2.2.3
+pandas==2.3.3
 openpyxl==3.1.5
 pathspec==0.12.1
 platformdirs==4.3.6
@@ -50,7 +50,7 @@ python-dateutil==2.9.0.post0
 python-dotenv==1.0.1
 python-multipart==0.0.19
 python-slugify==8.0.4
-pytz==2024.2
+pytz==2023.3.post1
 PyYAML==6.0.2
 qrcode==7.4.2
 repath==0.9.0
