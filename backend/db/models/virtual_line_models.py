@@ -10,7 +10,7 @@ from typing import List, Optional
 
 class VirtualLineConfig(BaseModel):
     """Configuration of a virtual line (ring)."""
-    id: int = Field(ge=1000, description="Virtual line ID (must be >= 1000)")
+    id: int = Field(description="Virtual line ID")
     name: str = Field(description="Display name of the virtual line")
     physical_line_ids: List[int] = Field(min_length=1, description="List of physical line IDs in this ring")
     is_virtual: bool = Field(default=True, description="Always True for virtual lines")
@@ -20,7 +20,7 @@ class VirtualLineConfig(BaseModel):
 
 class VisibleLineResponse(BaseModel):
     """Line for display in frontend (virtual or physical)."""
-    id: int = Field(description="Line ID (>= 1000 for virtual, < 1000 for physical)")
+    id: int = Field(description="Line ID")
     name: str = Field(description="Display name")
     is_virtual: bool = Field(description="True if virtual line, False if physical")
     physical_line_ids: Optional[List[int]] = Field(
@@ -28,6 +28,8 @@ class VisibleLineResponse(BaseModel):
         description="List of physical line IDs (only for virtual lines)"
     )
     description: Optional[str] = Field(default=None, description="Optional description")
+    lumg_id: Optional[int] = Field(default=None, description="LUMG ID for tree placement")
+    branch_id: Optional[int] = Field(default=None, description="Branch ID")
 
 
 class VirtualLinesValidationResponse(BaseModel):

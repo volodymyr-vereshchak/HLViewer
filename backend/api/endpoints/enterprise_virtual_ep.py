@@ -18,7 +18,8 @@ from backend.db.models.enterprise_models import (
 )
 from backend.services.dpd_client import DPDClient
 from backend.services.enterprise_mappings import get_devices_for_lines
-from backend.services.virtual_lines_config import get_active_virtual_lines
+from backend.db.engine import async_session_factory
+from backend.services.virtual_lines_config import get_active_virtual_lines_db
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,7 @@ class EnterpriseVirtualRouter:
             summary="Get enterprise volume data with virtual lines support",
             description=(
                 "Fetches volume data for enterprise calculators from DPD API, "
-                "supporting both physical and virtual lines. Virtual lines (ID >= 1000) "
+                "supporting both physical and virtual lines. Virtual lines "
                 "are automatically resolved to physical lines, data aggregated, and returned "
                 "grouped by virtual line_id."
             ),
@@ -64,7 +65,7 @@ class EnterpriseVirtualRouter:
 
     async def get_enterprise_volumes_virtual(
         self,
-        line_id: List[int] = Query(..., description="Line IDs (virtual IDs >= 1000 supported)"),
+        line_id: List[int] = Query(..., description="Line IDs (virtual and physical IDs supported)"),
         from_date: str = Query(..., description="Start date (YYYY-MM-DD)"),
         to_date: str = Query(..., description="End date (YYYY-MM-DD)"),
         period_type: str = Query(
@@ -85,7 +86,7 @@ class EnterpriseVirtualRouter:
             6. Return aggregated data
 
         Args:
-            line_id: List of line IDs (can include virtual IDs >= 1000)
+            line_id: List of line IDs (virtual and physical)
             from_date: Start date in YYYY-MM-DD format
             to_date: End date in YYYY-MM-DD format
             period_type: Data granularity - 'daily' (default) or 'hourly'
@@ -134,9 +135,20 @@ class EnterpriseVirtualRouter:
                 detail="All line_ids must be positive integers"
             )
 
-        # Separate virtual and physical line IDs
-        virtual_line_ids = [lid for lid in line_id if lid >= 1000]
-        physical_line_ids = [lid for lid in line_id if lid < 1000]
+        # Load virtual lines from DB
+        try:
+            async with async_session_factory() as session:
+                virtual_lines_config = await get_active_virtual_lines_db(session)
+        except Exception as e:
+            logger.error(f"Error loading virtual lines config: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error loading virtual lines configuration: {e}"
+            )
+
+        # Separate virtual and physical line IDs (DB-backed, no numeric threshold)
+        virtual_line_ids = [lid for lid in line_id if str(lid) in virtual_lines_config]
+        physical_line_ids = [lid for lid in line_id if str(lid) not in virtual_lines_config]
 
         # Create mapping: physical_line_id -> original_line_id (virtual or physical)
         physical_to_original = {}
@@ -145,32 +157,16 @@ class EnterpriseVirtualRouter:
         for pline_id in physical_line_ids:
             physical_to_original[pline_id] = pline_id
 
-        # Load virtual lines and create mapping
-        if virtual_line_ids:
-            try:
-                virtual_lines_config = get_active_virtual_lines()
-            except Exception as e:
-                logger.error(f"Error loading virtual lines config: {e}")
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Error loading virtual lines configuration: {e}"
-                )
-
-            for vline_id in virtual_line_ids:
-                vline_id_str = str(vline_id)
-                if vline_id_str not in virtual_lines_config:
-                    logger.warning(f"Virtual line {vline_id} not found in active configuration")
-                    continue
-
-                # Map each physical line to its virtual parent
-                for pline_id in virtual_lines_config[vline_id_str]["physical_line_ids"]:
-                    if pline_id in physical_to_original:
-                        # Physical line already mapped (edge case: same physical in multiple lines)
-                        logger.warning(
-                            f"Physical line {pline_id} is in multiple lines: "
-                            f"{physical_to_original[pline_id]} and {vline_id}"
-                        )
-                    physical_to_original[pline_id] = vline_id
+        # Map each virtual line's physical members to their virtual parent
+        for vline_id in virtual_line_ids:
+            vline_id_str = str(vline_id)
+            for pline_id in virtual_lines_config[vline_id_str]["physical_line_ids"]:
+                if pline_id in physical_to_original:
+                    logger.warning(
+                        f"Physical line {pline_id} is in multiple lines: "
+                        f"{physical_to_original[pline_id]} and {vline_id}"
+                    )
+                physical_to_original[pline_id] = vline_id
 
         # Get all physical line IDs to query
         all_physical_ids = list(physical_to_original.keys())

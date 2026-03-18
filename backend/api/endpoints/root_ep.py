@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime
 
 from fastapi import APIRouter, status, HTTPException
 
@@ -16,6 +17,13 @@ class RootRouter:
         self.router.add_api_route(
             path="/update_data/",
             endpoint=self.update_data,
+            tags=["root"],
+            methods=["POST"],
+            status_code=status.HTTP_202_ACCEPTED,
+        )
+        self.router.add_api_route(
+            path="/update_data/{lumg_id}",
+            endpoint=self.update_data_for_lumg,
             tags=["root"],
             methods=["POST"],
             status_code=status.HTTP_202_ACCEPTED,
@@ -48,10 +56,27 @@ class RootRouter:
             async with async_session_factory() as session:
                 try:
                     await update_hostlibs(session=session)
-                    return {"message": "Updated"}
+                    return {"message": "Updated", "last_updated": datetime.now().isoformat()}
                 except Exception as e:
                     self.logger.error(
                         f"Unexpected error occurred while update_hostlibs: {e}",
+                        exc_info=True,
+                    )
+
+    async def update_data_for_lumg(self, lumg_id: int):
+        if self.lock.locked():
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Update is already in progress. Please try again later.",
+            )
+        async with self.lock:
+            async with async_session_factory() as session:
+                try:
+                    await update_hostlibs(session=session, lumg_id=lumg_id)
+                    return {"message": f"Updated lumg {lumg_id}", "last_updated": datetime.now().isoformat()}
+                except Exception as e:
+                    self.logger.error(
+                        f"Unexpected error occurred while update_hostlibs for lumg {lumg_id}: {e}",
                         exc_info=True,
                     )
 

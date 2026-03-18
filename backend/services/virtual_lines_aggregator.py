@@ -18,14 +18,18 @@ logger = logging.getLogger(__name__)
 
 def aggregate_to_virtual_lines(
     archives: List[Union[HourlyArchiveList, DailyArchiveList]],
-    requested_line_ids: List[int]
+    requested_line_ids: List[int],
+    virtual_lines: Dict = None,
 ) -> List[Dict]:
     """
     Aggregate physical line archives into virtual lines.
 
     Args:
         archives: List of archive records (HourlyArchiveList or DailyArchiveList)
-        requested_line_ids: List of requested line IDs (may include virtual IDs >= 1000)
+        requested_line_ids: List of requested line IDs (may include virtual IDs)
+        virtual_lines: Active virtual lines dict {str(id): {...}}. If None, falls
+                       back to the JSON-based get_active_virtual_lines() for
+                       backward compatibility.
 
     Returns:
         List of aggregated archive dicts with virtual line_ids
@@ -42,16 +46,16 @@ def aggregate_to_virtual_lines(
            - density: WEIGHTED AVG (by volume)
         5. Return only requested virtual lines + physical lines not in rings
     """
-    # Check if any virtual lines were requested
-    virtual_requested = [lid for lid in requested_line_ids if lid >= 1000]
-    physical_requested = [lid for lid in requested_line_ids if lid < 1000]
+    if virtual_lines is None:
+        virtual_lines = get_active_virtual_lines()
+
+    # Check if any virtual lines were requested (via DB lookup)
+    virtual_requested = [lid for lid in requested_line_ids if str(lid) in virtual_lines]
+    physical_requested = [lid for lid in requested_line_ids if str(lid) not in virtual_lines]
 
     if not virtual_requested:
         # No virtual lines requested, return archives as-is (as dicts)
         return [_archive_to_dict(archive) for archive in archives]
-
-    # Load virtual lines configuration
-    virtual_lines = get_active_virtual_lines()
 
     # Create mapping: physical_line_id -> virtual_line_id
     physical_to_virtual = {}

@@ -308,6 +308,7 @@ async def get_active_virtual_lines_db(session) -> Dict:
             "active": vl.active,
             "description": vl.description,
             "branch_id": vl.branch_id,
+            "lumg_id": vl.lumg_id,
         }
 
     logger.debug("Loaded %d active virtual lines from DB", len(out))

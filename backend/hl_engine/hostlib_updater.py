@@ -87,26 +87,18 @@ class HostlibUpdater:
 
     @staticmethod
     async def get_line_name(line_id: int) -> str:
-        """Get line name for physical or virtual line."""
-        # Check DB virtual lines first
+        """Get line name for physical or virtual line (DB-backed)."""
+        # Try virtual line first (DB)
         async with async_session_factory() as session:
             from backend.db.models.grmu_branch_model import VirtualLine
             vl = await session.get(VirtualLine, line_id)
             if vl:
                 return vl.name
 
-        # Fallback for JSON-based virtual lines (id >= 1000)
-        if line_id >= 1000:
-            virtual_lines = get_active_virtual_lines()
-            vline_data = virtual_lines.get(str(line_id))
-            if vline_data:
-                return vline_data["name"]
-            return f"Виртуальная линия {line_id}"
-
-        # Physical line - get from database
+        # Physical line — get from database
         async with async_session_factory() as session:
             line = await LineDao(session=session).get_line_name_by_id(line_id)
-            return line.name if line else f"Линия {line_id}"
+            return line.name if line else f"Лінія {line_id}"
 
     @staticmethod
     async def create_message(df: pd.DataFrame, line_flags: dict) -> str:
@@ -139,12 +131,11 @@ class HostlibUpdater:
             df_last = df_i.tail(1)
             p_out = df_last.pressure.sum()
 
-            # Only apply meter correction for physical lines
-            if line_id < 1000:
-                async with async_session_factory() as session:
-                    line = await LineDao(session=session).get_line_name_by_id(line_id)
-                    if line and not line.meter:
-                        p_out = p_out - df_last.w_volume_dp.sum() / 10_000
+            # Apply meter correction for physical lines (virtual lines return None from LineDao)
+            async with async_session_factory() as session:
+                line = await LineDao(session=session).get_line_name_by_id(line_id)
+                if line and not line.meter:
+                    p_out = p_out - df_last.w_volume_dp.sum() / 10_000
 
             p_out = (
                 p_out.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
@@ -209,12 +200,11 @@ class HostlibUpdater:
             df_last = df_i.tail(1)
             p_out = df_last.pressure.sum()
 
-            # Only apply meter correction for physical lines
-            if line_id < 1000:
-                async with async_session_factory() as session:
-                    line = await LineDao(session=session).get_line_name_by_id(line_id)
-                    if line and not line.meter:
-                        p_out = p_out - df_last.w_volume_dp.sum() / 10_000
+            # Apply meter correction for physical lines (virtual lines return None from LineDao)
+            async with async_session_factory() as session:
+                line = await LineDao(session=session).get_line_name_by_id(line_id)
+                if line and not line.meter:
+                    p_out = p_out - df_last.w_volume_dp.sum() / 10_000
 
             p_out = (
                 p_out.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)

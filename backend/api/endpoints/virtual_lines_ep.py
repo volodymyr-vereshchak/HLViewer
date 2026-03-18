@@ -7,9 +7,17 @@ Uses DB-backed virtual line data; falls back to JSON config when DB is empty.
 
 from fastapi import APIRouter, status, HTTPException
 from typing import List
+from sqlmodel import select
+from sqlalchemy import delete as sa_delete
 
 from backend.db.engine import async_session_factory
 from backend.db.dao.line_dao import LineDao
+from backend.db.models.grmu_branch_model import (
+    VirtualLine,
+    VirtualLineMember,
+    VirtualLineList,
+    VirtualLineCreate,
+)
 from backend.db.models.virtual_line_models import (
     VisibleLineResponse,
     VirtualLinesValidationResponse,
@@ -58,6 +66,45 @@ class VirtualLinesRouter:
             description="Validates virtual lines configuration and returns validation results.",
         )
 
+        self.router.add_api_route(
+            path="/virtual_lines/",
+            tags=["virtual_lines"],
+            endpoint=self.get_all,
+            methods=["GET"],
+            response_model=List[VirtualLineList],
+            status_code=status.HTTP_200_OK,
+            summary="List all virtual lines",
+        )
+
+        self.router.add_api_route(
+            path="/virtual_lines/",
+            tags=["virtual_lines"],
+            endpoint=self.create,
+            methods=["POST"],
+            response_model=VirtualLineList,
+            status_code=status.HTTP_201_CREATED,
+            summary="Create virtual line",
+        )
+
+        self.router.add_api_route(
+            path="/virtual_lines/{vl_id}",
+            tags=["virtual_lines"],
+            endpoint=self.update,
+            methods=["PATCH"],
+            response_model=VirtualLineList,
+            status_code=status.HTTP_200_OK,
+            summary="Update virtual line",
+        )
+
+        self.router.add_api_route(
+            path="/virtual_lines/{vl_id}",
+            tags=["virtual_lines"],
+            endpoint=self.delete_vl,
+            methods=["DELETE"],
+            status_code=status.HTTP_204_NO_CONTENT,
+            summary="Delete virtual line",
+        )
+
     async def get_visible_lines(self) -> List[VisibleLineResponse]:
         """
         Get list of lines visible in frontend.
@@ -88,6 +135,8 @@ class VirtualLinesRouter:
                     is_virtual=True,
                     physical_line_ids=vline_data["physical_line_ids"],
                     description=vline_data.get("description"),
+                    lumg_id=vline_data.get("lumg_id"),
+                    branch_id=vline_data.get("branch_id"),
                 )
             )
 
@@ -101,6 +150,8 @@ class VirtualLinesRouter:
                         is_virtual=False,
                         physical_line_ids=None,
                         description=None,
+                        lumg_id=None,
+                        branch_id=None,
                     )
                 )
 
@@ -125,6 +176,72 @@ class VirtualLinesRouter:
                 status_code=500,
                 detail=f"Error validating virtual lines configuration: {str(e)}",
             )
+
+    async def get_all(self) -> List[VirtualLineList]:
+        """List all virtual lines with their physical line members."""
+        async with async_session_factory() as session:
+            result = await session.execute(select(VirtualLine))
+            vlines = result.scalars().all()
+            out = []
+            for vl in vlines:
+                members = await session.execute(
+                    select(VirtualLineMember).where(
+                        VirtualLineMember.virtual_line_id == vl.id
+                    ).order_by(VirtualLineMember.sort_order)
+                )
+                physical_ids = [m.line_id for m in members.scalars().all()]
+                item = VirtualLineList(
+                    **vl.model_dump(exclude={"members", "branch", "lumg"}),
+                    physical_line_ids=physical_ids,
+                )
+                out.append(item)
+            return out
+
+    async def create(self, data: VirtualLineCreate) -> VirtualLineList:
+        """Create a new virtual line with physical line members."""
+        async with async_session_factory() as session:
+            vl = VirtualLine(**data.model_dump(exclude={"physical_line_ids"}))
+            session.add(vl)
+            await session.flush()
+            for lid in data.physical_line_ids:
+                session.add(VirtualLineMember(virtual_line_id=vl.id, line_id=lid))
+            await session.commit()
+            await session.refresh(vl)
+            return VirtualLineList(
+                **vl.model_dump(exclude={"members", "branch", "lumg"}),
+                physical_line_ids=data.physical_line_ids,
+            )
+
+    async def update(self, vl_id: int, data: VirtualLineCreate) -> VirtualLineList:
+        """Update a virtual line and replace its physical line members."""
+        async with async_session_factory() as session:
+            vl = await session.get(VirtualLine, vl_id)
+            if not vl:
+                raise HTTPException(status_code=404, detail="Virtual line not found")
+            for k, v in data.model_dump(exclude={"physical_line_ids"}).items():
+                setattr(vl, k, v)
+            await session.execute(
+                sa_delete(VirtualLineMember).where(
+                    VirtualLineMember.virtual_line_id == vl_id
+                )
+            )
+            for lid in data.physical_line_ids:
+                session.add(VirtualLineMember(virtual_line_id=vl_id, line_id=lid))
+            await session.commit()
+            await session.refresh(vl)
+            return VirtualLineList(
+                **vl.model_dump(exclude={"members", "branch", "lumg"}),
+                physical_line_ids=data.physical_line_ids,
+            )
+
+    async def delete_vl(self, vl_id: int):
+        """Delete a virtual line and its members."""
+        async with async_session_factory() as session:
+            vl = await session.get(VirtualLine, vl_id)
+            if not vl:
+                raise HTTPException(status_code=404, detail="Virtual line not found")
+            await session.delete(vl)
+            await session.commit()
 
 
 virtual_lines_router = VirtualLinesRouter().router

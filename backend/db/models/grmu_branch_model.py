@@ -19,7 +19,7 @@ from sqlmodel import Field, Relationship, UniqueConstraint
 from .base_model import HlBaseModel
 
 if TYPE_CHECKING:
-    from .lumg_model import Lumg
+    from .lumg_model import Lumg, LumgBase
 
 
 # ─── GrmuBranch ───────────────────────────────────────────────────────────────
@@ -183,8 +183,10 @@ class VirtualLine(VirtualLineBase, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     branch_id: int = Field(foreign_key="grmu_branch.id", ondelete="CASCADE")
+    lumg_id: int | None = Field(default=None, foreign_key="lumg.id", ondelete="SET NULL")
 
     branch: "GrmuBranch" = Relationship(back_populates="virtual_lines")
+    lumg: Optional["Lumg"] = Relationship(back_populates="virtual_lines")
     members: List["VirtualLineMember"] = Relationship(
         back_populates="virtual_line", cascade_delete=True
     )
@@ -193,10 +195,14 @@ class VirtualLine(VirtualLineBase, table=True):
 class VirtualLineList(VirtualLineBase):
     id: int
     branch_id: int
+    lumg_id: int | None = None
+    physical_line_ids: list[int] = []
 
 
 class VirtualLineCreate(VirtualLineBase):
     branch_id: int
+    lumg_id: int | None = None
+    physical_line_ids: list[int] = []
 
 
 # ─── VirtualLineMember ────────────────────────────────────────────────────────
