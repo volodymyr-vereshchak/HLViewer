@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
 
 from sqlalchemy import Index
-from sqlmodel import Field, Relationship, UniqueConstraint
+from sqlmodel import Field, Relationship, SQLModel, UniqueConstraint
 
 from .base_model import HlBaseModel
 
@@ -43,6 +43,9 @@ class GrmuBranch(GrmuBranchBase, table=True):
     id: int | None = Field(default=None, primary_key=True)
 
     lumgs: List["Lumg"] = Relationship(
+        back_populates="branch", cascade_delete=True
+    )
+    data_path: Optional["BranchDataPath"] = Relationship(
         back_populates="branch", cascade_delete=True
     )
     dpd_credential: Optional["GrmuBranchDpdCredential"] = Relationship(
@@ -236,3 +239,57 @@ class VirtualLineMemberList(HlBaseModel):
     virtual_line_id: int
     line_id: int
     sort_order: int
+
+
+# ─── BranchConfigMapping ──────────────────────────────────────────────────────
+
+
+class BranchConfigMapping(HlBaseModel, table=True):
+    """Maps a GIS name (from ASK.CFG) to a LUMG id in the database."""
+    __tablename__ = "branch_config_mapping"
+    __table_args__ = (
+        UniqueConstraint("branch_id", "gis_name", name="uq_branch_config_mapping"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    branch_id: int = Field(foreign_key="grmu_branch.id", ondelete="CASCADE")
+    gis_name: str = Field(max_length=255)
+    lumg_id: int | None = Field(default=None, foreign_key="lumg.id", ondelete="SET NULL")
+
+
+class BranchConfigMappingRead(SQLModel):
+    id: int
+    branch_id: int
+    gis_name: str
+    lumg_id: int | None
+
+
+class BranchConfigMappingUpsert(SQLModel):
+    gis_name: str
+    lumg_id: int | None
+
+
+# ─── BranchDataPath ───────────────────────────────────────────────────────────
+
+
+class BranchDataPath(HlBaseModel, table=True):
+    __tablename__ = "branch_data_path"
+
+    id: int | None = Field(default=None, primary_key=True)
+    branch_id: int = Field(foreign_key="grmu_branch.id", ondelete="CASCADE", unique=True)
+    path: str = Field(max_length=1024)
+    active: bool = Field(default=True)
+
+    branch: "GrmuBranch" = Relationship(back_populates="data_path")
+
+
+class BranchDataPathRead(SQLModel):
+    id: int
+    branch_id: int
+    path: str
+    active: bool
+
+
+class BranchDataPathUpsert(SQLModel):
+    path: str
+    active: bool = True

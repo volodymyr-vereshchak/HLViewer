@@ -12,4 +12,4 @@ class BaseDataclass:
     @staticmethod
     def get_string_from_bytes(bytes_str: bytes) -> str:
         """Convert the header bytes to a string"""
-        return bytes_str.decode("windows-1251").strip("\x00")
+        return bytes_str.decode("windows-1251", errors="ignore").strip("\x00")
