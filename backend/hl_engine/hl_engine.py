@@ -4,9 +4,13 @@ from typing import Type
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlmodel import select
+
 from backend.db.dao.gas_volume_calc_dao import GasVolumeCalcDao
 from backend.db.dao.line_dao import LineDao
 from backend.db.models import HlBaseModel
+from backend.db.models.gas_volume_calc_model import GasVolumeCalc
+from backend.db.models.line_model import Line as LineModel
 from backend.hl_engine.data_classes.base_dataclass import BaseDataclass
 from utils.files_utils import find_files_by_mask, read_archive_file
 from utils.logger import logger_setup
@@ -41,6 +45,21 @@ class Hostlib:
         line_dao = LineDao(session=self.session)
         _calc_cache: dict[int, int] = {}          # address → gas_volume_calc_id
         _line_cache: dict[tuple, int] = {}         # (calc_id, line_num) → line_id
+
+        # Pre-load all known GVC and Line records for this lumg in 2 queries
+        gvc_result = await self.session.execute(
+            select(GasVolumeCalc).where(GasVolumeCalc.lumg_id == self.lumg_id)
+        )
+        for gvc in gvc_result.scalars().all():
+            _calc_cache[gvc.address] = gvc.id
+
+        if _calc_cache:
+            line_result = await self.session.execute(
+                select(LineModel).where(LineModel.gas_volume_calc_id.in_(_calc_cache.values()))
+            )
+            for ln in line_result.scalars().all():
+                _line_cache[(ln.gas_volume_calc_id, ln.line)] = ln.id
+
         for file in files:
             flow_params = self.get_params_from_file_name(file)
             address = flow_params["address"]

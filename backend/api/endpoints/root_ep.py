@@ -10,7 +10,7 @@ from backend.hl_engine.hostlib_updater import HostlibUpdater
 from utils.logger import logger_setup
 
 # Shared job state — single update at a time
-_job: dict = {"status": "idle", "started_at": None, "finished_at": None, "error": None}
+_job: dict = {"status": "idle", "started_at": None, "finished_at": None, "error": None, "lumg_id": None, "lumgs": {}}
 
 
 class RootRouter:
@@ -58,9 +58,10 @@ class RootRouter:
         _job["started_at"] = datetime.now().isoformat()
         _job["finished_at"] = None
         _job["error"] = None
+        _job["lumgs"] = {}
         try:
             async with async_session_factory() as session:
-                await update_hostlibs(session=session)
+                await update_hostlibs(session=session, progress=_job["lumgs"])
             _job["status"] = "done"
         except Exception as e:
             self.logger.error(f"Background update_hostlibs error: {e}", exc_info=True)
@@ -83,23 +84,35 @@ class RootRouter:
     async def update_status(self):
         return _job
 
-    async def update_data_for_lumg(self, lumg_id: int):
+    async def _run_update_lumg(self, lumg_id: int):
+        global _job
+        _job["started_at"] = datetime.now().isoformat()
+        _job["finished_at"] = None
+        _job["error"] = None
+        _job["lumg_id"] = lumg_id
+        _job["lumgs"] = {}
+        try:
+            async with async_session_factory() as session:
+                await update_hostlibs(session=session, lumg_id=lumg_id, progress=_job["lumgs"])
+            _job["status"] = "done"
+        except Exception as e:
+            self.logger.error(f"Background update_hostlibs error for lumg {lumg_id}: {e}", exc_info=True)
+            _job["status"] = "error"
+            _job["error"] = str(e)
+        finally:
+            _job["finished_at"] = datetime.now().isoformat()
+            _job["lumg_id"] = None
+
+    async def update_data_for_lumg(self, lumg_id: int, background_tasks: BackgroundTasks):
         global _job
         if _job["status"] == "running":
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Update is already in progress. Please try again later.",
             )
-        async with async_session_factory() as session:
-            try:
-                await update_hostlibs(session=session, lumg_id=lumg_id)
-                return {"message": f"Updated lumg {lumg_id}", "last_updated": datetime.now().isoformat()}
-            except Exception as e:
-                self.logger.error(
-                    f"Unexpected error occurred while update_hostlibs for lumg {lumg_id}: {e}",
-                    exc_info=True,
-                )
-                raise HTTPException(status_code=500, detail=str(e))
+        _job["status"] = "running"
+        background_tasks.add_task(self._run_update_lumg, lumg_id)
+        return {"message": f"Update started for lumg {lumg_id}", "status": "running", "started_at": datetime.now().isoformat()}
 
     async def get_report(self):
         """Get gas volume report for the last 24 hours without updating hostlibs"""

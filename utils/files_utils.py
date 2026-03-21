@@ -1,7 +1,9 @@
+import asyncio
 import glob
 import os
 import shutil
 import struct
+import uuid
 import zipfile
 from dataclasses import asdict
 
@@ -10,7 +12,11 @@ class UnzipUtils:
 
     def __init__(self, path: str):
         self.path = path
-        self.temp_path = os.path.join(os.getcwd(), "hostlibs/__temp_unpacked__")
+        # Unique per-instance temp dir to avoid collisions when multiple LUMGs
+        # are processed concurrently (each gets its own isolated temp directory).
+        self.temp_path = os.path.join(
+            os.getcwd(), "hostlibs", f"__temp_{uuid.uuid4().hex}__"
+        )
 
     def __enter__(self):
         self.unzip_files()
@@ -18,6 +24,14 @@ class UnzipUtils:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.delete_unzip_folder()
+        return False
+
+    async def __aenter__(self):
+        await asyncio.to_thread(self.unzip_files)
+        return self
+
+    async def __aexit__(self, *args):
+        await asyncio.to_thread(self.delete_unzip_folder)
         return False
 
     def unzip_files(self):

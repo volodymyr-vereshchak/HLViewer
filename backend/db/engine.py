@@ -15,17 +15,35 @@ class DbEngine:
             f"@{self.db_host}:{self.db_port}/{self.db_name}"
         )
 
+        # Frontend / API pool — reserved for user-facing requests
         self.engine = create_async_engine(
             self.postgres_url,
             echo=False,
-            pool_size=30,
-            max_overflow=60,
+            pool_size=20,
+            max_overflow=10,
             pool_timeout=30,
             pool_recycle=1800,
+            connect_args={"server_settings": {"application_name": "hlviewer_api"}},
         )
         self.async_session_factory = async_sessionmaker(
             self.engine, expire_on_commit=False
         )
 
+        # Update pool — dedicated for hostlib workers, capped so it never starves the API
+        self.update_engine = create_async_engine(
+            self.postgres_url,
+            echo=False,
+            pool_size=8,
+            max_overflow=2,
+            pool_timeout=60,
+            pool_recycle=1800,
+            connect_args={"server_settings": {"application_name": "hlviewer_update"}},
+        )
+        self.update_session_factory = async_sessionmaker(
+            self.update_engine, expire_on_commit=False
+        )
 
-async_session_factory = DbEngine().async_session_factory
+
+_db = DbEngine()
+async_session_factory = _db.async_session_factory
+update_session_factory = _db.update_session_factory

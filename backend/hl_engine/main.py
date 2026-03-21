@@ -12,7 +12,7 @@ from backend.db.dao.edit_archive_dao import EditArchiveDao
 from backend.db.dao.hourly_archive_dao import HourlyArchiveDao
 from backend.db.dao.param_dao import ParamDao
 from backend.db.dao.sys_archive_dao import SysArchiveDao
-from backend.db.engine import async_session_factory
+from backend.db.engine import async_session_factory, update_session_factory
 from backend.db.models import (
     DAILY_ARCHIVE_CONSTRAINT,
     HOURLY_ARCHIVE_CONSTRAINT,
@@ -45,7 +45,7 @@ async def update_worker(
     await update_archive(archives_gen, archive_dao, constraint, session)
 
 
-async def update_hostlibs(session: AsyncSession, lumg_id: int | None = None):
+async def update_hostlibs(session: AsyncSession, lumg_id: int | None = None, progress: dict | None = None):
     query = select(LumgDataPath).where(LumgDataPath.active == True)
     if lumg_id is not None:
         query = query.where(LumgDataPath.lumg_id == lumg_id)
@@ -62,6 +62,10 @@ async def update_hostlibs(session: AsyncSession, lumg_id: int | None = None):
         logger.warning("No active LumgDataPath found in DB and no HOSTLIB_PATH env var set")
         return
 
+    if progress is not None:
+        for lp in lumg_paths:
+            progress[lp.lumg_id] = "pending"
+
     chunk_size = backend_settings.get("CHUNK_SIZE")
     workers = [
         (DailyEngine, DailyArchiveDao, DAILY_ARCHIVE_CONSTRAINT),
@@ -71,22 +75,30 @@ async def update_hostlibs(session: AsyncSession, lumg_id: int | None = None):
         (ParamEngine, ParamDao, PARAM_CONSTRAINT),
     ]
 
-    async def _process_lumg(lumg_path):
-        if not os.path.exists(lumg_path.path):
-            logger.error(f"Hostlib path does not exist: {lumg_path.path!r} — skipping lumg_id={lumg_path.lumg_id}")
-            return
-        try:
-            with UnzipUtils(lumg_path.path) as unzip_utils:
-                async def _run_worker(engine, path, archive_dao, constraint, chunk_size, lumg_id):
-                    async with async_session_factory() as worker_session:
-                        await update_worker(engine, path, archive_dao, constraint, chunk_size, worker_session, lumg_id)
+    _sem = asyncio.Semaphore(6)
 
-                await asyncio.gather(*[
-                    _run_worker(engine, unzip_utils.temp_path, archive_dao, constraint, chunk_size, lumg_path.lumg_id)
-                    for engine, archive_dao, constraint in workers
-                ])
-        except Exception as e:
-            logger.error(f"Error updating lumg_id={lumg_path.lumg_id}: {e}", exc_info=True)
+    async def _process_lumg(lumg_path):
+        if progress is not None:
+            progress[lumg_path.lumg_id] = "queued"
+        async with _sem:
+            if progress is not None:
+                progress[lumg_path.lumg_id] = "running"
+            if not os.path.exists(lumg_path.path):
+                logger.error(f"Hostlib path does not exist: {lumg_path.path!r} — skipping lumg_id={lumg_path.lumg_id}")
+                if progress is not None:
+                    progress[lumg_path.lumg_id] = "error"
+                return
+            try:
+                async with UnzipUtils(lumg_path.path) as unzip_utils:
+                    for engine, archive_dao, constraint in workers:
+                        async with update_session_factory() as worker_session:
+                            await update_worker(engine, unzip_utils.temp_path, archive_dao, constraint, chunk_size, worker_session, lumg_path.lumg_id)
+                if progress is not None:
+                    progress[lumg_path.lumg_id] = "done"
+            except Exception as e:
+                logger.error(f"Error updating lumg_id={lumg_path.lumg_id}: {e}", exc_info=True)
+                if progress is not None:
+                    progress[lumg_path.lumg_id] = "error"
 
     await asyncio.gather(*[_process_lumg(p) for p in lumg_paths])
 
