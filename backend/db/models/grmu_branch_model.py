@@ -171,8 +171,6 @@ class VirtualLineBase(HlBaseModel):
     name: str = Field(max_length=255)
     description: Optional[str] = None
     active: bool = Field(default=True)
-    include_in_report: bool = Field(default=False)
-    is_high_pressure: bool = Field(default=False)
 
 
 class VirtualLine(VirtualLineBase, table=True):
@@ -181,7 +179,6 @@ class VirtualLine(VirtualLineBase, table=True):
         UniqueConstraint("branch_id", "name", name="uq_virtual_line_branch_name"),
         Index("idx_virtual_line_branch", "branch_id"),
         Index("idx_virtual_line_active", "active"),
-        Index("idx_virtual_line_include_in_report", "include_in_report"),
     )
 
     id: int | None = Field(default=None, primary_key=True)
