@@ -71,19 +71,24 @@ async def update_hostlibs(session: AsyncSession, lumg_id: int | None = None):
         (ParamEngine, ParamDao, PARAM_CONSTRAINT),
     ]
 
-    for lumg_path in lumg_paths:
+    async def _process_lumg(lumg_path):
         if not os.path.exists(lumg_path.path):
-            logger.error(f"Hostlib path does not exist: {lumg_path.path!r}")
-            raise FileNotFoundError(f"Hostlib path not found: {lumg_path.path!r}")
-        with UnzipUtils(lumg_path.path) as unzip_utils:
-            async def _run_worker(engine, path, archive_dao, constraint, chunk_size, lumg_id):
-                async with async_session_factory() as worker_session:
-                    await update_worker(engine, path, archive_dao, constraint, chunk_size, worker_session, lumg_id)
+            logger.error(f"Hostlib path does not exist: {lumg_path.path!r} — skipping lumg_id={lumg_path.lumg_id}")
+            return
+        try:
+            with UnzipUtils(lumg_path.path) as unzip_utils:
+                async def _run_worker(engine, path, archive_dao, constraint, chunk_size, lumg_id):
+                    async with async_session_factory() as worker_session:
+                        await update_worker(engine, path, archive_dao, constraint, chunk_size, worker_session, lumg_id)
 
-            await asyncio.gather(*[
-                _run_worker(engine, unzip_utils.temp_path, archive_dao, constraint, chunk_size, lumg_path.lumg_id)
-                for engine, archive_dao, constraint in workers
-            ])
+                await asyncio.gather(*[
+                    _run_worker(engine, unzip_utils.temp_path, archive_dao, constraint, chunk_size, lumg_path.lumg_id)
+                    for engine, archive_dao, constraint in workers
+                ])
+        except Exception as e:
+            logger.error(f"Error updating lumg_id={lumg_path.lumg_id}: {e}", exc_info=True)
+
+    await asyncio.gather(*[_process_lumg(p) for p in lumg_paths])
 
 
 if __name__ == "__main__":
