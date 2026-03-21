@@ -7,7 +7,7 @@ The new format uses:
   - Лінія      → name from `gas_volume_line` table
   - All other columns remain the same
 
-Output: backend/data/enterprise_import.xlsx
+Output: backend/data/enterprises/ZP/enterprise_import.xlsx
 
 Usage:
     python -m backend.db.preload_db.export_enterprise_to_new_excel
@@ -31,7 +31,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 OUTPUT_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "..", "data", "enterprise_import.xlsx"
+    os.path.dirname(__file__), "..", "..", "data", "enterprises", "ZP", "enterprise_import.xlsx"
 )
 
 _COLUMNS  = ["Підприємство", "Серійний номер", "Виробник", "Модель коректора",
