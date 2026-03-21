@@ -1,3 +1,5 @@
+import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -24,6 +26,12 @@ from backend.api.endpoints import (
 )
 from backend.api.endpoints import gas_volume_calc_type_ep, day_archive_ep
 from backend.telegram_notifier.telegram_norifier import TelegramBot
+from backend.db.engine import async_session_factory
+from backend.db.models.app_user_model import AppUser
+from backend.api.endpoints.auth_ep import hash_password
+from sqlmodel import select
+
+logger = logging.getLogger(__name__)
 
 tags_metadata = [
     {
@@ -85,8 +93,29 @@ tags_metadata = [
 ]
 
 
+async def _seed_admin():
+    """Create initial admin user from env vars if no users exist."""
+    username = os.getenv("ADMIN_USERNAME", "admin")
+    password = os.getenv("ADMIN_PASSWORD")
+    if not password:
+        return
+    async with async_session_factory() as session:
+        result = await session.execute(select(AppUser).where(AppUser.username == username))
+        if result.scalar_one_or_none() is None:
+            user = AppUser(
+                username=username,
+                role="admin",
+                active=True,
+                password_hash=hash_password(password),
+            )
+            session.add(user)
+            await session.commit()
+            logger.info("Seeded initial admin user: %s", username)
+
+
 @asynccontextmanager
 async def lifespan(application: FastAPI):
+    await _seed_admin()
     yield
 
 

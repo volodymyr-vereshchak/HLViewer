@@ -1,11 +1,12 @@
-from fastapi import APIRouter, status, HTTPException
+from fastapi import APIRouter, Depends, status, HTTPException
 from sqlmodel import select
 
+from backend.api.endpoints.auth_ep import get_branch_filter
 from backend.db.dao.custom_exceptions import DatabaseIntegrityError
 from backend.db.dao.lumg_dao import LumgDao
 from backend.db.engine import DbEngine, async_session_factory
 from backend.db.models import LumgCreate, LumgList
-from backend.db.models.lumg_model import LumgUpdate, LumgDataPath, LumgDataPathRead, LumgDataPathUpsert
+from backend.db.models.lumg_model import Lumg, LumgUpdate, LumgDataPath, LumgDataPathRead, LumgDataPathUpsert
 
 
 class LumgRouter:
@@ -66,9 +67,15 @@ class LumgRouter:
             status_code=status.HTTP_204_NO_CONTENT,
         )
 
-    async def get_lumgs(self):
+    async def get_lumgs(self, branch_ids: list[int] | None = Depends(get_branch_filter)):
         async with async_session_factory() as session:
-            lumgs = await LumgDao(session=session).get_all()
+            if branch_ids is None:
+                lumgs = await LumgDao(session=session).get_all()
+            else:
+                result = await session.execute(
+                    select(Lumg).where(Lumg.branch_id.in_(branch_ids))
+                )
+                lumgs = result.scalars().all()
         return lumgs
 
     async def create_lumg(self, lumg: LumgCreate):

@@ -71,5 +71,8 @@ class LineCreate(LineBase):
 
 
 class LineUpdate(LineBase):
-    meter: bool | None
-    name: str | None
+    line: int | None = None
+    meter: bool | None = None
+    name: str | None = None
+    include_in_report: bool | None = None
+    is_high_pressure: bool | None = None

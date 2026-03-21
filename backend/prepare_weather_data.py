@@ -15,7 +15,7 @@ import pytz
 from meteostat import daily, hourly
 
 STATION_ID = "34601"
-START = datetime(2024, 12, 31)  # Extended to get complete first contractual day
+START = datetime(2024, 9, 30)  # Extended to cover profile data from 01.10.2024
 END = datetime(2026, 2, 1)      # Extended to get complete last contractual day
 
 DATA_DIR = Path(__file__).parent / "data"

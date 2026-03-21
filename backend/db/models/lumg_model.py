@@ -7,7 +7,7 @@ from .base_model import HlBaseModel
 
 if TYPE_CHECKING:
     from .gas_volume_calc_model import GasVolumeCalc
-    from .grmu_branch_model import GrmuBranch
+    from .grmu_branch_model import GrmuBranch, VirtualLine
 
 
 class LumgBase(HlBaseModel):
@@ -35,6 +35,7 @@ class Lumg(LumgBase, table=True):
         back_populates="lumg", cascade_delete=True
     )
     data_path: Optional["LumgDataPath"] = Relationship(back_populates="lumg")
+    virtual_lines: list["VirtualLine"] = Relationship(back_populates="lumg")
 
 
 class LumgList(LumgBase):

@@ -6,7 +6,7 @@ from .base_model import HlBaseModel
 
 
 class AppUserBase(HlBaseModel):
-    windows_username: str = Field(max_length=255)
+    username: str = Field(max_length=255)
     display_name: Optional[str] = Field(default=None, max_length=255)
     role: str = Field(default="viewer", max_length=32)
     active: bool = Field(default=True)
@@ -15,12 +15,13 @@ class AppUserBase(HlBaseModel):
 class AppUser(AppUserBase, table=True):
     __tablename__ = "app_user"
     __table_args__ = (
-        UniqueConstraint("windows_username", name="uq_app_user_username"),
-        Index("idx_app_user_username", "windows_username"),
+        UniqueConstraint("username", name="uq_app_user_username"),
+        Index("idx_app_user_username", "username"),
         Index("idx_app_user_role", "role"),
         Index("idx_app_user_active", "active"),
     )
     id: Optional[int] = Field(default=None, primary_key=True)
+    password_hash: Optional[str] = Field(default=None, max_length=255)
     branch_access: List["AppUserBranchAccess"] = Relationship(back_populates="user")
 
 

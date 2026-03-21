@@ -1,5 +1,7 @@
-from fastapi import APIRouter, status, HTTPException
+from fastapi import APIRouter, Depends, status, HTTPException
+from sqlmodel import select
 
+from backend.api.endpoints.auth_ep import get_branch_filter
 from backend.db.dao.custom_exceptions import DatabaseIntegrityError
 from backend.db.dao.gas_volume_calc_dao import GasVolumeCalcDao
 from backend.db.dao.gas_volume_calc_type_dao import GasVolumeCalcTypeDao
@@ -12,7 +14,9 @@ from backend.db.models import (
     LineCreate,
     LineUpdate,
 )
-from backend.db.models.gas_volume_calc_model import GasVolumeCalcUpdate
+from backend.db.models.gas_volume_calc_model import GasVolumeCalc, GasVolumeCalcUpdate
+from backend.db.models.line_model import Line
+from backend.db.models.lumg_model import Lumg
 
 
 class LineRouter:
@@ -59,14 +63,28 @@ class LineRouter:
             status_code=status.HTTP_204_NO_CONTENT,
         )
 
-    async def get_lines(self, lumg_id: int = None):
+    async def get_lines(
+        self,
+        lumg_id: int = None,
+        branch_ids: list[int] | None = Depends(get_branch_filter),
+    ):
+        if branch_ids is None and lumg_id is None:
+            async with async_session_factory() as session:
+                lines = await LineDao(session=session).get_all()
+            return lines
+
         async with async_session_factory() as session:
-            dao = LineDao(session=session)
-            if lumg_id is None:
-                lines = await dao.get_all()
-            else:
-                lines = await dao.get_line_by_lumg_id(lumg_id)
-        return lines
+            stmt = (
+                select(Line)
+                .join(GasVolumeCalc, Line.gas_volume_calc_id == GasVolumeCalc.id)
+                .join(Lumg, GasVolumeCalc.lumg_id == Lumg.id)
+            )
+            if lumg_id is not None:
+                stmt = stmt.where(GasVolumeCalc.lumg_id == lumg_id)
+            if branch_ids is not None:
+                stmt = stmt.where(Lumg.branch_id.in_(branch_ids))
+            result = await session.execute(stmt)
+            return result.scalars().all()
 
     async def get_line_by_id(self, line_id: int):
         async with async_session_factory() as session:
