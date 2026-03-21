@@ -103,77 +103,77 @@
     {
       "appliance_group": "ОП,ПГ,ВПГ",
       "month": 5,
-      "summer_mean": 32.950318648947224
+      "summer_mean": 23.87
     },
     {
       "appliance_group": "ОП,ПГ,ВПГ",
       "month": 6,
-      "summer_mean": 20.240221649131712
+      "summer_mean": 16.2
     },
     {
       "appliance_group": "ОП,ПГ,ВПГ",
       "month": 7,
-      "summer_mean": 18.060479346302408
+      "summer_mean": 14.17
     },
     {
       "appliance_group": "ОП,ПГ,ВПГ",
       "month": 8,
-      "summer_mean": 18.447641928358312
+      "summer_mean": 14.81
     },
     {
       "appliance_group": "ОП,ПГ,ВПГ",
       "month": 9,
-      "summer_mean": 22.691987526298227
+      "summer_mean": 18.275000000000002
     },
     {
       "appliance_group": "ОП,ПГ",
       "month": 5,
-      "summer_mean": 19.7300386784492
+      "summer_mean": 11.686785714285714
     },
     {
       "appliance_group": "ОП,ПГ",
       "month": 6,
-      "summer_mean": 10.506314029848149
+      "summer_mean": 8.0
     },
     {
       "appliance_group": "ОП,ПГ",
       "month": 7,
-      "summer_mean": 10.331507188169054
+      "summer_mean": 7.68
     },
     {
       "appliance_group": "ОП,ПГ",
       "month": 8,
-      "summer_mean": 10.90144475708113
+      "summer_mean": 8.74
     },
     {
       "appliance_group": "ОП,ПГ",
       "month": 9,
-      "summer_mean": 13.232416971023646
+      "summer_mean": 9.985862068965517
     },
     {
       "appliance_group": "ОП,ВПГ",
       "month": 5,
-      "summer_mean": 83.75874676501036
+      "summer_mean": 72.07375
     },
     {
       "appliance_group": "ОП,ВПГ",
       "month": 6,
-      "summer_mean": 39.098333333333336
+      "summer_mean": 41.325
     },
     {
       "appliance_group": "ОП,ВПГ",
       "month": 7,
-      "summer_mean": 33.582857142857144
+      "summer_mean": 29.42
     },
     {
       "appliance_group": "ОП,ВПГ",
       "month": 8,
-      "summer_mean": 33.1927950310559
+      "summer_mean": 29.18
     },
     {
       "appliance_group": "ОП,ВПГ",
       "month": 9,
-      "summer_mean": 49.10977011494253
+      "summer_mean": 54.285
     }
   ],
   "op_profiles": [
@@ -312,7 +312,7 @@
       "season": "summer",
       "coef_area_per_month": 0.0,
       "coef_residents_per_month": 0.0,
-      "r2": -0.0,
+      "r2": -0.1151,
       "pg_per_person_month": 0.0,
       "vpg_per_person_month": 0.0,
       "op_per_person_month": 0.0,
@@ -320,7 +320,7 @@
       "median_residents": 3.0,
       "median_consumption": 11.7,
       "mean_consumption": 19.7,
-      "summer_mean": 19.73
+      "summer_mean": 11.61
     },
     {
       "appliance_group": "ОП,ПГ",
@@ -331,7 +331,7 @@
       "season": "summer",
       "coef_area_per_month": 0.0,
       "coef_residents_per_month": 0.0,
-      "r2": -0.0,
+      "r2": -0.0899,
       "pg_per_person_month": 0.0,
       "vpg_per_person_month": 0.0,
       "op_per_person_month": 0.0,
@@ -339,7 +339,7 @@
       "median_residents": 3.0,
       "median_consumption": 8.0,
       "mean_consumption": 10.5,
-      "summer_mean": 10.51
+      "summer_mean": 8.0
     },
     {
       "appliance_group": "ОП,ПГ",
@@ -350,7 +350,7 @@
       "season": "summer",
       "coef_area_per_month": 0.0,
       "coef_residents_per_month": 0.0,
-      "r2": -0.0,
+      "r2": -0.1242,
       "pg_per_person_month": 0.0,
       "vpg_per_person_month": 0.0,
       "op_per_person_month": 0.0,
@@ -358,7 +358,7 @@
       "median_residents": 3.0,
       "median_consumption": 7.8,
       "mean_consumption": 10.4,
-      "summer_mean": 10.33
+      "summer_mean": 7.68
     },
     {
       "appliance_group": "ОП,ПГ",
@@ -369,7 +369,7 @@
       "season": "summer",
       "coef_area_per_month": 0.0,
       "coef_residents_per_month": 0.0,
-      "r2": -0.0,
+      "r2": -0.0796,
       "pg_per_person_month": 0.0,
       "vpg_per_person_month": 0.0,
       "op_per_person_month": 0.0,
@@ -377,7 +377,7 @@
       "median_residents": 3.0,
       "median_consumption": 8.8,
       "mean_consumption": 10.9,
-      "summer_mean": 10.9
+      "summer_mean": 8.74
     },
     {
       "appliance_group": "ОП,ПГ",
@@ -388,7 +388,7 @@
       "season": "summer",
       "coef_area_per_month": 0.0,
       "coef_residents_per_month": 0.0,
-      "r2": -0.0001,
+      "r2": -0.094,
       "pg_per_person_month": 0.0,
       "vpg_per_person_month": 0.0,
       "op_per_person_month": 0.0,
@@ -396,7 +396,7 @@
       "median_residents": 3.0,
       "median_consumption": 10.0,
       "mean_consumption": 13.3,
-      "summer_mean": 13.23
+      "summer_mean": 9.99
     },
     {
       "appliance_group": "ОП,ПГ",
@@ -605,7 +605,7 @@
       "season": "summer",
       "coef_area_per_month": 0.0,
       "coef_residents_per_month": 0.0,
-      "r2": -0.0,
+      "r2": -0.099,
       "pg_per_person_month": 0.0,
       "vpg_per_person_month": 0.0,
       "op_per_person_month": 0.0,
@@ -613,7 +613,7 @@
       "median_residents": 3.0,
       "median_consumption": 23.9,
       "mean_consumption": 32.8,
-      "summer_mean": 32.95
+      "summer_mean": 23.55
     },
     {
       "appliance_group": "ОП,ПГ,ВПГ",
@@ -624,7 +624,7 @@
       "season": "summer",
       "coef_area_per_month": 0.0,
       "coef_residents_per_month": 0.0,
-      "r2": -0.0001,
+      "r2": -0.055,
       "pg_per_person_month": 0.0,
       "vpg_per_person_month": 0.0,
       "op_per_person_month": 0.0,
@@ -632,7 +632,7 @@
       "median_residents": 3.0,
       "median_consumption": 16.2,
       "mean_consumption": 20.1,
-      "summer_mean": 20.24
+      "summer_mean": 16.2
     },
     {
       "appliance_group": "ОП,ПГ,ВПГ",
@@ -643,7 +643,7 @@
       "season": "summer",
       "coef_area_per_month": 0.0,
       "coef_residents_per_month": 0.0,
-      "r2": -0.0,
+      "r2": -0.0673,
       "pg_per_person_month": 0.0,
       "vpg_per_person_month": 0.0,
       "op_per_person_month": 0.0,
@@ -651,7 +651,7 @@
       "median_residents": 3.0,
       "median_consumption": 14.1,
       "mean_consumption": 18.0,
-      "summer_mean": 18.06
+      "summer_mean": 14.17
     },
     {
       "appliance_group": "ОП,ПГ,ВПГ",
@@ -662,7 +662,7 @@
       "season": "summer",
       "coef_area_per_month": 0.0,
       "coef_residents_per_month": 0.0,
-      "r2": -0.0,
+      "r2": -0.0623,
       "pg_per_person_month": 0.0,
       "vpg_per_person_month": 0.0,
       "op_per_person_month": 0.0,
@@ -670,7 +670,7 @@
       "median_residents": 3.0,
       "median_consumption": 14.8,
       "mean_consumption": 18.4,
-      "summer_mean": 18.45
+      "summer_mean": 14.81
     },
     {
       "appliance_group": "ОП,ПГ,ВПГ",
@@ -681,7 +681,7 @@
       "season": "summer",
       "coef_area_per_month": 0.0,
       "coef_residents_per_month": 0.0,
-      "r2": -0.0001,
+      "r2": -0.055,
       "pg_per_person_month": 0.0,
       "vpg_per_person_month": 0.0,
       "op_per_person_month": 0.0,
@@ -689,7 +689,7 @@
       "median_residents": 3.0,
       "median_consumption": 18.3,
       "mean_consumption": 22.5,
-      "summer_mean": 22.69
+      "summer_mean": 18.28
     },
     {
       "appliance_group": "ОП,ПГ,ВПГ",

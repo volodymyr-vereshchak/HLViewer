@@ -272,7 +272,7 @@ print(f"  По месяцам: {pgvpg_means.round(2).to_dict()}")
 
 # --- Летние средние для ОП-групп (свои, не из чистых) ---
 # Летом ОП не топят -> их летнее потребление = ПГ+ВПГ, но СВОЕ (не из чистых групп)
-summer_op_means = {}  # (appliance_group, month) -> mean
+summer_op_means = {}  # (appliance_group, month) -> median
 for grp in monthly[monthly['has_OP']]['appliance_group'].unique():
     grp_summer = monthly[
         (monthly['appliance_group'] == grp) & ~monthly['is_heating']
@@ -281,11 +281,41 @@ for grp in monthly[monthly['has_OP']]['appliance_group'].unique():
         continue
     for m in grp_summer['month_num'].unique():
         md = grp_summer[grp_summer['month_num'] == m]
-        summer_op_means[(grp, m)] = md['consumption_norm'].mean()
+        summer_op_means[(grp, m)] = md['consumption_norm'].median()  # median стійкіша до викидів
 
-print(f"\nЛетние средние ОП-групп (свои):")
+print(f"\nЛетние медианы ОП-групп (свои):")
 for key in sorted(summer_op_means.keys()):
     print(f"  {key[0]}, мес {key[1]}: {summer_op_means[key]:.2f}")
+
+# --- Середні зимові коефіцієнти по ОП-групах (для гібриду травня) ---
+# Травень: 40% winter_pred_scaled + 60% summer_median (Модель C)
+# Scale: summer_median(grp, 5) / winter_mean(grp)
+avg_winter_coef_by_group = {}  # grp -> (coef_area, coef_res)
+scale_may_by_group = {}         # grp -> scale factor для травня
+for grp in monthly[monthly['has_OP']]['appliance_group'].unique():
+    gd = monthly[(monthly['appliance_group'] == grp) & monthly['is_heating']]
+    gd = gd.dropna(subset=['consumption_norm', 'residents'])
+    gd = gd[(gd['heated_area'] > 0) & (gd['residents'] > 0)]
+    if len(gd) < 20:
+        continue
+    # Одна регресія по всіх зимових даних
+    X_all = gd[['heated_area', 'residents']].values
+    y_all = gd['consumption_norm'].values
+    m_all = LinearRegression(fit_intercept=False)
+    m_all.fit(X_all, y_all)
+    ca = max(0.0, m_all.coef_[0])
+    cr = max(0.0, m_all.coef_[1])
+    avg_winter_coef_by_group[grp] = (ca, cr)
+    # Scale: summer_median(травень) / winter_mean
+    w_mean = gd['consumption_norm'].mean()
+    s_may_med = summer_op_means.get((grp, 5))
+    if w_mean > 0 and s_may_med is not None:
+        scale_may_by_group[grp] = s_may_med / w_mean
+
+print(f"\nСередні зимові коефіцієнти (для гібриду травня):")
+for grp, (ca, cr) in sorted(avg_winter_coef_by_group.items()):
+    sc = scale_may_by_group.get(grp, 0)
+    print(f"  {grp}: coef_area={ca:.4f}  coef_res={cr:.2f}  scale_may={sc:.4f}")
 
 # --- ПГ/ВПГ компоненты для разбивки coef_residents зимой ---
 # Нужны для информативной разбивки, используем средние из чистых групп
@@ -367,10 +397,21 @@ for grp in sorted(monthly['appliance_group'].unique()):
                 'mean_consumption': round(ym_data['consumption_norm'].mean(), 1),
             })
         else:
-            # Лето: нет отопления -> среднее из СВОЕЙ группы (не из чистых)
-            summer_mean = summer_op_means.get((grp, month_num))
-            if summer_mean is None:
-                summer_mean = ym_data['consumption_norm'].mean()
+            # Лето: нет отопления -> медиана из СВОЕЙ группы (не из чистых)
+            summer_median = summer_op_means.get((grp, month_num))
+            if summer_median is None:
+                summer_median = ym_data['consumption_norm'].median()
+
+            # Травень — гібрид: 40% зимовий predikt (scaled) + 60% літня медіана
+            if month_num == 5 and grp in avg_winter_coef_by_group:
+                ca_w, cr_w = avg_winter_coef_by_group[grp]
+                sc = scale_may_by_group.get(grp, 0)
+                med_area = ym_data['heated_area'].median()
+                med_res_v = ym_data['residents'].median()
+                winter_part = max(0.0, (ca_w * med_area + cr_w * med_res_v) * sc)
+                summer_mean = 0.4 * winter_part + 0.6 * summer_median
+            else:
+                summer_mean = summer_median
 
             y_pred_arr = np.full(len(ym_data), summer_mean)
             r2 = r2_score(ym_data['consumption_norm'], y_pred_arr) if len(ym_data) > 2 else 0
@@ -449,7 +490,26 @@ for grp in train_monthly[train_monthly['has_OP']]['appliance_group'].unique():
         (train_monthly['appliance_group'] == grp) & ~train_monthly['is_heating']
     ].dropna(subset=['consumption_norm'])
     for m in grp_s['month_num'].unique():
-        tr_summer_op_means[(grp, m)] = grp_s[grp_s['month_num'] == m]['consumption_norm'].mean()
+        tr_summer_op_means[(grp, m)] = grp_s[grp_s['month_num'] == m]['consumption_norm'].median()
+
+# --- Train: середні зимові коефіцієнти (для гібриду травня у валідації) ---
+tr_avg_winter_coef = {}  # grp -> (coef_area, coef_res)
+tr_scale_may = {}         # grp -> scale factor
+for grp in train_monthly[train_monthly['has_OP']]['appliance_group'].unique():
+    gd_w = train_monthly[(train_monthly['appliance_group'] == grp) & train_monthly['is_heating']]
+    gd_w = gd_w.dropna(subset=['consumption_norm', 'residents'])
+    gd_w = gd_w[(gd_w['heated_area'] > 0) & (gd_w['residents'] > 0)]
+    if len(gd_w) < 20:
+        continue
+    X_w = gd_w[['heated_area', 'residents']].values
+    y_w = gd_w['consumption_norm'].values
+    m_w = LinearRegression(fit_intercept=False)
+    m_w.fit(X_w, y_w)
+    tr_avg_winter_coef[grp] = (max(0.0, m_w.coef_[0]), max(0.0, m_w.coef_[1]))
+    w_mean = gd_w['consumption_norm'].mean()
+    s_may_med = tr_summer_op_means.get((grp, 5))
+    if w_mean > 0 and s_may_med is not None:
+        tr_scale_may[grp] = s_may_med / w_mean
 
 # --- Train: ОП регрессии (только отопительные месяцы) ---
 train_op_models = {}
@@ -497,9 +557,21 @@ def predict_test(row):
                     area = 50
             return max(0, coef_a * area + coef_r * res)
         else:
-            # Лето: среднее из своей ОП-группы
+            # Лето: медіана з своєї ОП-групи; травень — гібрид
             v = tr_summer_op_means.get((grp, month))
-            return v if v is not None else np.nan
+            if v is None:
+                return np.nan
+            if month == 5 and grp in tr_avg_winter_coef:
+                ca_w, cr_w = tr_avg_winter_coef[grp]
+                sc = tr_scale_may.get(grp, 0)
+                area = row['heated_area']
+                if pd.isna(area) or area <= 0:
+                    area = row.get('total_area', None)
+                    if area is None or pd.isna(area) or area <= 0:
+                        area = 50
+                winter_part = max(0.0, (ca_w * area + cr_w * res) * sc)
+                return 0.4 * winter_part + 0.6 * v
+            return v
     elif grp == 'ПГ,ВПГ':
         return tr_pgvpg_means.get(month, tr_pgvpg_global)
     elif grp == 'ПГ':
@@ -624,6 +696,25 @@ if len(summer_means_df) > 0:
     print(f"[OK] summer_op_means.csv")
 op_profiles_df.to_csv(OUTPUT_DIR / 'op_profiles.csv', index=False)
 print(f"[OK] op_profiles.csv")
+
+# 5. may_hybrid_coefs.csv — для predict_all_consumers.py
+may_hybrid_rows = []
+for grp, (ca, cr) in avg_winter_coef_by_group.items():
+    sc = scale_may_by_group.get(grp, 0.0)
+    s_med = summer_op_means.get((grp, 5), 0.0)
+    may_hybrid_rows.append({
+        'appliance_group': grp,
+        'coef_area': round(ca, 6),
+        'coef_res': round(cr, 4),
+        'scale_may': round(sc, 6),
+        'summer_median_may': round(s_med, 4),
+        'may_winter_weight': 0.4,
+        'may_summer_weight': 0.6,
+    })
+may_hybrid_df = pd.DataFrame(may_hybrid_rows)
+may_hybrid_df.to_csv(OUTPUT_DIR / 'may_hybrid_coefs.csv', index=False)
+print(f"[OK] may_hybrid_coefs.csv")
+print(may_hybrid_df.to_string(index=False))
 
 print("\n" + "=" * 80)
 print("ЗАВЕРШЕНО")

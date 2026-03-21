@@ -92,6 +92,30 @@ daily_op['date'] = pd.to_datetime(daily_op['date'])
 daily_weights = dict(zip(daily_op['date'], daily_op['norm_weight']))
 print(f"  daily_op_profile: {len(daily_weights)} дней ({daily_op['date'].min().date()} — {daily_op['date'].max().date()})")
 
+# 1d. may_hybrid_coefs.csv — коефіцієнти гібриду травня (Модель C)
+may_hybrid_coefs = {}  # grp -> (coef_area, coef_res, scale_may, summer_median, w_winter, w_summer)
+may_hybrid_path = PROFILE_DIR / 'may_hybrid_coefs.csv'
+if may_hybrid_path.exists():
+    mhc = pd.read_csv(may_hybrid_path)
+    for _, r in mhc.iterrows():
+        may_hybrid_coefs[r['appliance_group']] = (
+            r['coef_area'], r['coef_res'], r['scale_may'],
+            r['summer_median_may'], r['may_winter_weight'], r['may_summer_weight'],
+        )
+    print(f"  may_hybrid_coefs: {len(may_hybrid_coefs)} групп ({list(may_hybrid_coefs.keys())})")
+else:
+    print("  may_hybrid_coefs: файл не знайдено, травень -> тільки median")
+
+# 1e. pg_billing_multiplier.csv — персональний множник за груднем 2024 (ПГ, ВПГ, ПГ,ВПГ)
+pg_multiplier = {}  # account_id -> multiplier
+pg_mult_path = PROFILE_DIR / 'pg_billing_multiplier.csv'
+if pg_mult_path.exists():
+    pm = pd.read_csv(pg_mult_path)
+    pg_multiplier = dict(zip(pm['account_id'], pm['multiplier']))
+    print(f"  pg_multiplier: {len(pg_multiplier)} персональних множників (ПГ/ВПГ/ПГ,ВПГ)")
+else:
+    print("  pg_multiplier: файл не знайдено, ПГ/ВПГ -> груповий середній")
+
 # Подготовка: op_coefs DataFrame для merge
 op_coefs_list = []
 for (grp, yr, mo), (ca, cr) in op_coefs.items():
@@ -211,7 +235,19 @@ pgvpg_map = np.array([pgvpg_means.get(m, 20.0) for m in range(1, 13)])
 mask_pgvpg = grp_col == 'ПГ,ВПГ'
 predicted[mask_pgvpg] = pgvpg_map[month_col[mask_pgvpg] - 1]
 
-# 4. ОП-группы (летом): summer_op_means
+# 3a. Персональний множник для ПГ/ВПГ/ПГ,ВПГ на основі грудня 2024
+if pg_multiplier:
+    acc_col = consumer_months['account_id'].values
+    mask_pg_groups = mask_pg | mask_vpg | mask_pgvpg
+    if mask_pg_groups.any():
+        acc_ids = acc_col[mask_pg_groups]
+        mult_arr = np.array([pg_multiplier.get(aid, 1.0) for aid in acc_ids], dtype=np.float64)
+        predicted[mask_pg_groups] *= mult_arr
+        n_personalized = (mult_arr != 1.0).sum()
+        n_total = mask_pg_groups.sum()
+        print(f"  Персоналізовано ПГ/ВПГ/ПГ,ВПГ: {n_personalized:,} / {n_total:,} рядків")
+
+# 4. ОП-группы (летом): median(group, month); травень — гібрид per-consumer
 mask_op_summer = has_op_col & ~is_heating_col
 if mask_op_summer.any():
     for grp_name in np.unique(grp_col[mask_op_summer]):
@@ -219,10 +255,24 @@ if mask_op_summer.any():
         mask_this = mask_op_summer & (grp_col == grp_name)
         for m in range(5, 10):
             mask_m = mask_this & (month_col == m)
-            if mask_m.any():
-                key = (summer_grp, m)
-                val = summer_op_means.get(key, summer_op_means.get(('ОП,ПГ,ВПГ', m), pgvpg_means.get(m, 20.0)))
-                predicted[mask_m] = val
+            if not mask_m.any():
+                continue
+            key = (summer_grp, m)
+            val = summer_op_means.get(key, summer_op_means.get(('ОП,ПГ,ВПГ', m), pgvpg_means.get(m, 20.0)))
+
+            if m == 5 and may_hybrid_coefs:
+                # Травень: per-consumer гібрид 0.4*winter_scaled + 0.6*summer_median
+                coef_grp = OP_FALLBACK.get(grp_name, grp_name)
+                hc = may_hybrid_coefs.get(coef_grp) or may_hybrid_coefs.get(summer_grp)
+                if hc is not None:
+                    ca, cr, sc, s_med, w_w, w_s = hc
+                    areas = area_col[mask_m]
+                    ress  = res_col[mask_m]
+                    winter_part = np.maximum(0.0, (ca * areas + cr * ress) * sc)
+                    predicted[mask_m] = w_w * winter_part + w_s * s_med
+                    continue  # не перезаписуємо нижче
+
+            predicted[mask_m] = val
 
 # 5. ОП-группы (зимой): coef_area * area + coef_residents * residents
 mask_op_winter = has_op_col & is_heating_col

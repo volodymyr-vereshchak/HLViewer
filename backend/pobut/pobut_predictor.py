@@ -106,6 +106,7 @@ class PobUtPredictor:
         date_from: datetime = None,
         date_to: datetime = None,
         seasonal_ratios_file: str = None,
+        summer_op_vpg: bool = False,
     ):
         self.modem_file = modem_file
         self.subscribers_file = subscribers_file
@@ -113,6 +114,7 @@ class PobUtPredictor:
         self.date_from = date_from
         self.date_to = date_to
         self.seasonal_ratios_file = seasonal_ratios_file or DEFAULT_SR_FILE
+        self.summer_op_vpg = summer_op_vpg  # treat ОП,ПГ as ОП,ПГ,ВПГ in summer months
 
         if mode not in ('offline', 'online'):
             raise ValueError(f"mode must be 'offline' or 'online', got: {mode!r}")
@@ -120,7 +122,8 @@ class PobUtPredictor:
             raise ValueError("date_from and date_to are required for online mode")
 
         # Internal state — populated by predict()
-        self._grp_sb: dict = {}
+        self._grp_sb: dict = {}       # key: (appliance_group, consumer_type)
+        self._grp_sb_grp: dict = {}   # fallback key: appliance_group only
         self._grp_med: dict = {}
         self._hms_strat_lkp: dict = {}
         self._hms_ct_lkp: dict = {}
@@ -321,9 +324,47 @@ class PobUtPredictor:
           self._hms_strat_lkp, self._hms_ct_lkp, self._hms_grp_lkp
           self._rs_lkp
         """
-        # grp_sb: median summer (Jun/Jul/Aug) monthly consumption for OP groups
+        # Build consumer_type and is_alt maps first — used throughout this method
+        _ap_meta = self._all_pobut[['account_id', 'consumer_type', 'alternative']].copy()
+        _ap_meta['consumer_type'] = _ap_meta['consumer_type'].fillna(CT_PRIV)
+        _ap_meta['is_alt'] = _ap_meta['alternative'].notna()
+        ct_map  = _ap_meta.set_index('account_id')['consumer_type'].to_dict()
+        alt_map = _ap_meta.set_index('account_id')['is_alt'].to_dict()
+
+        # Annotate monthly_df with consumer_type for profile stratification
+        monthly_df['consumer_type'] = monthly_df['account_id'].map(ct_map).fillna(CT_PRIV)
+
+        # summer_op_vpg: reclassify private sector ОП,ПГ summer data as ОП,ПГ,ВПГ
+        # Private sector houses likely have water heaters; MKD keeps own profile.
+        if self.summer_op_vpg:
+            long_df['_ct_tmp'] = long_df['account_id'].map(ct_map).fillna(CT_PRIV)
+
+            priv_summer_pg = (
+                (long_df['appliance_group'] == 'ОП,ПГ')
+                & long_df['month'].isin(SUMMER_MONTHS)
+                & (long_df['_ct_tmp'] == CT_PRIV)
+            )
+            long_df.loc[priv_summer_pg, 'appliance_group'] = 'ОП,ПГ,ВПГ'
+
+            priv_summer_pg_m = (
+                (monthly_df['appliance_group'] == 'ОП,ПГ')
+                & monthly_df['month'].isin(SUMMER_MONTHS)
+                & (monthly_df['consumer_type'] == CT_PRIV)
+            )
+            monthly_df.loc[priv_summer_pg_m, 'appliance_group'] = 'ОП,ПГ,ВПГ'
+
+            long_df.drop(columns=['_ct_tmp'], inplace=True)
+
+        # grp_sb: median summer (Jun/Jul/Aug) by (appliance_group, consumer_type)
+        # Separates private sector from MKD — their summer baselines differ significantly.
         summer_op = monthly_df[monthly_df['month'].isin([6, 7, 8]) & monthly_df['has_OP']]
-        self._grp_sb = summer_op.groupby('appliance_group')['consumption'].median().to_dict()
+        self._grp_sb = (
+            summer_op.groupby(['appliance_group', 'consumer_type'])['consumption']
+            .median()
+            .to_dict()
+        )
+        # Group-only fallback (used when consumer_type is unknown)
+        self._grp_sb_grp = summer_op.groupby('appliance_group')['consumption'].median().to_dict()
 
         # grp_med: median monthly consumption for non-OP groups
         self._grp_med = (
@@ -339,20 +380,20 @@ class PobUtPredictor:
             for _, r in sr_df.iterrows()
         }
 
-        # Enrich long_df with consumer_type and is_alt from subscribers file
-        _ap_meta = self._all_pobut[['account_id', 'consumer_type', 'alternative']].copy()
-        _ap_meta['consumer_type'] = _ap_meta['consumer_type'].fillna(CT_PRIV)
-        _ap_meta['is_alt'] = _ap_meta['alternative'].notna()
-        ct_map  = _ap_meta.set_index('account_id')['consumer_type'].to_dict()
-        alt_map = _ap_meta.set_index('account_id')['is_alt'].to_dict()
-
+        # Enrich long_df with consumer_type and is_alt
         long_df['consumer_type'] = long_df['account_id'].map(ct_map).fillna(CT_PRIV)
         long_df['is_alt']        = long_df['account_id'].map(lambda x: alt_map.get(x, False))
 
-        # pbl (group baseline), sr (seasonal ratio), sb_day, heat_day
+        # pbl: ct-specific group baseline (falls back to group-only)
         long_df['pbl'] = long_df.apply(
-            lambda r: self._grp_sb.get(r['appliance_group'], 1.0) if r['has_OP']
-                      else self._grp_med.get(r['appliance_group'], 1.0),
+            lambda r: (
+                self._grp_sb.get(
+                    (r['appliance_group'], r['consumer_type']),
+                    self._grp_sb_grp.get(r['appliance_group'], 1.0),
+                )
+                if r['has_OP']
+                else self._grp_med.get(r['appliance_group'], 1.0)
+            ),
             axis=1,
         )
         long_df['sr'] = long_df.apply(
@@ -415,7 +456,7 @@ class PobUtPredictor:
             & (long_df['pbl'] > 0)
         ]
         rate_daily = (
-            ref_nonheat.groupby(['appliance_group', 'date'])
+            ref_nonheat.groupby(['appliance_group', 'consumer_type', 'date'])
             .apply(
                 lambda g: pd.Series({
                     'rate': g['consumption'].sum() / g['pbl'].sum(),
@@ -429,13 +470,13 @@ class PobUtPredictor:
         rate_daily['year']  = rate_daily['date'].dt.year
         rate_daily['month'] = rate_daily['date'].dt.month
         rate_sum = (
-            rate_daily.groupby(['appliance_group', 'year', 'month'])['rate']
+            rate_daily.groupby(['appliance_group', 'consumer_type', 'year', 'month'])['rate']
             .sum()
             .reset_index()
             .rename(columns={'rate': 'rate_sum'})
         )
         self._rs_lkp = rate_sum.set_index(
-            ['appliance_group', 'year', 'month']
+            ['appliance_group', 'consumer_type', 'year', 'month']
         )['rate_sum'].to_dict()
 
         logger.info(
@@ -476,10 +517,16 @@ class PobUtPredictor:
             non_modem['heated_area'] > 0, 55.0
         )
 
-        # Group baseline — same as modem group medians, with fallbacks
+        # Group baseline — ct-specific with fallback to group-only
         non_modem['pbl'] = non_modem.apply(
             lambda r: (
-                self._grp_sb.get(r['appliance_group'], self._grp_sb.get('ОП,ПГ', 10.0))
+                self._grp_sb.get(
+                    (r['appliance_group'], r['consumer_type']),
+                    self._grp_sb_grp.get(
+                        r['appliance_group'],
+                        self._grp_sb.get(('ОП,ПГ', CT_PRIV), 10.0),
+                    ),
+                )
                 if r['has_OP']
                 else self._grp_med.get(r['appliance_group'], self._grp_med.get('ПГ', 5.0))
             ),
@@ -532,10 +579,18 @@ class PobUtPredictor:
                     sr  = self.get_sr(grp, m)
                     vol = max(0.0, hms * area) + pbl * sr
                 else:
-                    rs = self.get_rs(grp, y, m)
+                    # summer_op_vpg: private sector ОП,ПГ in summer treated as ОП,ПГ,ВПГ
+                    # (private houses likely have water heaters; MKD keeps own profile)
+                    if self.summer_op_vpg and grp == 'ОП,ПГ' and not is_heat and ct == CT_PRIV:
+                        eff_grp = 'ОП,ПГ,ВПГ'
+                        eff_pbl = self._grp_sb.get('ОП,ПГ,ВПГ', pbl)
+                    else:
+                        eff_grp = grp
+                        eff_pbl = pbl
+                    rs = self.get_rs(eff_grp, y, m, ct=ct)
                     if np.isnan(rs):
                         continue
-                    vol = pbl * rs
+                    vol = eff_pbl * rs
 
                 records.append({
                     'account_id': aid,
@@ -573,13 +628,22 @@ class PobUtPredictor:
         fb = OP_FB.get(grp)
         return self._hms_grp_lkp.get((fb, y, m), np.nan) if fb else np.nan
 
-    def get_rs(self, grp: str, y: int, m: int) -> float:
-        """Monthly rate_sum for non-heating / summer OP periods."""
-        v = self._rs_lkp.get((grp, y, m))
-        if v is not None:
-            return v
+    def get_rs(self, grp: str, y: int, m: int, ct: str = None) -> float:
+        """Monthly rate_sum for non-heating / summer OP periods.
+
+        Falls back through: (grp, ct) → (grp, CT_PRIV) → fallback group.
+        """
+        for try_ct in ([ct, CT_PRIV] if ct and ct != CT_PRIV else [CT_PRIV]):
+            v = self._rs_lkp.get((grp, try_ct, y, m))
+            if v is not None:
+                return v
         fb = OP_FB.get(grp)
-        return self._rs_lkp.get((fb, y, m), np.nan) if fb else np.nan
+        if fb:
+            for try_ct in ([ct, CT_PRIV] if ct and ct != CT_PRIV else [CT_PRIV]):
+                v = self._rs_lkp.get((fb, try_ct, y, m))
+                if v is not None:
+                    return v
+        return np.nan
 
     def get_sr(self, grp: str, m: int) -> float:
         """Seasonal ratio for a group and month."""
