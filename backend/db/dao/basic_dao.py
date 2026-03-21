@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select, desc
@@ -20,6 +20,7 @@ class BasicDao:
         self,
         list_of_dict_data: list,
         list_of_constraints: list[str],
+        commit: bool = True,
     ):
         try:
             stmt = insert(self.model).values(
@@ -29,10 +30,95 @@ class BasicDao:
                 index_elements=list_of_constraints,
             )
             await self.session.execute(stmt)
-            await self.session.commit()
+            if commit:
+                await self.session.commit()
         except Exception as e:
             self.logger.error(
                 f"Unexpected error occurred while bulk upsert: {e}", exc_info=True
+            )
+            await self.session.rollback()
+            raise
+
+    async def bulk_upsert_via_copy(
+        self,
+        all_records: list,
+        list_of_constraints: list[str],
+    ):
+        """Fast bulk upsert: asyncpg COPY into temp table (no constraint checks),
+        then single INSERT...WHERE NOT EXISTS (hash join, O(n) vs O(n log m) per-row)."""
+        if not all_records:
+            return
+        try:
+            # Map Python field names → actual DB column names (handles mixed case like A0su)
+            field_to_col = {col.key: col.name for col in self.model.__table__.columns}
+            data_keys = list(all_records[0].keys())
+            data_col_names = [field_to_col.get(k, k) for k in data_keys]
+
+            # Columns NOT in data records but required (created_at, updated_at with Python defaults)
+            auto_now_cols = [
+                col.name for col in self.model.__table__.columns
+                if col.key not in data_keys
+                and not col.nullable
+                and col.name not in ("id",)
+                and col.default is not None
+            ]
+
+            main_table = self.model.__tablename__
+            temp_table = f"_tmp_{main_table}"
+
+            # Create temp table with positional aliases c0, c1, c2, ...
+            # This avoids all case-sensitivity issues (D20 vs d20, A0su, etc.)
+            # and is always safe for asyncpg COPY column list.
+            temp_aliases = [f"c{i}" for i in range(len(data_col_names))]
+            aliases = ", ".join(
+                f'"{orig}" AS c{i}' for i, orig in enumerate(data_col_names)
+            )
+            await self.session.execute(text(
+                f"CREATE TEMP TABLE {temp_table} AS "
+                f"SELECT {aliases} FROM {main_table} WHERE FALSE"
+            ))
+
+            # Get raw asyncpg connection (shares the session's transaction)
+            sa_conn = await self.session.connection()
+            raw = await sa_conn.get_raw_connection()
+            asyncpg_conn = raw.driver_connection
+
+            # COPY all records — pure binary append, zero constraint overhead
+            records = [tuple(r[k] for k in data_keys) for r in all_records]
+            await asyncpg_conn.copy_records_to_table(
+                temp_table, records=records, columns=temp_aliases
+            )
+
+            # INSERT ... WHERE NOT EXISTS — PostgreSQL can use hash join O(n)
+            # constraint_col → temp alias map for WHERE clause
+            col_to_alias = {name: f"c{i}" for i, name in enumerate(data_col_names)}
+
+            insert_cols = ", ".join(f'"{n}"' for n in data_col_names)
+            select_cols = ", ".join(f"t.c{i}" for i in range(len(data_col_names)))
+
+            if auto_now_cols:
+                auto_insert = ", " + ", ".join(f'"{n}"' for n in auto_now_cols)
+                auto_select = ", " + ", ".join("NOW()" for _ in auto_now_cols)
+            else:
+                auto_insert = auto_select = ""
+
+            where_clause = " AND ".join(
+                f's."{c}" = t.{col_to_alias[c]}' for c in list_of_constraints
+            )
+
+            await self.session.execute(text(
+                f"INSERT INTO {main_table} ({insert_cols}{auto_insert}) "
+                f"SELECT {select_cols}{auto_select} FROM {temp_table} t "
+                f"WHERE NOT EXISTS ("
+                f"  SELECT 1 FROM {main_table} s WHERE {where_clause}"
+                f")"
+            ))
+
+            await self.session.execute(text(f"DROP TABLE {temp_table}"))
+            await self.session.commit()
+        except Exception as e:
+            self.logger.error(
+                f"Unexpected error in bulk_upsert_via_copy: {e}", exc_info=True
             )
             await self.session.rollback()
             raise
@@ -132,7 +218,7 @@ class BasicDao:
         except IntegrityError as e:
             self.logger.exception(e)
             await self.session.rollback()
-            raise DatabaseIntegrityError("Create item integrity error!")
+            raise DatabaseIntegrityError(str(e.orig)) from e
         except Exception as e:
             await self.session.rollback()
             self.logger.error(f"Unexpected error occurred: {e}", exc_info=True)

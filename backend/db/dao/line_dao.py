@@ -89,3 +89,18 @@ class LineDao(BasicDao):
         statement = select(self.model).where(self.model.line == line_number)
         result = await self.session.execute(statement)
         return result.scalars().first()
+
+    async def get_by_name(self, name: str):
+        """Case-insensitive exact match on line name."""
+        from sqlalchemy import func
+        statement = select(self.model).where(
+            func.lower(self.model.name) == name.strip().lower()
+        )
+        result = await self.session.execute(statement)
+        return result.scalars().first()
+
+    async def get_all(self):
+        result = await self.session.execute(
+            select(self.model).order_by(self.model.name)
+        )
+        return result.scalars().all()

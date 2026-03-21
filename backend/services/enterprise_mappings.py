@@ -259,6 +259,29 @@ def get_devices_for_lines(line_ids: List[int]) -> List[Dict]:
     return devices
 
 
+async def get_devices_for_lines_db(line_ids: list[int], session) -> list[dict]:
+    """
+    DB-backed replacement for get_devices_for_lines().
+    Returns the same format: list of dicts with keys serNum, mfDev, typeDev, chNum, enterprise_name, line_id.
+    """
+    from backend.db.dao.enterprise_dao import EnterpriseDao
+
+    dao = EnterpriseDao(session=session)
+    enterprises = await dao.get_active_for_lines(line_ids)
+
+    return [
+        {
+            "line_id": e.line_id,
+            "serNum": e.ser_num,
+            "mfDev": e.mf_dev,
+            "typeDev": e.type_dev,
+            "chNum": e.ch_num,
+            "enterprise_name": e.enterprise_name,
+        }
+        for e in enterprises
+    ]
+
+
 def validate_mappings() -> Dict[str, any]:
     """
     Validate enterprise mappings file.

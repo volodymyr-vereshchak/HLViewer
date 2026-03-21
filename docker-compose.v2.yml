@@ -60,6 +60,27 @@ services:
       - hostlib_network_v2
     restart: always
 
+  scheduler_v2:
+    image: hlviewer-fastapi-v2
+    container_name: scheduler_app_v2
+    volumes:
+      - .:/app
+    working_dir: /app
+    env_file:
+      - .env.v2
+    environment:
+      - DB_HOST=db_v2
+      - DB_PORT=5432
+      - DATABASE_URL=postgresql+asyncpg://diakonx:assemblerwog359@db_v2:5432/hostlib_db_v2
+    depends_on:
+      - fastapi_v2
+    networks:
+      - hostlib_network_v2
+    command: >
+      sh -c "./wait_for_it.sh db_v2:5432 --
+             python -m backend.hl_engine.scheduler_runner"
+    restart: always
+
 networks:
   hostlib_network_v2:
     driver: bridge

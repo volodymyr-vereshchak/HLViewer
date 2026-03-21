@@ -61,7 +61,11 @@ class LineRouter:
 
     async def get_lines(self, lumg_id: int = None):
         async with async_session_factory() as session:
-            lines = await LineDao(session=session).get_line_by_lumg_id(lumg_id)
+            dao = LineDao(session=session)
+            if lumg_id is None:
+                lines = await dao.get_all()
+            else:
+                lines = await dao.get_line_by_lumg_id(lumg_id)
         return lines
 
     async def get_line_by_id(self, line_id: int):

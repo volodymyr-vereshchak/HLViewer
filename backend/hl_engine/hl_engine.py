@@ -39,18 +39,25 @@ class Hostlib:
         archive_dict_list = []
         gas_volume_dao = GasVolumeCalcDao(session=self.session)
         line_dao = LineDao(session=self.session)
+        _calc_cache: dict[int, int] = {}          # address → gas_volume_calc_id
+        _line_cache: dict[tuple, int] = {}         # (calc_id, line_num) → line_id
         for file in files:
             flow_params = self.get_params_from_file_name(file)
-            gas_volume_calc = await gas_volume_dao.get_or_create(
-                address=flow_params["address"], lumg_id=self.lumg_id
-            )
-            gas_volume_calc_id = gas_volume_calc.id
+            address = flow_params["address"]
+            line_num = flow_params["line"]
 
-            gas_volume_line = await line_dao.get_or_create(
-                gas_volume_calc_id, flow_params["line"]
-            )
+            if address not in _calc_cache:
+                gas_volume_calc = await gas_volume_dao.get_or_create(
+                    address=address, lumg_id=self.lumg_id
+                )
+                _calc_cache[address] = gas_volume_calc.id
+            gas_volume_calc_id = _calc_cache[address]
 
-            line_id = gas_volume_line.id
+            key = (gas_volume_calc_id, line_num)
+            if key not in _line_cache:
+                gas_volume_line = await line_dao.get_or_create(gas_volume_calc_id, line_num)
+                _line_cache[key] = gas_volume_line.id
+            line_id = _line_cache[key]
 
             read_archive_gen = read_archive_file(file, self.struct)
             while True:

@@ -1,13 +1,10 @@
-import asyncio
 from contextlib import asynccontextmanager
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from pytz import timezone
 
+from backend.api.endpoints import device_catalog_ep
 from backend.api.endpoints import (
     lumg_ep,
     root_ep,
@@ -26,7 +23,6 @@ from backend.api.endpoints import (
     auth_ep,
 )
 from backend.api.endpoints import gas_volume_calc_type_ep, day_archive_ep
-from backend.hl_engine.hostlib_updater import HostlibUpdater
 from backend.telegram_notifier.telegram_norifier import TelegramBot
 
 tags_metadata = [
@@ -91,15 +87,7 @@ tags_metadata = [
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    # # Run telegram bot
-    # bot = TelegramBot()
-    # asyncio.create_task(bot.run())
-    scheduler = AsyncIOScheduler()
-    trigger = CronTrigger(minute=30, timezone=timezone("Europe/Kyiv"))
-    scheduler.add_job(HostlibUpdater().update_and_send_notification, trigger)
-    scheduler.start()
     yield
-    # await bot.stop_bot()
 
 
 # run FastApi
@@ -142,3 +130,4 @@ app.include_router(hourly_virtual_ep.hourly_virtual_router)
 app.include_router(daily_virtual_ep.daily_virtual_router)
 app.include_router(grmu_branch_ep.grmu_branch_router)
 app.include_router(auth_ep.auth_router)
+app.include_router(device_catalog_ep.router)

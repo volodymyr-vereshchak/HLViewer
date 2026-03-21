@@ -1,7 +1,11 @@
 import asyncio
+import logging
+import os
 from types import SimpleNamespace
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
+
+logger = logging.getLogger(__name__)
 
 from backend.db.dao.daily_archive_dao import DailyArchiveDao
 from backend.db.dao.edit_archive_dao import EditArchiveDao
@@ -26,14 +30,11 @@ from backend.settings import backend_settings
 from utils.files_utils import UnzipUtils
 
 
-async def bulk_upsert_worker(archives_list, dao, constraint_list, session):
-    await dao(session=session).bulk_upsert(archives_list, constraint_list)
-
-
 async def update_archive(archive_gen, dao, constraint_list: list, session):
-
+    all_records = []
     async for archives_list in archive_gen:
-        await bulk_upsert_worker(archives_list, dao, constraint_list, session)
+        all_records.extend(archives_list)
+    await dao(session=session).bulk_upsert_via_copy(all_records, constraint_list)
 
 
 async def update_worker(
@@ -44,10 +45,11 @@ async def update_worker(
     await update_archive(archives_gen, archive_dao, constraint, session)
 
 
-async def update_hostlibs(session: AsyncSession):
-    result = await session.execute(
-        select(LumgDataPath).where(LumgDataPath.active == True)
-    )
+async def update_hostlibs(session: AsyncSession, lumg_id: int | None = None):
+    query = select(LumgDataPath).where(LumgDataPath.active == True)
+    if lumg_id is not None:
+        query = query.where(LumgDataPath.lumg_id == lumg_id)
+    result = await session.execute(query)
     lumg_paths = result.scalars().all()
 
     # Fallback to env var for backwards compatibility (if table is empty)
@@ -55,6 +57,10 @@ async def update_hostlibs(session: AsyncSession):
         env_path = backend_settings.get("HOSTLIB_PATH")
         if env_path:
             lumg_paths = [SimpleNamespace(lumg_id=1, path=env_path)]
+
+    if not lumg_paths:
+        logger.warning("No active LumgDataPath found in DB and no HOSTLIB_PATH env var set")
+        return
 
     chunk_size = backend_settings.get("CHUNK_SIZE")
     workers = [
@@ -66,17 +72,18 @@ async def update_hostlibs(session: AsyncSession):
     ]
 
     for lumg_path in lumg_paths:
+        if not os.path.exists(lumg_path.path):
+            logger.error(f"Hostlib path does not exist: {lumg_path.path!r}")
+            raise FileNotFoundError(f"Hostlib path not found: {lumg_path.path!r}")
         with UnzipUtils(lumg_path.path) as unzip_utils:
-            for engine, archive_dao, constraint in workers:
-                await update_worker(
-                    engine,
-                    unzip_utils.temp_path,
-                    archive_dao,
-                    constraint,
-                    chunk_size,
-                    session,
-                    lumg_id=lumg_path.lumg_id,
-                )
+            async def _run_worker(engine, path, archive_dao, constraint, chunk_size, lumg_id):
+                async with async_session_factory() as worker_session:
+                    await update_worker(engine, path, archive_dao, constraint, chunk_size, worker_session, lumg_id)
+
+            await asyncio.gather(*[
+                _run_worker(engine, unzip_utils.temp_path, archive_dao, constraint, chunk_size, lumg_path.lumg_id)
+                for engine, archive_dao, constraint in workers
+            ])
 
 
 if __name__ == "__main__":

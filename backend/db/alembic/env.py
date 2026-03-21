@@ -59,6 +59,18 @@ from db.models import (
     VirtualLineCreate,
     VirtualLineMember,
     VirtualLineMemberList,
+    Enterprise,
+    EnterpriseRead,
+    EnterpriseCreate,
+    EnterpriseUpdate,
+    Manufacturer,
+    ManufacturerRead,
+    ManufacturerCreate,
+    ManufacturerUpdate,
+    CorectorType,
+    CorectorTypeRead,
+    CorectorTypeCreate,
+    CorectorTypeUpdate,
 )
 
 from settings import backend_settings
