@@ -17,7 +17,7 @@ from backend.db.models.enterprise_models import (
     EnterpriseVolumeError
 )
 from backend.services.dpd_client import DPDClient
-from backend.services.enterprise_mappings import get_devices_for_lines
+from backend.services.enterprise_mappings import get_devices_for_lines, get_devices_for_lines_db
 from backend.db.engine import async_session_factory
 from backend.services.virtual_lines_config import get_active_virtual_lines_db
 
@@ -177,21 +177,13 @@ class EnterpriseVirtualRouter:
 
         logger.info(f"Resolved {len(line_id)} requested lines to {len(all_physical_ids)} physical lines")
 
-        # Load enterprise mappings for physical lines
+        # Load enterprise mappings for physical lines from DB
         try:
-            devices = get_devices_for_lines(all_physical_ids)
-        except FileNotFoundError as e:
-            logger.error(f"Enterprise mappings file not found: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=str(e)
-            )
+            async with async_session_factory() as session:
+                devices = await get_devices_for_lines_db(all_physical_ids, session)
         except Exception as e:
-            logger.error(f"Error loading enterprise mappings: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Error loading enterprise mappings: {e}"
-            )
+            logger.error(f"Error loading enterprise mappings from DB: {e}")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
         if not devices:
             logger.info(f"No enterprise mappings found for lines {all_physical_ids}")

@@ -129,14 +129,9 @@ class EnterpriseRouter:
         try:
             async with async_session_factory() as session:
                 devices = await get_devices_for_lines_db(line_id, session)
-        except Exception:
-            logger.warning("DB lookup failed, falling back to Excel mappings")
-            try:
-                devices = get_devices_for_lines(line_id)
-            except FileNotFoundError as e:
-                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-            except Exception as e:
-                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        except Exception as e:
+            logger.error(f"Error loading enterprise mappings from DB: {e}")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
         if not devices:
             logger.info(f"No enterprise mappings found for lines {line_id}")
