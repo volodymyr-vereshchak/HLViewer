@@ -18,6 +18,15 @@ class EnterpriseDao(BasicDao):
         result = await self.session.execute(stmt)
         return result.scalars().all()
 
+    async def get_by_branch_ids(self, branch_ids: list[int]) -> list[Enterprise]:
+        stmt = (
+            select(self.model)
+            .where(self.model.branch_id.in_(branch_ids))
+            .order_by(asc(self.model.line_id.is_(None)), asc(self.model.line_id), asc(self.model.enterprise_name))
+        )
+        result = await self.session.execute(stmt)
+        return result.scalars().all()
+
     async def get_by_id(self, enterprise_id: int) -> Enterprise | None:
         return await self.session.get(self.model, enterprise_id)
 

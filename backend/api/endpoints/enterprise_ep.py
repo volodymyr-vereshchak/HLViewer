@@ -11,7 +11,8 @@ import pandas as pd
 from datetime import datetime, date
 from typing import List, Optional
 from collections import defaultdict
-from fastapi import APIRouter, Query, status, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, Query, status, HTTPException, UploadFile, File
+from backend.api.endpoints.auth_ep import get_branch_filter
 from fastapi.responses import StreamingResponse
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
@@ -312,10 +313,12 @@ _crud_router = APIRouter(tags=["enterprise"])
     response_model=List[EnterpriseRead],
     summary="List all enterprises (DB)",
 )
-async def list_enterprises():
+async def list_enterprises(branch_ids: list[int] | None = Depends(get_branch_filter)):
     async with async_session_factory() as session:
         dao = EnterpriseDao(session=session)
-        return await dao.get_all()
+        if branch_ids is None:
+            return await dao.get_all()
+        return await dao.get_by_branch_ids(branch_ids)
 
 
 @_crud_router.post(
