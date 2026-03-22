@@ -11,10 +11,12 @@ from backend.db.models import (
     SYS_TYPE_CONSTRAINT,
 )
 from backend.db.models.gas_volume_calc_type_model import GAS_VOLUME_CALC_TYPE_CONSTRAINT
+from backend.db.preload_db import preload_device_catalog
 
 
 async def preload_db():
     async with async_session_factory() as session:
+        await preload_device_catalog.preload(session)
         path = "backend/db/preload_db/FLOWTYPE.json"
         with open(path, "r", encoding="utf8") as file:
             flow_type = json.load(file)["FLOWTYPE"]
