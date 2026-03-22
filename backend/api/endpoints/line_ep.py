@@ -66,14 +66,14 @@ class LineRouter:
     async def get_lines(
         self,
         lumg_id: int = None,
+        include_in_trends: bool = None,
         branch_ids: list[int] | None = Depends(get_branch_filter),
     ):
-        if branch_ids is None and lumg_id is None:
-            async with async_session_factory() as session:
-                lines = await LineDao(session=session).get_all()
-            return lines
-
         async with async_session_factory() as session:
+            if branch_ids is None and lumg_id is None and include_in_trends is None:
+                lines = await LineDao(session=session).get_all()
+                return lines
+
             stmt = (
                 select(Line)
                 .join(GasVolumeCalc, Line.gas_volume_calc_id == GasVolumeCalc.id)
@@ -83,6 +83,8 @@ class LineRouter:
                 stmt = stmt.where(GasVolumeCalc.lumg_id == lumg_id)
             if branch_ids is not None:
                 stmt = stmt.where(Lumg.branch_id.in_(branch_ids))
+            if include_in_trends is not None:
+                stmt = stmt.where(Line.include_in_trends == include_in_trends)
             result = await session.execute(stmt)
             return result.scalars().all()
 

@@ -177,10 +177,19 @@ class VirtualLinesRouter:
                 detail=f"Error validating virtual lines configuration: {str(e)}",
             )
 
-    async def get_all(self) -> List[VirtualLineList]:
+    async def get_all(
+        self,
+        include_in_trends: bool = None,
+        branch_id: int = None,
+    ) -> List[VirtualLineList]:
         """List all virtual lines with their physical line members."""
         async with async_session_factory() as session:
-            result = await session.execute(select(VirtualLine))
+            stmt = select(VirtualLine)
+            if include_in_trends is not None:
+                stmt = stmt.where(VirtualLine.include_in_trends == include_in_trends)
+            if branch_id is not None:
+                stmt = stmt.where(VirtualLine.branch_id == branch_id)
+            result = await session.execute(stmt)
             vlines = result.scalars().all()
             out = []
             for vl in vlines:

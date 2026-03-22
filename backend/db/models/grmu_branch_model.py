@@ -171,6 +171,7 @@ class VirtualLineBase(HlBaseModel):
     name: str = Field(max_length=255)
     description: Optional[str] = None
     active: bool = Field(default=True)
+    include_in_trends: bool = Field(default=False)
 
 
 class VirtualLine(VirtualLineBase, table=True):

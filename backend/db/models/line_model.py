@@ -18,6 +18,7 @@ class LineBase(HlBaseModel):
     meter: bool
     name: str = Field(max_length=255)
     include_in_report: bool = Field(default=False)
+    include_in_trends: bool = Field(default=False)
     is_high_pressure: bool = Field(default=False)
 
 
@@ -38,6 +39,7 @@ class Line(LineBase, table=True):
         # Индекс для поиска по meter
         Index("idx_line_meter", "meter"),
         Index("idx_line_include_in_report", "include_in_report"),
+        Index("idx_line_include_in_trends", "include_in_trends"),
         Index("idx_line_is_high_pressure", "is_high_pressure"),
     )
 
@@ -75,4 +77,5 @@ class LineUpdate(LineBase):
     meter: bool | None = None
     name: str | None = None
     include_in_report: bool | None = None
+    include_in_trends: bool | None = None
     is_high_pressure: bool | None = None
