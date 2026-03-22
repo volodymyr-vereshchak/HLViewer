@@ -4,14 +4,17 @@ CRUD endpoints for device manufacturers and corrector model types.
 from typing import List
 
 from fastapi import APIRouter, HTTPException, status
+from sqlmodel import select
 from backend.db.dao.custom_exceptions import DatabaseIntegrityError
 
 from backend.db.engine import async_session_factory
 from backend.db.dao.device_catalog_dao import ManufacturerDao, CorectorTypeDao
 from backend.db.models.device_catalog_model import (
+    Manufacturer, CorectorType,
     ManufacturerRead, ManufacturerCreate, ManufacturerUpdate,
     CorectorTypeRead, CorectorTypeCreate, CorectorTypeUpdate,
 )
+from backend.db.preload_db.preload_device_catalog import preload as _preload_catalog
 
 router = APIRouter(prefix="/device-catalog", tags=["device_catalog"])
 
@@ -104,3 +107,19 @@ async def delete_corector_type(item_id: int):
         ok = await CorectorTypeDao(session).delete(item_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Corector type not found")
+
+
+@router.post("/preload", status_code=status.HTTP_200_OK)
+async def preload_device_catalog(force: bool = False):
+    async with async_session_factory() as session:
+        if force:
+            # Clear existing data before reload
+            existing_types = await session.execute(select(CorectorType))
+            for ct in existing_types.scalars().all():
+                await session.delete(ct)
+            existing_mfr = await session.execute(select(Manufacturer))
+            for mfr in existing_mfr.scalars().all():
+                await session.delete(mfr)
+            await session.commit()
+        await _preload_catalog(session)
+    return {"message": "Каталог передзавантажено" if force else "Завантаження завершено (якщо дані вже були — пропущено)"}

@@ -25,6 +25,8 @@ from backend.api.endpoints import (
     auth_ep,
 )
 from backend.api.endpoints import gas_volume_calc_type_ep, day_archive_ep
+from backend.api.endpoints import sys_type_ep
+from backend.api.endpoints import edit_type_ep
 from backend.telegram_notifier.telegram_norifier import TelegramBot
 from backend.db.engine import async_session_factory
 from backend.db.models.app_user_model import AppUser
@@ -160,3 +162,5 @@ app.include_router(daily_virtual_ep.daily_virtual_router)
 app.include_router(grmu_branch_ep.grmu_branch_router)
 app.include_router(auth_ep.auth_router)
 app.include_router(device_catalog_ep.router)
+app.include_router(sys_type_ep.sys_type_router)
+app.include_router(edit_type_ep.edit_type_router)
