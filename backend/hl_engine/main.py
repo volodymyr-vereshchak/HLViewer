@@ -20,7 +20,7 @@ from backend.db.models import (
     SYS_ARCHIVE_CONSTRAINT,
     PARAM_CONSTRAINT,
 )
-from backend.db.models.lumg_model import LumgDataPath
+from backend.db.models.lumg_model import LumgDataPath, LumgEisCode
 from backend.hl_engine.daily_engine import DailyEngine
 from backend.hl_engine.edit_engine import EditEngine
 from backend.hl_engine.hourly_engine import HourlyEngine
@@ -75,6 +75,19 @@ async def update_hostlibs(session: AsyncSession, lumg_id: int | None = None, pro
         (ParamEngine, ParamDao, PARAM_CONSTRAINT),
     ]
 
+    # Load all EIS code → lumg_id mappings once
+    eis_result = await session.execute(select(LumgEisCode))
+    eis_to_lumg: dict[str, int] = {e.eis_code: e.lumg_id for e in eis_result.scalars().all()}
+
+    def _find_eis_dirs(base_path: str) -> list[tuple[str, int]]:
+        """Walk subdirs recursively, return (abs_path, lumg_id) for EIS-mapped folders."""
+        results = []
+        for root, dirs, _ in os.walk(base_path):
+            for d in dirs:
+                if d in eis_to_lumg:
+                    results.append((os.path.join(root, d), eis_to_lumg[d]))
+        return results
+
     _sem = asyncio.Semaphore(6)
 
     async def _process_lumg(lumg_path):
@@ -90,9 +103,18 @@ async def update_hostlibs(session: AsyncSession, lumg_id: int | None = None, pro
                 return
             try:
                 async with UnzipUtils(lumg_path.path) as unzip_utils:
-                    for engine, archive_dao, constraint in workers:
-                        async with update_session_factory() as worker_session:
-                            await update_worker(engine, unzip_utils.temp_path, archive_dao, constraint, chunk_size, worker_session, lumg_path.lumg_id)
+                    eis_dirs = _find_eis_dirs(unzip_utils.temp_path)
+                    if eis_dirs:
+                        # Mode 1: EIS routing — each folder → its LUMG
+                        for eis_path, resolved_lumg_id in eis_dirs:
+                            for engine, archive_dao, constraint in workers:
+                                async with update_session_factory() as worker_session:
+                                    await update_worker(engine, eis_path, archive_dao, constraint, chunk_size, worker_session, resolved_lumg_id)
+                    else:
+                        # Mode 2: direct — all files → this LUMG
+                        for engine, archive_dao, constraint in workers:
+                            async with update_session_factory() as worker_session:
+                                await update_worker(engine, unzip_utils.temp_path, archive_dao, constraint, chunk_size, worker_session, lumg_path.lumg_id)
                 if progress is not None:
                     progress[lumg_path.lumg_id] = "done"
             except Exception as e:

@@ -73,3 +73,25 @@ class LumgDataPathRead(SQLModel):
 class LumgDataPathUpsert(SQLModel):
     path: str
     active: bool = True
+
+
+class LumgEisCode(HlBaseModel, table=True):
+    __tablename__ = "lumg_eis_code"
+    __table_args__ = (
+        UniqueConstraint("eis_code", name="uq_lumg_eis_code"),
+        Index("idx_lumg_eis_code_lumg_id", "lumg_id"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    lumg_id: int = Field(foreign_key="lumg.id", ondelete="CASCADE")
+    eis_code: str = Field(max_length=100)
+
+
+class LumgEisCodeRead(SQLModel):
+    id: int
+    lumg_id: int
+    eis_code: str
+
+
+class LumgEisCodeCreate(SQLModel):
+    eis_code: str

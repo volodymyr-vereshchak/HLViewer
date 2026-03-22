@@ -73,7 +73,8 @@ def upgrade() -> None:
     op.execute("""
         SELECT setval('shared_line_id_seq', GREATEST(
             COALESCE((SELECT MAX(id) FROM gas_volume_line), 0),
-            COALESCE((SELECT MAX(id) FROM virtual_line), 0)
+            COALESCE((SELECT MAX(id) FROM virtual_line), 0),
+            1
         ))
     """)
 

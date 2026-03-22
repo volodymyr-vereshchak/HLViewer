@@ -1,3 +1,6 @@
+import logging
+import os
+
 from fastapi import APIRouter, Depends, status, HTTPException
 from sqlmodel import select
 
@@ -6,7 +9,13 @@ from backend.db.dao.custom_exceptions import DatabaseIntegrityError
 from backend.db.dao.lumg_dao import LumgDao
 from backend.db.engine import DbEngine, async_session_factory
 from backend.db.models import LumgCreate, LumgList
-from backend.db.models.lumg_model import Lumg, LumgUpdate, LumgDataPath, LumgDataPathRead, LumgDataPathUpsert
+from backend.db.models.lumg_model import (
+    Lumg, LumgUpdate, LumgDataPath, LumgDataPathRead, LumgDataPathUpsert,
+    LumgEisCode, LumgEisCodeRead, LumgEisCodeCreate,
+)
+from utils.files_utils import UnzipUtils
+
+logger = logging.getLogger(__name__)
 
 
 class LumgRouter:
@@ -65,6 +74,36 @@ class LumgRouter:
             endpoint=self.delete_data_path,
             methods=["DELETE"],
             status_code=status.HTTP_204_NO_CONTENT,
+        )
+        self.router.add_api_route(
+            path="/lumgs/{lumg_id}/eis-codes",
+            tags=["lumg"],
+            endpoint=self.get_eis_codes,
+            methods=["GET"],
+            response_model=list[LumgEisCodeRead],
+            status_code=status.HTTP_200_OK,
+        )
+        self.router.add_api_route(
+            path="/lumgs/{lumg_id}/eis-codes",
+            tags=["lumg"],
+            endpoint=self.add_eis_code,
+            methods=["POST"],
+            response_model=LumgEisCodeRead,
+            status_code=status.HTTP_201_CREATED,
+        )
+        self.router.add_api_route(
+            path="/lumgs/{lumg_id}/eis-codes/{eis_code}",
+            tags=["lumg"],
+            endpoint=self.delete_eis_code,
+            methods=["DELETE"],
+            status_code=status.HTTP_204_NO_CONTENT,
+        )
+        self.router.add_api_route(
+            path="/lumgs/{lumg_id}/scan-eis",
+            tags=["lumg"],
+            endpoint=self.scan_eis,
+            methods=["GET"],
+            status_code=status.HTTP_200_OK,
         )
 
     async def get_lumgs(self, branch_ids: list[int] | None = Depends(get_branch_filter)):
@@ -136,6 +175,62 @@ class LumgRouter:
                 raise HTTPException(status_code=404, detail="Data path not found")
             await session.delete(data_path)
             await session.commit()
+
+    async def get_eis_codes(self, lumg_id: int):
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(LumgEisCode).where(LumgEisCode.lumg_id == lumg_id)
+            )
+            return result.scalars().all()
+
+    async def add_eis_code(self, lumg_id: int, body: LumgEisCodeCreate):
+        async with async_session_factory() as session:
+            # Check for duplicate
+            existing = await session.execute(
+                select(LumgEisCode).where(LumgEisCode.eis_code == body.eis_code)
+            )
+            if existing.scalars().first():
+                raise HTTPException(status_code=409, detail=f"EIS code '{body.eis_code}' already assigned")
+            entry = LumgEisCode(lumg_id=lumg_id, eis_code=body.eis_code)
+            session.add(entry)
+            await session.commit()
+            await session.refresh(entry)
+        return entry
+
+    async def delete_eis_code(self, lumg_id: int, eis_code: str):
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(LumgEisCode).where(
+                    LumgEisCode.lumg_id == lumg_id,
+                    LumgEisCode.eis_code == eis_code,
+                )
+            )
+            entry = result.scalars().first()
+            if not entry:
+                raise HTTPException(status_code=404, detail="EIS code not found")
+            await session.delete(entry)
+            await session.commit()
+
+    async def scan_eis(self, lumg_id: int):
+        async with async_session_factory() as session:
+            dp_result = await session.execute(
+                select(LumgDataPath).where(LumgDataPath.lumg_id == lumg_id)
+            )
+            data_path = dp_result.scalars().first()
+        if not data_path:
+            raise HTTPException(status_code=404, detail="Data path not set for this LUMG")
+        if not os.path.exists(data_path.path):
+            raise HTTPException(status_code=400, detail=f"Path does not exist: {data_path.path}")
+        try:
+            folder_names = set()
+            async with UnzipUtils(data_path.path) as u:
+                for root, dirs, _ in os.walk(u.temp_path):
+                    for d in dirs:
+                        folder_names.add(d)
+            return sorted(folder_names)
+        except Exception as e:
+            logger.error(f"Error scanning EIS codes for lumg_id={lumg_id}: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=str(e))
 
 
 lumg_router = LumgRouter().router
