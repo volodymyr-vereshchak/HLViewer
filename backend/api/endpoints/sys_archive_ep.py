@@ -10,6 +10,7 @@ class SysArchiveRouter(BaseArchiveRouter):
             archive_list_class=SysArchiveEndpointList,
             tags=["sys"],
             archive_dao=SysArchiveDao,
+            max_days=30,
         )
 
 

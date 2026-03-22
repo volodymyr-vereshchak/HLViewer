@@ -1,13 +1,14 @@
 from datetime import datetime
 
-from fastapi import APIRouter, status, Query
+from fastapi import APIRouter, HTTPException, status, Query
 from backend.db.engine import DbEngine, async_session_factory
 
 
 class BaseArchiveRouter:
-    def __init__(self, path: str, archive_list_class, tags: list[str], archive_dao):
+    def __init__(self, path: str, archive_list_class, tags: list[str], archive_dao, max_days: int = 400):
         self.router = APIRouter()
         self.archive_dao = archive_dao
+        self.max_days = max_days
         self.router.add_api_route(
             path=path,
             endpoint=self.get_archive,
@@ -30,6 +31,10 @@ class BaseArchiveRouter:
         to_date: datetime = Query(None),
         line_id: list[int] = Query(None),
     ):
+        if not from_date or not to_date:
+            raise HTTPException(status_code=400, detail="from_date and to_date are required")
+        if (to_date - from_date).days > self.max_days:
+            raise HTTPException(status_code=400, detail=f"Date range exceeds {self.max_days} days")
         async with async_session_factory() as session:
             archive_dao = self.archive_dao(session=session)
             archives = await archive_dao.get_range(from_date, to_date, line_id)

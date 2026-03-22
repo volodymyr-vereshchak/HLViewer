@@ -10,6 +10,7 @@ class EditArchiveRouter(BaseArchiveRouter):
             archive_list_class=EditArchiveEndpointList,
             tags=["edit"],
             archive_dao=EditArchiveDao,
+            max_days=30,
         )
 
 

@@ -10,6 +10,7 @@ class HourlyArchiveRouter(BaseArchiveRouter):
             archive_list_class=HourlyArchiveList,
             tags=["hourly"],
             archive_dao=HourlyArchiveDao,
+            max_days=90,
         )
 
 

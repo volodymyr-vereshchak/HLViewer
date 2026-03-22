@@ -10,6 +10,7 @@ class DailyArchiveRouter(BaseArchiveRouter):
             archive_list_class=DailyArchiveList,
             tags=["daily"],
             archive_dao=DailyArchiveDao,
+            max_days=400,
         )
 
 

@@ -5,7 +5,7 @@ Endpoint for querying daily archives with virtual lines support.
 """
 
 from datetime import datetime
-from fastapi import APIRouter, status, Query
+from fastapi import APIRouter, HTTPException, status, Query
 from typing import List
 
 from backend.db.engine import async_session_factory
@@ -43,6 +43,11 @@ class DailyVirtualRouter:
         to_date: datetime = Query(None, description="End date/time"),
         line_id: List[int] = Query(None, description="List of line IDs (virtual IDs supported)")
     ):
+        if not from_date or not to_date:
+            raise HTTPException(status_code=400, detail="from_date and to_date are required")
+        if (to_date - from_date).days > 400:
+            raise HTTPException(status_code=400, detail="Date range exceeds 400 days")
+
         if not line_id:
             line_id = []
 
