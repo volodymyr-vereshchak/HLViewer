@@ -125,6 +125,39 @@ async def update_hostlibs(session: AsyncSession, lumg_id: int | None = None, pro
     await asyncio.gather(*[_process_lumg(p) for p in lumg_paths])
 
 
+async def update_direct(path: str, lumg_id: int, session: AsyncSession, progress: dict | None = None):
+    """Mode 2 forced: read all files from path directly into lumg_id, ignoring EIS codes."""
+    if progress is not None:
+        progress[lumg_id] = "running"
+
+    chunk_size = backend_settings.get("CHUNK_SIZE")
+    workers = [
+        (DailyEngine, DailyArchiveDao, DAILY_ARCHIVE_CONSTRAINT),
+        (HourlyEngine, HourlyArchiveDao, HOURLY_ARCHIVE_CONSTRAINT),
+        (EditEngine, EditArchiveDao, EDIT_ARCHIVE_CONSTRAINT),
+        (SysEngine, SysArchiveDao, SYS_ARCHIVE_CONSTRAINT),
+        (ParamEngine, ParamDao, PARAM_CONSTRAINT),
+    ]
+
+    if not os.path.exists(path):
+        logger.error(f"Direct update path does not exist: {path!r}")
+        if progress is not None:
+            progress[lumg_id] = "error"
+        return
+
+    try:
+        async with UnzipUtils(path) as unzip_utils:
+            for engine, archive_dao, constraint in workers:
+                async with update_session_factory() as worker_session:
+                    await update_worker(engine, unzip_utils.temp_path, archive_dao, constraint, chunk_size, worker_session, lumg_id)
+        if progress is not None:
+            progress[lumg_id] = "done"
+    except Exception as e:
+        logger.error(f"Error in direct update lumg_id={lumg_id}: {e}", exc_info=True)
+        if progress is not None:
+            progress[lumg_id] = "error"
+
+
 if __name__ == "__main__":
 
     async def update():

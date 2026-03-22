@@ -2,12 +2,19 @@ import asyncio
 from datetime import datetime
 
 from fastapi import APIRouter, BackgroundTasks, status, HTTPException
+from pydantic import BaseModel
 
 from backend.db.engine import async_session_factory
 from backend.db.preload_db.preload_db import preload_db
-from backend.hl_engine.main import update_hostlibs
+from backend.hl_engine.main import update_hostlibs, update_direct
 from backend.hl_engine.hostlib_updater import HostlibUpdater
 from utils.logger import logger_setup
+
+
+class DirectUpdateBody(BaseModel):
+    lumg_id: int
+    path: str
+
 
 # Shared job state — single update at a time
 _job: dict = {"status": "idle", "started_at": None, "finished_at": None, "error": None, "lumg_id": None, "lumgs": {}}
@@ -34,6 +41,13 @@ class RootRouter:
         self.router.add_api_route(
             path="/update_data/{lumg_id}",
             endpoint=self.update_data_for_lumg,
+            tags=["root"],
+            methods=["POST"],
+            status_code=status.HTTP_202_ACCEPTED,
+        )
+        self.router.add_api_route(
+            path="/update_data/direct",
+            endpoint=self.update_data_direct,
             tags=["root"],
             methods=["POST"],
             status_code=status.HTTP_202_ACCEPTED,
@@ -102,6 +116,36 @@ class RootRouter:
         finally:
             _job["finished_at"] = datetime.now().isoformat()
             _job["lumg_id"] = None
+
+    async def _run_update_direct(self, lumg_id: int, path: str):
+        global _job
+        _job["started_at"] = datetime.now().isoformat()
+        _job["finished_at"] = None
+        _job["error"] = None
+        _job["lumg_id"] = lumg_id
+        _job["lumgs"] = {}
+        try:
+            async with async_session_factory() as session:
+                await update_direct(path=path, lumg_id=lumg_id, session=session, progress=_job["lumgs"])
+            _job["status"] = "done"
+        except Exception as e:
+            self.logger.error(f"Background direct update error for lumg {lumg_id}: {e}", exc_info=True)
+            _job["status"] = "error"
+            _job["error"] = str(e)
+        finally:
+            _job["finished_at"] = datetime.now().isoformat()
+            _job["lumg_id"] = None
+
+    async def update_data_direct(self, body: DirectUpdateBody, background_tasks: BackgroundTasks):
+        global _job
+        if _job["status"] == "running":
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Update is already in progress. Please try again later.",
+            )
+        _job["status"] = "running"
+        background_tasks.add_task(self._run_update_direct, body.lumg_id, body.path)
+        return {"message": f"Direct update started for lumg {body.lumg_id}", "status": "running"}
 
     async def update_data_for_lumg(self, lumg_id: int, background_tasks: BackgroundTasks):
         global _job
