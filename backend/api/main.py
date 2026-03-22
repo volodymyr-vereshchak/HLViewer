@@ -126,19 +126,21 @@ app = FastAPI(openapi_tags=tags_metadata, lifespan=lifespan)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # Add CORS middleware
+_default_cors = ",".join([
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3001",
+    "http://localhost:8050",
+    "http://localhost:8060",
+    "http://127.0.0.1:8050",
+    "http://grmu-zp-s-metr1:8050",
+    "http://10.130.8.141:8050",
+])
+_cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", _default_cors).split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:3001",
-        "http://127.0.0.1:3001",
-        "http://localhost:8050",
-        "http://localhost:8060",
-        "http://127.0.0.1:8050",
-        "http://grmu-zp-s-metr1:8050",
-        "http://10.130.8.141:8050",
-    ],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
