@@ -31,6 +31,7 @@ from backend.telegram_notifier.telegram_norifier import TelegramBot
 from backend.db.engine import async_session_factory
 from backend.db.models.app_user_model import AppUser
 from backend.api.endpoints.auth_ep import hash_password
+from backend.hl_engine.main import _cleanup_orphan_temp_dirs
 from sqlmodel import select
 
 logger = logging.getLogger(__name__)
@@ -117,6 +118,7 @@ async def _seed_admin():
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
+    _cleanup_orphan_temp_dirs()
     await _seed_admin()
     yield
 

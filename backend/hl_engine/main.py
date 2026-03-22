@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import shutil
 from types import SimpleNamespace
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -30,6 +31,21 @@ from backend.settings import backend_settings
 from utils.files_utils import UnzipUtils
 
 
+def _cleanup_orphan_temp_dirs():
+    """Remove leftover __temp_*__ dirs from previous crashes or force-kills."""
+    hostlibs_root = os.path.join(os.getcwd(), "hostlibs")
+    if not os.path.exists(hostlibs_root):
+        return
+    for name in os.listdir(hostlibs_root):
+        if name.startswith("__temp_") and name.endswith("__"):
+            path = os.path.join(hostlibs_root, name)
+            try:
+                shutil.rmtree(path)
+                logger.info(f"Cleaned up orphan temp dir: {path}")
+            except Exception as e:
+                logger.warning(f"Failed to clean orphan temp dir {path}: {e}")
+
+
 async def update_archive(archive_gen, dao, constraint_list: list, session):
     all_records = []
     async for archives_list in archive_gen:
@@ -46,6 +62,7 @@ async def update_worker(
 
 
 async def update_hostlibs(session: AsyncSession, lumg_id: int | None = None, progress: dict | None = None):
+    _cleanup_orphan_temp_dirs()
     query = select(LumgDataPath).where(LumgDataPath.active == True)
     if lumg_id is not None:
         query = query.where(LumgDataPath.lumg_id == lumg_id)
