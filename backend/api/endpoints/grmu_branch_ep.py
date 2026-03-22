@@ -25,6 +25,10 @@ from backend.db.models.grmu_branch_model import (
     BranchConfigMapping,
     BranchConfigMappingRead,
     BranchConfigMappingUpsert,
+    DpdGlobalConfig,
+    DpdGlobalConfigUpdate,
+    GrmuBranchDpdCredential,
+    GrmuBranchDpdCredentialUpdate,
 )
 from backend.db.models.lumg_model import Lumg
 from backend.hl_engine.config_reader import ConfigReader
@@ -430,6 +434,116 @@ async def update_branch_names(branch_id: int):
         except Exception as e:
             logger.error(f"Error updating names for branch {branch_id}: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── DPD Global Config ────────────────────────────────────────────────────────
+
+
+@router.get(
+    "/dpd-config",
+    summary="Get global DPD API config (api_base_url, auth_url, timeout_sec)",
+)
+async def get_dpd_global_config():
+    async with async_session_factory() as session:
+        result = await session.execute(select(DpdGlobalConfig))
+        cfg = result.scalars().first()
+    if not cfg:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="DPD global config not set")
+    return {"id": cfg.id, "api_base_url": cfg.api_base_url, "auth_url": cfg.auth_url, "timeout_sec": cfg.timeout_sec}
+
+
+@router.put(
+    "/dpd-config",
+    summary="Create or update global DPD API config",
+)
+async def upsert_dpd_global_config(body: DpdGlobalConfigUpdate):
+    async with async_session_factory() as session:
+        result = await session.execute(select(DpdGlobalConfig))
+        cfg = result.scalars().first()
+        update_data = body.model_dump(exclude_unset=True)
+        if cfg:
+            for key, value in update_data.items():
+                setattr(cfg, key, value)
+        else:
+            required = {"api_base_url", "auth_url"}
+            missing = required - update_data.keys()
+            if missing:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Missing required fields: {', '.join(sorted(missing))}",
+                )
+            cfg = DpdGlobalConfig(**update_data)
+            session.add(cfg)
+        await session.commit()
+        await session.refresh(cfg)
+    return {"id": cfg.id, "api_base_url": cfg.api_base_url, "auth_url": cfg.auth_url, "timeout_sec": cfg.timeout_sec}
+
+
+# ─── DPD Credentials (per branch) ────────────────────────────────────────────
+
+
+@router.get(
+    "/{branch_id}/dpd-credential",
+    summary="Get DPD credentials for a branch (username only, no password)",
+)
+async def get_dpd_credential(branch_id: int):
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(GrmuBranchDpdCredential).where(GrmuBranchDpdCredential.branch_id == branch_id)
+        )
+        cred = result.scalars().first()
+    if not cred:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="DPD credentials not found")
+    return {"id": cred.id, "branch_id": cred.branch_id, "username": cred.username}
+
+
+@router.put(
+    "/{branch_id}/dpd-credential",
+    summary="Create or update DPD credentials for a branch",
+)
+async def upsert_dpd_credential(branch_id: int, body: GrmuBranchDpdCredentialUpdate):
+    async with async_session_factory() as session:
+        branch = await session.get(GrmuBranch, branch_id)
+        if not branch:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Branch not found")
+        result = await session.execute(
+            select(GrmuBranchDpdCredential).where(GrmuBranchDpdCredential.branch_id == branch_id)
+        )
+        cred = result.scalars().first()
+        update_data = body.model_dump(exclude_unset=True)
+        if cred:
+            for key, value in update_data.items():
+                setattr(cred, key, value)
+        else:
+            required = {"username", "password"}
+            missing = required - update_data.keys()
+            if missing:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Missing required fields: {', '.join(sorted(missing))}",
+                )
+            cred = GrmuBranchDpdCredential(branch_id=branch_id, **update_data)
+            session.add(cred)
+        await session.commit()
+        await session.refresh(cred)
+    return {"id": cred.id, "branch_id": cred.branch_id, "username": cred.username}
+
+
+@router.delete(
+    "/{branch_id}/dpd-credential",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete DPD credentials for a branch",
+)
+async def delete_dpd_credential(branch_id: int):
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(GrmuBranchDpdCredential).where(GrmuBranchDpdCredential.branch_id == branch_id)
+        )
+        cred = result.scalars().first()
+        if not cred:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="DPD credentials not found")
+        await session.delete(cred)
+        await session.commit()
 
 
 grmu_branch_router = router

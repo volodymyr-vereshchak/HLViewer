@@ -72,15 +72,33 @@ class GrmuBranchUpdate(GrmuBranchBase):
     active: Optional[bool] = None
 
 
+# ─── DpdGlobalConfig ─────────────────────────────────────────────────────────
+
+
+class DpdGlobalConfigBase(HlBaseModel):
+    api_base_url: str
+    auth_url: str
+    timeout_sec: int = Field(default=30)
+
+
+class DpdGlobalConfig(DpdGlobalConfigBase, table=True):
+    __tablename__ = "dpd_global_config"
+
+    id: int | None = Field(default=None, primary_key=True)
+
+
+class DpdGlobalConfigUpdate(DpdGlobalConfigBase):
+    api_base_url: Optional[str] = None
+    auth_url: Optional[str] = None
+    timeout_sec: Optional[int] = None
+
+
 # ─── GrmuBranchDpdCredential ──────────────────────────────────────────────────
 
 
 class GrmuBranchDpdCredentialBase(HlBaseModel):
-    api_base_url: str
-    auth_url: str
     username: str = Field(max_length=255)
     password: str
-    timeout_sec: int = Field(default=30)
 
 
 class GrmuBranchDpdCredential(GrmuBranchDpdCredentialBase, table=True):
@@ -96,16 +114,9 @@ class GrmuBranchDpdCredential(GrmuBranchDpdCredentialBase, table=True):
     branch: "GrmuBranch" = Relationship(back_populates="dpd_credential")
 
 
-class GrmuBranchDpdCredentialCreate(GrmuBranchDpdCredentialBase):
-    branch_id: int
-
-
 class GrmuBranchDpdCredentialUpdate(GrmuBranchDpdCredentialBase):
-    api_base_url: Optional[str] = None
-    auth_url: Optional[str] = None
     username: Optional[str] = None
     password: Optional[str] = None
-    timeout_sec: Optional[int] = None
 
 
 # ─── GrmuBranchDeviceMapping ──────────────────────────────────────────────────
