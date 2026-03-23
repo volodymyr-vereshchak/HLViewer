@@ -130,9 +130,7 @@ class ConfigReader:
         line_dao = LineDao(session=session)
 
         for flow in flows:
-            type_id = await gas_volume_type_dao.get_by_type_id(flow["type_id"])
-            if not type_id:
-                continue
+            type_id = await gas_volume_type_dao.get_or_create_by_type_id(flow["type_id"])
             gas_volume_db = await gas_volume_calc_dao.update_if_exists(
                 lumg_id=lumg_id,
                 address=flow["address"],
