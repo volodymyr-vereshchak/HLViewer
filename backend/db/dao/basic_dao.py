@@ -89,10 +89,7 @@ class BasicDao:
                 temp_table, records=records, columns=temp_aliases
             )
 
-            # INSERT ... WHERE NOT EXISTS — PostgreSQL can use hash join O(n)
-            # constraint_col → temp alias map for WHERE clause
-            col_to_alias = {name: f"c{i}" for i, name in enumerate(data_col_names)}
-
+            # INSERT ... ON CONFLICT DO NOTHING — atomic, safe under concurrent inserts
             insert_cols = ", ".join(f'"{n}"' for n in data_col_names)
             select_cols = ", ".join(f"t.c{i}" for i in range(len(data_col_names)))
 
@@ -102,16 +99,12 @@ class BasicDao:
             else:
                 auto_insert = auto_select = ""
 
-            where_clause = " AND ".join(
-                f's."{c}" = t.{col_to_alias[c]}' for c in list_of_constraints
-            )
+            conflict_cols = ", ".join(f'"{c}"' for c in list_of_constraints)
 
             await self.session.execute(text(
                 f"INSERT INTO {main_table} ({insert_cols}{auto_insert}) "
                 f"SELECT {select_cols}{auto_select} FROM {temp_table} t "
-                f"WHERE NOT EXISTS ("
-                f"  SELECT 1 FROM {main_table} s WHERE {where_clause}"
-                f")"
+                f"ON CONFLICT ({conflict_cols}) DO NOTHING"
             ))
 
             await self.session.execute(text(f"DROP TABLE {temp_table}"))
