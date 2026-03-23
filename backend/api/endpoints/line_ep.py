@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, status, HTTPException
+from sqlalchemy import text
 from sqlmodel import select
 
 from backend.api.endpoints.auth_ep import get_branch_filter
@@ -112,10 +113,11 @@ class LineRouter:
 
     async def delete_line(self, line_id: int):
         async with async_session_factory() as session:
-            delete_line = await LineDao(session=session).delete_item(line_id)
-        if not delete_line:
-            raise HTTPException(status_code=404, detail="Line not found")
-        return {"ok": True}
+            exists = await session.get(Line, line_id)
+            if not exists:
+                raise HTTPException(status_code=404, detail="Line not found")
+            await session.execute(text("DELETE FROM gas_volume_line WHERE id = :id"), {"id": line_id})
+            await session.commit()
 
 
 line_router = LineRouter().router
