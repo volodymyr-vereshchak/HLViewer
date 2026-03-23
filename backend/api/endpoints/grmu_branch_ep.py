@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
+from sqlalchemy import text
 from sqlmodel import select
 
 from backend.db.engine import async_session_factory
@@ -91,10 +92,10 @@ async def create_branch(data: GrmuBranchCreate):
 )
 async def delete_branch(branch_id: int):
     async with async_session_factory() as session:
-        branch = await session.get(GrmuBranch, branch_id)
-        if not branch:
+        exists = await session.get(GrmuBranch, branch_id)
+        if not exists:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Branch not found")
-        await session.delete(branch)
+        await session.execute(text("DELETE FROM grmu_branch WHERE id = :id"), {"id": branch_id})
         await session.commit()
 
 

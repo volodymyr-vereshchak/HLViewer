@@ -2,6 +2,7 @@ import logging
 import os
 
 from fastapi import APIRouter, Depends, status, HTTPException
+from sqlalchemy import text
 from sqlmodel import select
 
 from backend.api.endpoints.auth_ep import get_branch_filter
@@ -134,9 +135,11 @@ class LumgRouter:
 
     async def delete_lumg(self, lumg_id: int):
         async with async_session_factory() as session:
-            delete_lumg = await LumgDao(session=session).delete_item(lumg_id)
-        if not delete_lumg:
-            raise HTTPException(status_code=404, detail="Lumg not found")
+            exists = await session.get(Lumg, lumg_id)
+            if not exists:
+                raise HTTPException(status_code=404, detail="Lumg not found")
+            await session.execute(text("DELETE FROM lumg WHERE id = :id"), {"id": lumg_id})
+            await session.commit()
         return {"ok": True}
 
     async def get_data_path(self, lumg_id: int):
