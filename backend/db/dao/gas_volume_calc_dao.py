@@ -23,7 +23,7 @@ class GasVolumeCalcDao(BasicDao):
         self,
         address: int,
         lumg_id: int,
-        type_id: int = 4,
+        type_id: int | None = None,
         c_time: int = 7,
         name: str = None,
     ):
@@ -46,7 +46,7 @@ class GasVolumeCalcDao(BasicDao):
         self,
         address: int,
         lumg_id: int,
-        type_id: int = 4,
+        type_id: int | None = None,
         c_time: int = 7,
         name: str = None,
     ):

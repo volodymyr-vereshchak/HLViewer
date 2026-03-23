@@ -49,12 +49,12 @@ class GasVolumeCalc(GasVolumeCalcBase, table=True):
 class GasVolumeCalcList(GasVolumeCalcBase):
     id: int
     lumg_id: int
-    type_id: int
+    type_id: int | None
 
 
 class GasVolumeCalcCreate(GasVolumeCalcBase):
     lumg_id: int
-    type_id: int
+    type_id: int | None = None
 
 
 class GasVolumeCalcUpdate(GasVolumeCalcBase):
