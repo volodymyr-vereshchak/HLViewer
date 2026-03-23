@@ -26,6 +26,7 @@ services:
       - DB_HOST=db_v2
       - DB_PORT=5432
       - DATABASE_URL=postgresql+asyncpg://diakonx:assemblerwog359@db_v2:5432/hostlib_db_v2
+      - TZ=Europe/Kyiv
 
     ports:
       - "8001:8001"
@@ -72,6 +73,7 @@ services:
       - DB_HOST=db_v2
       - DB_PORT=5432
       - DATABASE_URL=postgresql+asyncpg://diakonx:assemblerwog359@db_v2:5432/hostlib_db_v2
+      - TZ=Europe/Kyiv
     depends_on:
       - fastapi_v2
     networks:
