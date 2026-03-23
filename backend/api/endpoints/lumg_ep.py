@@ -1,5 +1,6 @@
 import logging
 import os
+import zipfile
 
 from fastapi import APIRouter, Depends, status, HTTPException
 from sqlalchemy import text
@@ -226,10 +227,16 @@ class LumgRouter:
             raise HTTPException(status_code=400, detail=f"Path does not exist: {data_path.path}")
         try:
             folder_names = set()
-            async with UnzipUtils(data_path.path) as u:
-                for root, dirs, _ in os.walk(u.temp_path):
-                    for d in dirs:
-                        folder_names.add(d)
+            for root, _, files in os.walk(data_path.path):
+                for file in files:
+                    if not file.endswith(".zip"):
+                        continue
+                    zip_path = os.path.join(root, file)
+                    with zipfile.ZipFile(zip_path, "r") as zf:
+                        for name in zf.namelist():
+                            parts = name.split("/")
+                            if len(parts) >= 2 and parts[0]:
+                                folder_names.add(parts[0])
             return sorted(folder_names)
         except Exception as e:
             logger.error(f"Error scanning EIS codes for lumg_id={lumg_id}: {e}", exc_info=True)
