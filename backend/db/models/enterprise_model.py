@@ -9,8 +9,8 @@ from sqlmodel import SQLModel, Field
 
 class EnterpriseBase(SQLModel):
     enterprise_name: str = Field(index=True)
-    branch_id: Optional[int] = Field(default=None, foreign_key="grmu_branch.id")
-    line_id: Optional[int] = Field(default=None, foreign_key="gas_volume_line.id")
+    branch_id: Optional[int] = Field(default=None, foreign_key="grmu_branch.id", ondelete="CASCADE")
+    line_id: Optional[int] = Field(default=None, foreign_key="gas_volume_line.id", ondelete="SET NULL")
     ser_num: int
     mf_dev: int    # 1=РадмирТех, 3=ГРЕМПІС, 4=Тандем, 5=Укргазтех
     type_dev: int
