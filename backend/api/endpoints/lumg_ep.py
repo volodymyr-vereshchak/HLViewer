@@ -1,6 +1,9 @@
 import logging
 import os
+import re
 import zipfile
+
+_EIS_CODE_RE = re.compile(r'^[A-Z0-9]{6,}$')
 
 from fastapi import APIRouter, Depends, status, HTTPException
 from sqlalchemy import text
@@ -234,9 +237,13 @@ class LumgRouter:
                     zip_path = os.path.join(root, file)
                     with zipfile.ZipFile(zip_path, "r") as zf:
                         for name in zf.namelist():
-                            parts = name.split("/")
-                            if len(parts) >= 2 and parts[0]:
-                                folder_names.add(parts[0])
+                            parts = [p for p in name.split("/") if p]
+                            # Check all directory segments (all but last for files,
+                            # all for directory entries ending with '/')
+                            segments = parts if name.endswith("/") else parts[:-1]
+                            for seg in segments:
+                                if _EIS_CODE_RE.match(seg):
+                                    folder_names.add(seg)
             return sorted(folder_names)
         except Exception as e:
             logger.error(f"Error scanning EIS codes for lumg_id={lumg_id}: {e}", exc_info=True)
