@@ -79,3 +79,4 @@ class LineUpdate(LineBase):
     include_in_report: bool | None = None
     include_in_trends: bool | None = None
     is_high_pressure: bool | None = None
+    gas_volume_calc_id: int | None = None
