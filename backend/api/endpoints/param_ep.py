@@ -25,8 +25,12 @@ class ParamRouter(BaseArchiveRouter):
     ):
         async with async_session_factory() as session:
             archive_dao = self.archive_dao(session=session)
-            archives = await archive_dao.get_last_for_to_date(to_date, line_id)
-            return [archives]
+            if line_id and len(line_id) > 1:
+                archives = await archive_dao.get_last_per_line_ids(to_date, line_id)
+                return archives
+            else:
+                archive = await archive_dao.get_last_for_to_date(to_date, line_id)
+                return [archive] if archive else []
 
 
 param_router = ParamRouter().router

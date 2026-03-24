@@ -179,6 +179,30 @@ class BasicDao:
         result = await self.session.execute(statement)
         return result.scalars().first()
 
+    async def get_last_per_line_ids(
+        self,
+        to_date: datetime = None,
+        line_ids: list[int] = None,
+    ):
+        """Return the most recent record for each line_id in one query."""
+        subq = select(
+            func.max(self.model.period).label("max_period"),
+            self.model.line_id,
+        )
+        if line_ids:
+            subq = subq.where(self.model.line_id.in_(line_ids))
+        if to_date:
+            subq = subq.where(self.model.period <= to_date)
+        subq = subq.group_by(self.model.line_id).subquery()
+
+        statement = select(self.model).join(
+            subq,
+            (self.model.line_id == subq.c.line_id)
+            & (self.model.period == subq.c.max_period),
+        )
+        result = await self.session.execute(statement)
+        return result.scalars().all()
+
     async def get_by_id(self, item_id: int):
         result = await self.session.get(self.model, item_id)
         return result
