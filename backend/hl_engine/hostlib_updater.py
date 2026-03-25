@@ -262,7 +262,7 @@ class HostlibUpdater:
             phys_lines = phys_result.scalars().all()
 
             virt_result = await session.execute(
-                select(VirtualLine).where(VirtualLine.include_in_report == True)  # noqa: E712
+                select(VirtualLine)
             )
             virt_lines = virt_result.scalars().all()
 
