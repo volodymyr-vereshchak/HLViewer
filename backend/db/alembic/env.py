@@ -49,8 +49,6 @@ from db.models import (
     GrmuBranch,
     GrmuBranchList,
     GrmuBranchCreate,
-    DpdGlobalConfig,
-    DpdGlobalConfigUpdate,
     GrmuBranchDpdCredential,
     GrmuBranchDpdCredentialUpdate,
     GrmuBranchDeviceMapping,

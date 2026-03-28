@@ -26,8 +26,6 @@ from backend.db.models.grmu_branch_model import (
     BranchConfigMapping,
     BranchConfigMappingRead,
     BranchConfigMappingUpsert,
-    DpdGlobalConfig,
-    DpdGlobalConfigUpdate,
     GrmuBranchDpdCredential,
     GrmuBranchDpdCredentialUpdate,
 )
@@ -435,49 +433,6 @@ async def update_branch_names(branch_id: int):
         except Exception as e:
             logger.error(f"Error updating names for branch {branch_id}: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=str(e))
-
-
-# ─── DPD Global Config ────────────────────────────────────────────────────────
-
-
-@router.get(
-    "/dpd-config",
-    summary="Get global DPD API config (api_base_url, auth_url, timeout_sec)",
-)
-async def get_dpd_global_config():
-    async with async_session_factory() as session:
-        result = await session.execute(select(DpdGlobalConfig))
-        cfg = result.scalars().first()
-    if not cfg:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="DPD global config not set")
-    return {"id": cfg.id, "api_base_url": cfg.api_base_url, "auth_url": cfg.auth_url, "timeout_sec": cfg.timeout_sec}
-
-
-@router.put(
-    "/dpd-config",
-    summary="Create or update global DPD API config",
-)
-async def upsert_dpd_global_config(body: DpdGlobalConfigUpdate):
-    async with async_session_factory() as session:
-        result = await session.execute(select(DpdGlobalConfig))
-        cfg = result.scalars().first()
-        update_data = body.model_dump(exclude_unset=True)
-        if cfg:
-            for key, value in update_data.items():
-                setattr(cfg, key, value)
-        else:
-            required = {"api_base_url", "auth_url"}
-            missing = required - update_data.keys()
-            if missing:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"Missing required fields: {', '.join(sorted(missing))}",
-                )
-            cfg = DpdGlobalConfig(**update_data)
-            session.add(cfg)
-        await session.commit()
-        await session.refresh(cfg)
-    return {"id": cfg.id, "api_base_url": cfg.api_base_url, "auth_url": cfg.auth_url, "timeout_sec": cfg.timeout_sec}
 
 
 # ─── DPD Credentials (per branch) ────────────────────────────────────────────

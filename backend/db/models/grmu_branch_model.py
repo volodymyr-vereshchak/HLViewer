@@ -72,27 +72,6 @@ class GrmuBranchUpdate(GrmuBranchBase):
     active: Optional[bool] = None
 
 
-# ─── DpdGlobalConfig ─────────────────────────────────────────────────────────
-
-
-class DpdGlobalConfigBase(HlBaseModel):
-    api_base_url: str
-    auth_url: str
-    timeout_sec: int = Field(default=30)
-
-
-class DpdGlobalConfig(DpdGlobalConfigBase, table=True):
-    __tablename__ = "dpd_global_config"
-
-    id: int | None = Field(default=None, primary_key=True)
-
-
-class DpdGlobalConfigUpdate(DpdGlobalConfigBase):
-    api_base_url: Optional[str] = None
-    auth_url: Optional[str] = None
-    timeout_sec: Optional[int] = None
-
-
 # ─── GrmuBranchDpdCredential ──────────────────────────────────────────────────
 
 

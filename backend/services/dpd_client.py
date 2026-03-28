@@ -11,7 +11,6 @@ import logging
 import warnings
 from datetime import datetime
 from typing import List, Dict, Optional
-from backend.settings import backend_settings
 
 # Disable SSL warnings (DPD API uses self-signed certificates)
 warnings.filterwarnings('ignore', message='Unverified HTTPS request')
@@ -25,24 +24,17 @@ class DPDClient:
     def __init__(
         self,
         *,
-        base_url: Optional[str] = None,
-        auth_url: Optional[str] = None,
-        username: Optional[str] = None,
-        password: Optional[str] = None,
-        timeout: Optional[int] = None,
+        base_url: str,
+        auth_url: str,
+        username: str,
+        password: str,
+        timeout: int,
     ):
-        """
-        Create a DPDClient instance.
-
-        All parameters are optional and fall back to the values in backend_settings
-        (dev credentials).  For production, prefer the async factory
-        DPDClient.for_branch(branch_id, session) which loads credentials from the DB.
-        """
-        self.base_url = base_url or backend_settings["DPD_API_BASE_URL"]
-        self.auth_url = auth_url or backend_settings["DPD_AUTH_URL"]
-        self.username = username or backend_settings["DPD_USERNAME"]
-        self.password = password or backend_settings["DPD_PASSWORD"]
-        self.timeout = timeout or backend_settings["DPD_TIMEOUT"]
+        self.base_url = base_url
+        self.auth_url = auth_url
+        self.username = username
+        self.password = password
+        self.timeout = timeout
 
         self.access_token: Optional[str] = None
         self.refresh_token: Optional[str] = None
@@ -50,12 +42,7 @@ class DPDClient:
 
     @classmethod
     async def for_branch(cls, branch_id: int, session) -> "DPDClient":
-        """
-        Async factory: load credentials from grmu_branch_dpd_credential for
-        the given branch_id and return a configured DPDClient.
-
-        Falls back to settings if no DB credential is found.
-        """
+        """Load credentials from grmu_branch_dpd_credential. Raises if not configured."""
         from sqlmodel import select
         from backend.db.models.grmu_branch_model import GrmuBranchDpdCredential
 
@@ -67,8 +54,11 @@ class DPDClient:
 
         if not cred:
             raise ValueError(
-                f"No DPD credentials configured for branch_id={branch_id}. "
-                "Add a row to grmu_branch_dpd_credential."
+                f"No DPD credentials configured for branch_id={branch_id}."
+            )
+        if not cred.api_base_url or not cred.auth_url:
+            raise ValueError(
+                f"DPD credentials for branch_id={branch_id} are missing api_base_url or auth_url."
             )
 
         logger.debug("Loaded DPD credentials from DB for branch_id=%d", branch_id)

@@ -77,8 +77,6 @@ from .grmu_branch_model import (
     GrmuBranchList,
     GrmuBranchCreate,
     GrmuBranchUpdate,
-    DpdGlobalConfig,
-    DpdGlobalConfigUpdate,
     GrmuBranchDpdCredential,
     GrmuBranchDpdCredentialUpdate,
     GrmuBranchDeviceMapping,
