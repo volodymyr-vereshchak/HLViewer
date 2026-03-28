@@ -495,7 +495,8 @@ async def get_dpd_credential(branch_id: int):
         cred = result.scalars().first()
     if not cred:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="DPD credentials not found")
-    return {"id": cred.id, "branch_id": cred.branch_id, "username": cred.username}
+    return {"id": cred.id, "branch_id": cred.branch_id, "username": cred.username,
+            "api_base_url": cred.api_base_url, "auth_url": cred.auth_url, "timeout_sec": cred.timeout_sec}
 
 
 @router.put(
@@ -527,7 +528,8 @@ async def upsert_dpd_credential(branch_id: int, body: GrmuBranchDpdCredentialUpd
             session.add(cred)
         await session.commit()
         await session.refresh(cred)
-    return {"id": cred.id, "branch_id": cred.branch_id, "username": cred.username}
+    return {"id": cred.id, "branch_id": cred.branch_id, "username": cred.username,
+            "api_base_url": cred.api_base_url, "auth_url": cred.auth_url, "timeout_sec": cred.timeout_sec}
 
 
 @router.delete(

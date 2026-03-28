@@ -99,6 +99,9 @@ class DpdGlobalConfigUpdate(DpdGlobalConfigBase):
 class GrmuBranchDpdCredentialBase(HlBaseModel):
     username: str = Field(max_length=255)
     password: str
+    api_base_url: Optional[str] = Field(default=None, max_length=512)
+    auth_url: Optional[str] = Field(default=None, max_length=512)
+    timeout_sec: int = Field(default=30)
 
 
 class GrmuBranchDpdCredential(GrmuBranchDpdCredentialBase, table=True):
@@ -117,6 +120,9 @@ class GrmuBranchDpdCredential(GrmuBranchDpdCredentialBase, table=True):
 class GrmuBranchDpdCredentialUpdate(GrmuBranchDpdCredentialBase):
     username: Optional[str] = None
     password: Optional[str] = None
+    api_base_url: Optional[str] = None
+    auth_url: Optional[str] = None
+    timeout_sec: Optional[int] = None
 
 
 # ─── GrmuBranchDeviceMapping ──────────────────────────────────────────────────
