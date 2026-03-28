@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(test:*)",
+      "Bash(git -C /d/Projects/HLViewer/HLViewer ls-files -- frontend/)",
+      "Bash(git -C \"D:/Projects/HLViewer/HLViewer\" ls-files)"
     ]
   }
 }
