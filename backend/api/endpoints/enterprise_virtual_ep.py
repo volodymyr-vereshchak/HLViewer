@@ -9,6 +9,7 @@ import logging
 from datetime import datetime, date
 from typing import List
 from collections import defaultdict
+from typing import Optional
 from fastapi import APIRouter, Query, status, HTTPException
 
 from backend.db.models.enterprise_models import (
@@ -72,7 +73,8 @@ class EnterpriseVirtualRouter:
             default="daily",
             pattern="^(daily|hourly)$",
             description="Data granularity: 'daily' or 'hourly'"
-        )
+        ),
+        branch_id: Optional[int] = Query(None, description="Branch ID (auto-derived from enterprise records if not provided)")
     ) -> List[EnterpriseVolumeResponse]:
         """
         Get enterprise volume data with virtual lines support.
@@ -190,7 +192,8 @@ class EnterpriseVirtualRouter:
             return []
 
         # Fetch volumes from DPD API
-        branch_id = next((d["branch_id"] for d in devices if d.get("branch_id")), None)
+        if branch_id is None:
+            branch_id = next((d["branch_id"] for d in devices if d.get("branch_id")), None)
         if branch_id is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
