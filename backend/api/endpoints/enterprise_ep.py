@@ -264,7 +264,7 @@ class EnterpriseRouter:
                 )
             )
 
-        result.sort(key=lambda x: (x.line_id, x.period))
+        result.sort(key=lambda x: (x.line_id is None, x.line_id or 0, x.period))
 
         logger.info(
             f"Returning {len(result)} aggregated enterprise volume records "
