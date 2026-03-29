@@ -87,7 +87,7 @@ class EnterpriseRouter:
 
     async def get_enterprise_volumes(
         self,
-        line_id: List[int] = Query(default=[], description="Line IDs to fetch volumes for (optional if serNum+chNum provided)"),
+        line_id: Optional[List[int]] = Query(default=None, description="Line IDs to fetch volumes for (optional if serNum+chNum provided)"),
         from_date: str = Query(..., description="Start date (YYYY-MM-DD)"),
         to_date: str = Query(..., description="End date (YYYY-MM-DD)"),
         period_type: str = Query(
@@ -115,7 +115,7 @@ class EnterpriseRouter:
                 detail=f"Invalid date format: {e}. Use YYYY-MM-DD format."
             )
 
-        if not line_id and (serNum is None or chNum is None):
+        if not line_id and (serNum is None or chNum is None):  # None or []
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Provide line_id or serNum+chNum"
