@@ -69,7 +69,7 @@ class EnterpriseVolumeResponse(BaseModel):
         }
     )
 
-    line_id: int = Field(description="Gas line ID")
+    line_id: Optional[int] = Field(None, description="Gas line ID (None if enterprise has no line)")
     period: Union[date, datetime] = Field(description="Date (daily) or datetime (hourly) of the measurement")
     total_volume: float = Field(ge=0, description="Total volume for all devices on this line")
     device_count: int = Field(ge=0, description="Number of devices contributing to total")
