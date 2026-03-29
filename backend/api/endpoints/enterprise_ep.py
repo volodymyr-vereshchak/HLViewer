@@ -87,7 +87,7 @@ class EnterpriseRouter:
 
     async def get_enterprise_volumes(
         self,
-        line_id: List[int] = Query(..., description="Line IDs to fetch volumes for"),
+        line_id: List[int] = Query(default=[], description="Line IDs to fetch volumes for (optional if serNum+chNum provided)"),
         from_date: str = Query(..., description="Start date (YYYY-MM-DD)"),
         to_date: str = Query(..., description="End date (YYYY-MM-DD)"),
         period_type: str = Query(
@@ -115,21 +115,34 @@ class EnterpriseRouter:
                 detail=f"Invalid date format: {e}. Use YYYY-MM-DD format."
             )
 
-        if not line_id:
+        if not line_id and (serNum is None or chNum is None):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="At least one line_id must be specified"
-            )
-
-        if any(lid <= 0 for lid in line_id):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="All line_ids must be positive integers"
+                detail="Provide line_id or serNum+chNum"
             )
 
         try:
             async with async_session_factory() as session:
-                devices = await get_devices_for_lines_db(line_id, session)
+                if line_id:
+                    devices = await get_devices_for_lines_db(line_id, session)
+                    if serNum is not None and chNum is not None:
+                        devices = [d for d in devices if d["serNum"] == serNum and d["chNum"] == chNum]
+                else:
+                    # No line_id — load device directly by serNum+chNum
+                    from backend.db.dao.enterprise_dao import EnterpriseDao
+                    ent = await EnterpriseDao(session).get_by_ser_ch(serNum, chNum)
+                    if not ent:
+                        logger.warning(f"No enterprise found with serNum={serNum}, chNum={chNum}")
+                        return []
+                    devices = [{
+                        "line_id": ent.line_id,
+                        "branch_id": ent.branch_id,
+                        "serNum": ent.ser_num,
+                        "mfDev": ent.mf_dev,
+                        "typeDev": ent.type_dev,
+                        "chNum": ent.ch_num,
+                        "enterprise_name": ent.enterprise_name,
+                    }]
         except Exception as e:
             logger.error(f"Error loading enterprise mappings from DB: {e}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
@@ -137,12 +150,6 @@ class EnterpriseRouter:
         if not devices:
             logger.info(f"No enterprise mappings found for lines {line_id}")
             return []
-
-        if serNum is not None and chNum is not None:
-            devices = [d for d in devices if d["serNum"] == serNum and d["chNum"] == chNum]
-            if not devices:
-                logger.warning(f"No device found with serNum={serNum}, chNum={chNum}")
-                return []
 
         branch_id = next((d["branch_id"] for d in devices if d.get("branch_id")), None)
         if branch_id is None:
