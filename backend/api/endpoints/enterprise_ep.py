@@ -581,6 +581,23 @@ async def upload_enterprises(file: UploadFile = File(...), branch_id: Optional[i
         ln.name.strip().lower(): ln for ln in all_lines
     }
 
+    def _normalize(s: str) -> str:
+        """Normalize Ukrainian/Russian letter variations for fuzzy matching."""
+        return s.upper().replace('І', 'И').replace('Ї', 'И').replace('Є', 'Е').replace('Ґ', 'Г')
+
+    def find_manufacturer(mfr_str: str):
+        """Exact match first, then case-insensitive contains with normalization."""
+        clean = mfr_str.strip()
+        # 1. Exact match
+        if clean in mfr_by_short:
+            return mfr_by_short[clean]
+        # 2. Contains: check if any short_name is a substring of the input (normalized)
+        clean_norm = _normalize(clean)
+        for short, mfr in mfr_by_short.items():
+            if _normalize(short) in clean_norm:
+                return mfr
+        return None
+
     def parse_bool(val, default=True) -> bool:
         if val is None:
             return default
@@ -609,7 +626,7 @@ async def upload_enterprises(file: UploadFile = File(...), branch_id: Optional[i
 
         # manufacturer → mf_dev
         mfr_clean = str(mfr_str).strip() if mfr_str else ""
-        mfr = mfr_by_short.get(mfr_clean)
+        mfr = find_manufacturer(mfr_clean)
         if not mfr:
             errors.append(
                 f"Рядок {row_idx}: невідомий виробник '{mfr_clean}'. "
@@ -654,11 +671,8 @@ async def upload_enterprises(file: UploadFile = File(...), branch_id: Optional[i
             "line_id":  line_id,
         })
 
-    if not records and errors:
-        raise HTTPException(status_code=422, detail={"errors": errors})
-
-    inserted = 0
-    updated = 0
+    if not records:
+        return {"imported": 0, "warnings": len(errors), "errors": errors}
 
     async with async_session_factory() as session:
         from sqlalchemy.dialects.postgresql import insert as pg_insert
