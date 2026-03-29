@@ -50,4 +50,4 @@ MANIFEST
 # Logs
 *.log
 /backend/*.log
-/backend/*.txt
+/backend/*.txt.claude/
