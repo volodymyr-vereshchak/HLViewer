@@ -272,6 +272,7 @@ async def get_devices_for_lines_db(line_ids: list[int], session) -> list[dict]:
     return [
         {
             "line_id": e.line_id,
+            "branch_id": e.branch_id,
             "serNum": e.ser_num,
             "mfDev": e.mf_dev,
             "typeDev": e.type_dev,

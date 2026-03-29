@@ -109,8 +109,8 @@ class EnterpriseVirtualRouter:
 
         # Validate and parse dates
         try:
-            date_from = datetime.strptime(from_date, "%Y-%m-%d")
-            date_to = datetime.strptime(to_date, "%Y-%m-%d")
+            date_from = datetime.strptime(from_date.split(" ")[0].split("T")[0], "%Y-%m-%d")
+            date_to = datetime.strptime(to_date.split(" ")[0].split("T")[0], "%Y-%m-%d")
 
             if date_from > date_to:
                 raise ValueError("from_date must be <= to_date")
@@ -190,11 +190,21 @@ class EnterpriseVirtualRouter:
             return []
 
         # Fetch volumes from DPD API
+        branch_id = next((d["branch_id"] for d in devices if d.get("branch_id")), None)
+        if branch_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Could not determine branch for requested lines"
+            )
+
         try:
-            client = DPDClient()
+            async with async_session_factory() as cred_session:
+                client = await DPDClient.for_branch(branch_id, cred_session)
             volumes_data = await client.get_volumes(
                 devices, date_from, date_to, type_request=period_type
             )
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
         except Exception as e:
             logger.error(f"DPD API error: {e}")
             raise HTTPException(
