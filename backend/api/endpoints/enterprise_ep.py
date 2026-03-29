@@ -96,6 +96,8 @@ class EnterpriseRouter:
             description="Data granularity: 'daily' or 'hourly'"
         ),
         serNum: Optional[int] = Query(None, description="Optional: Filter by device serial number"),
+        mfDev: Optional[int] = Query(None, description="Optional: Manufacturer code"),
+        typeDev: Optional[int] = Query(None, description="Optional: Device type code"),
         chNum: Optional[int] = Query(None, description="Optional: Filter by device channel number"),
     ) -> List[EnterpriseVolumeResponse]:
         logger.info(
@@ -115,7 +117,7 @@ class EnterpriseRouter:
                 detail=f"Invalid date format: {e}. Use YYYY-MM-DD format."
             )
 
-        if not line_id and (serNum is None or chNum is None):  # None or []
+        if not line_id and (serNum is None or chNum is None or mfDev is None or typeDev is None):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Provide line_id or serNum+chNum"
@@ -128,11 +130,10 @@ class EnterpriseRouter:
                     if serNum is not None and chNum is not None:
                         devices = [d for d in devices if d["serNum"] == serNum and d["chNum"] == chNum]
                 else:
-                    # No line_id — load device directly by serNum+chNum
-                    from backend.db.dao.enterprise_dao import EnterpriseDao
-                    ent = await EnterpriseDao(session).get_by_ser_ch(serNum, chNum)
+                    # No line_id — lookup by full device identity
+                    ent = await EnterpriseDao(session).get_by_device(serNum, mfDev, typeDev, chNum)
                     if not ent:
-                        logger.warning(f"No enterprise found with serNum={serNum}, chNum={chNum}")
+                        logger.warning(f"No enterprise found: serNum={serNum} mfDev={mfDev} typeDev={typeDev} chNum={chNum}")
                         return []
                     devices = [{
                         "line_id": ent.line_id,

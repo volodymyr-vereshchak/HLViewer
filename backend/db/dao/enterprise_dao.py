@@ -48,10 +48,12 @@ class EnterpriseDao(BasicDao):
         result = await self.session.execute(stmt)
         return result.scalars().all()
 
-    async def get_by_ser_ch(self, ser_num: int, ch_num: int) -> Enterprise | None:
+    async def get_by_device(self, ser_num: int, mf_dev: int, type_dev: int, ch_num: int) -> Enterprise | None:
         stmt = (
             select(self.model)
             .where(self.model.ser_num == ser_num)
+            .where(self.model.mf_dev == mf_dev)
+            .where(self.model.type_dev == type_dev)
             .where(self.model.ch_num == ch_num)
             .where(self.model.active == True)  # noqa: E712
             .limit(1)
