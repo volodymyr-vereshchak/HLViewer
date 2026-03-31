@@ -1,14 +1,15 @@
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import select
 
+from backend.api.endpoints.auth_ep import get_current_user
 from backend.db.dao.custom_exceptions import DatabaseIntegrityError
 from backend.db.dao.sys_type_dao import SysTypeDao
 from backend.db.engine import async_session_factory
 from backend.db.models.sys_type_model import SysType, SysTypeCreate, SysTypeList, SysTypeUpdate
 
-router = APIRouter(prefix="/sys-types", tags=["sys_type"])
+router = APIRouter(prefix="/sys-types", tags=["sys_type"], dependencies=[Depends(get_current_user)])
 
 
 @router.get("/", response_model=list[SysTypeList])

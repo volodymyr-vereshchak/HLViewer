@@ -1,14 +1,15 @@
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import select
 
+from backend.api.endpoints.auth_ep import get_current_user
 from backend.db.dao.custom_exceptions import DatabaseIntegrityError
 from backend.db.dao.edit_type_dao import EditTypeDao
 from backend.db.engine import async_session_factory
 from backend.db.models.edit_type_model import EditType, EditTypeCreate, EditTypeList, EditTypeUpdate
 
-router = APIRouter(prefix="/edit-types", tags=["edit_type"])
+router = APIRouter(prefix="/edit-types", tags=["edit_type"], dependencies=[Depends(get_current_user)])
 
 
 @router.get("/", response_model=list[EditTypeList])

@@ -1,9 +1,10 @@
 import asyncio
 from datetime import datetime
 
-from fastapi import APIRouter, BackgroundTasks, status, HTTPException
+from fastapi import APIRouter, Depends, BackgroundTasks, status, HTTPException
 from pydantic import BaseModel
 
+from backend.api.endpoints.auth_ep import get_current_user
 from backend.db.engine import async_session_factory
 from backend.db.preload_db.preload_db import preload_db
 from backend.hl_engine.main import update_hostlibs, update_direct
@@ -22,7 +23,7 @@ _job: dict = {"status": "idle", "started_at": None, "finished_at": None, "error"
 
 class RootRouter:
     def __init__(self):
-        self.router = APIRouter()
+        self.router = APIRouter(dependencies=[Depends(get_current_user)])
         self.logger = logger_setup("backend")
         self.router.add_api_route(
             path="/update_data/",

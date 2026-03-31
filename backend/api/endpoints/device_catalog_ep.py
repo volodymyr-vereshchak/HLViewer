@@ -3,7 +3,7 @@ CRUD endpoints for device manufacturers and corrector model types.
 """
 from typing import List
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import select
 from backend.db.dao.custom_exceptions import DatabaseIntegrityError
 
@@ -14,9 +14,10 @@ from backend.db.models.device_catalog_model import (
     ManufacturerRead, ManufacturerCreate, ManufacturerUpdate,
     CorectorTypeRead, CorectorTypeCreate, CorectorTypeUpdate,
 )
+from backend.api.endpoints.auth_ep import get_current_user
 from backend.db.preload_db.preload_device_catalog import preload as _preload_catalog
 
-router = APIRouter(prefix="/device-catalog", tags=["device_catalog"])
+router = APIRouter(prefix="/device-catalog", tags=["device_catalog"], dependencies=[Depends(get_current_user)])
 
 
 def _conflict_msg(e: DatabaseIntegrityError) -> str:

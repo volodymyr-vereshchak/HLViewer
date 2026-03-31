@@ -1,7 +1,8 @@
 from datetime import datetime
 
-from fastapi import Query
+from fastapi import Depends, Query
 
+from backend.api.endpoints.auth_ep import get_allowed_line_ids
 from backend.api.endpoints.base_archive_ep import BaseArchiveRouter
 from backend.db.dao.param_dao import ParamDao
 from backend.db.engine import async_session_factory
@@ -22,7 +23,11 @@ class ParamRouter(BaseArchiveRouter):
         from_date: datetime = Query(None),
         to_date: datetime = Query(None),
         line_id: list[int] = Query(None),
+        allowed_line_ids: list[int] | None = Depends(get_allowed_line_ids),
     ):
+        if allowed_line_ids is not None:
+            allowed_set = set(allowed_line_ids)
+            line_id = [lid for lid in line_id if lid in allowed_set] if line_id else allowed_line_ids
         async with async_session_factory() as session:
             archive_dao = self.archive_dao(session=session)
             if line_id and len(line_id) > 1:

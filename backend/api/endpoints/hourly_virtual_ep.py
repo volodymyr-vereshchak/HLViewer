@@ -5,9 +5,10 @@ Endpoint for querying hourly archives with virtual lines support.
 """
 
 from datetime import datetime
-from fastapi import APIRouter, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from typing import List
 
+from backend.api.endpoints.auth_ep import get_current_user
 from backend.db.engine import async_session_factory
 from backend.db.dao.hourly_archive_dao import HourlyArchiveDao
 from backend.services.virtual_lines_config import (
@@ -21,7 +22,7 @@ class HourlyVirtualRouter:
     """Router for hourly archives with virtual lines support."""
 
     def __init__(self):
-        self.router = APIRouter()
+        self.router = APIRouter(dependencies=[Depends(get_current_user)])
 
         self.router.add_api_route(
             path="/hourly_virtual/",

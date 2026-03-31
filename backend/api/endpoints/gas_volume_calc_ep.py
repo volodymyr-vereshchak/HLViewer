@@ -1,6 +1,7 @@
-from fastapi import APIRouter, status, HTTPException
+from fastapi import APIRouter, Depends, status, HTTPException
 from sqlalchemy import text
 
+from backend.api.endpoints.auth_ep import get_branch_filter, get_current_user
 from backend.db.dao.custom_exceptions import DatabaseIntegrityError
 from backend.db.dao.gas_volume_calc_dao import GasVolumeCalcDao
 from backend.db.engine import async_session_factory
@@ -44,12 +45,22 @@ class GasVolumeCalcRouter:
             status_code=status.HTTP_204_NO_CONTENT,
         )
 
-    async def get_gas_volume_calc(self, lumg_id: int = None):
+    async def get_gas_volume_calc(
+        self,
+        lumg_id: int = None,
+        branch_ids: list[int] | None = Depends(get_branch_filter),
+    ):
         async with async_session_factory() as session:
-            gas_volume_calc = await GasVolumeCalcDao(
-                session=session
-            ).get_flow_by_lumg_id(lumg_id)
-            return gas_volume_calc
+            dao = GasVolumeCalcDao(session=session)
+            calcs = await dao.get_flow_by_lumg_id(lumg_id)
+            if branch_ids is not None:
+                from sqlmodel import select
+                from backend.db.models.lumg_model import Lumg
+                allowed_lumg_ids = set((await session.execute(
+                    select(Lumg.id).where(Lumg.branch_id.in_(branch_ids))
+                )).scalars())
+                calcs = [c for c in calcs if c.lumg_id in allowed_lumg_ids]
+            return calcs
 
     async def create_gas_volume_calc(self, gvc: GasVolumeCalcCreate):
         try:

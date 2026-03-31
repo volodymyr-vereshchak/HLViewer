@@ -1,5 +1,6 @@
-from fastapi import APIRouter, status, HTTPException
+from fastapi import APIRouter, Depends, status, HTTPException
 
+from backend.api.endpoints.auth_ep import get_current_user
 from backend.db.dao.custom_exceptions import DatabaseIntegrityError
 from backend.db.dao.gas_volume_calc_type_dao import GasVolumeCalcTypeDao
 from backend.db.engine import DbEngine, async_session_factory
@@ -9,7 +10,7 @@ from backend.db.models.gas_volume_calc_type_model import GasVolumeCalcTypeUpdate
 
 class GasVolumeCalcTypeRouter:
     def __init__(self):
-        self.router = APIRouter()
+        self.router = APIRouter(dependencies=[Depends(get_current_user)])
         self.router.add_api_route(
             path="/gas-volume-calc-types/",
             tags=["Gas volume types"],

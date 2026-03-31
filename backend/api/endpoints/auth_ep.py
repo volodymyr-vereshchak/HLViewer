@@ -22,6 +22,9 @@ from sqlmodel import select
 
 from backend.db.engine import async_session_factory
 from backend.db.models.app_user_model import AppUser, AppUserBranchAccess, AppUserRead
+from backend.db.models.lumg_model import Lumg
+from backend.db.models.gas_volume_calc_model import GasVolumeCalc
+from backend.db.models.line_model import Line
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +101,31 @@ async def get_branch_filter(
             select(AppUserBranchAccess.branch_id).where(AppUserBranchAccess.user_id == user.id)
         )
         return list(result.scalars().all())
+
+
+async def get_allowed_line_ids(
+    branch_ids: list[int] | None = Depends(get_branch_filter),
+) -> list[int] | None:
+    """None = admin (no restrictions). list[int] = allowed line_ids for viewer."""
+    if branch_ids is None:
+        return None
+    if not branch_ids:
+        return []
+    async with async_session_factory() as session:
+        lumg_ids = list((await session.execute(
+            select(Lumg.id).where(Lumg.branch_id.in_(branch_ids))
+        )).scalars())
+        if not lumg_ids:
+            return []
+        calc_ids = list((await session.execute(
+            select(GasVolumeCalc.id).where(GasVolumeCalc.lumg_id.in_(lumg_ids))
+        )).scalars())
+        if not calc_ids:
+            return []
+        line_ids = list((await session.execute(
+            select(Line.id).where(Line.gas_volume_calc_id.in_(calc_ids))
+        )).scalars())
+        return line_ids
 
 
 # ── schemas ───────────────────────────────────────────────────────────────────

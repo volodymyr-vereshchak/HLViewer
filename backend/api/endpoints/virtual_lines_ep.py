@@ -5,11 +5,12 @@ Endpoints for managing and querying virtual lines (rings).
 Uses DB-backed virtual line data; falls back to JSON config when DB is empty.
 """
 
-from fastapi import APIRouter, status, HTTPException
+from fastapi import APIRouter, Depends, status, HTTPException
 from typing import List
 from sqlmodel import select
 from sqlalchemy import delete as sa_delete
 
+from backend.api.endpoints.auth_ep import get_current_user
 from backend.db.engine import async_session_factory
 from backend.db.dao.line_dao import LineDao
 from backend.db.models.grmu_branch_model import (
@@ -38,7 +39,7 @@ class VirtualLinesRouter:
     """Router for virtual lines endpoints."""
 
     def __init__(self):
-        self.router = APIRouter()
+        self.router = APIRouter(dependencies=[Depends(get_current_user)])
 
         self.router.add_api_route(
             path="/virtual_lines/visible",

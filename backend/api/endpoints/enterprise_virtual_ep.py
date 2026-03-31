@@ -9,8 +9,9 @@ import logging
 from datetime import datetime, date
 from typing import List
 from collections import defaultdict
-from fastapi import APIRouter, Query, status, HTTPException
+from fastapi import APIRouter, Depends, Query, status, HTTPException
 
+from backend.api.endpoints.auth_ep import get_current_user
 from backend.db.models.enterprise_models import (
     EnterpriseVolumeResponse,
     DeviceVolume,
@@ -28,7 +29,7 @@ class EnterpriseVirtualRouter:
     """Router for enterprise volume endpoints with virtual lines support."""
 
     def __init__(self):
-        self.router = APIRouter()
+        self.router = APIRouter(dependencies=[Depends(get_current_user)])
         self.router.add_api_route(
             path="/enterprise/volumes_virtual/",
             tags=["enterprise"],
