@@ -1,10 +1,13 @@
+import json
 import logging
+import math
 import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import JSONResponse
 
 from backend.api.endpoints import device_catalog_ep
 from backend.api.endpoints import (
@@ -35,6 +38,28 @@ from backend.hl_engine.main import _cleanup_orphan_temp_dirs
 from sqlmodel import select
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_nan(obj):
+    """Recursively replace NaN/Inf floats with None for JSON compliance."""
+    if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+        return None
+    if isinstance(obj, dict):
+        return {k: _sanitize_nan(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_nan(v) for v in obj]
+    return obj
+
+
+class NaNSafeJSONResponse(JSONResponse):
+    def render(self, content) -> bytes:
+        return json.dumps(
+            _sanitize_nan(content),
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+
 
 tags_metadata = [
     {
@@ -124,7 +149,7 @@ async def lifespan(application: FastAPI):
 
 
 # run FastApi
-app = FastAPI(openapi_tags=tags_metadata, lifespan=lifespan)
+app = FastAPI(openapi_tags=tags_metadata, lifespan=lifespan, default_response_class=NaNSafeJSONResponse)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # Add CORS middleware
