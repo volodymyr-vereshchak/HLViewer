@@ -9,7 +9,7 @@ import logging
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import text
 from sqlmodel import select
 
@@ -29,6 +29,7 @@ from backend.db.models.grmu_branch_model import (
     GrmuBranchDpdCredential,
     GrmuBranchDpdCredentialUpdate,
 )
+from backend.api.endpoints.auth_ep import get_branch_filter
 from backend.db.models.lumg_model import Lumg
 from backend.hl_engine.config_reader import ConfigReader
 from backend.services.grmu_branch_mappings import get_all_mappings
@@ -44,11 +45,16 @@ router = APIRouter(prefix="/grmu_branch", tags=["grmu_branch"])
 
 
 @router.get("/", response_model=List[GrmuBranchList], summary="List all branches")
-async def list_branches(active_only: bool = Query(default=False)):
+async def list_branches(
+    active_only: bool = Query(default=False),
+    branch_ids: list[int] | None = Depends(get_branch_filter),
+):
     async with async_session_factory() as session:
         stmt = select(GrmuBranch)
         if active_only:
             stmt = stmt.where(GrmuBranch.active == True)  # noqa: E712
+        if branch_ids is not None:
+            stmt = stmt.where(GrmuBranch.id.in_(branch_ids))
         stmt = stmt.order_by(GrmuBranch.name)
         result = await session.execute(stmt)
         branches = result.scalars().all()
