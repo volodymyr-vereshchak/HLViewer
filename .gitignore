@@ -43,9 +43,8 @@ MANIFEST
 /backend/data/hourly_prediction_results.xlsx
 *.parquet
 
-# Pobut large data files
-/backend/pobut/data/input/
-/backend/pobut/data/output/
+# Pobut - not part of FastAPI server
+/backend/pobut/
 
 # Logs
 *.log
