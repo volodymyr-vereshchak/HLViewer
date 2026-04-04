@@ -25,6 +25,13 @@ class BaseArchiveRouter:
             methods=["GET"],
             status_code=status.HTTP_200_OK,
         )
+        self.router.add_api_route(
+            path=path[:-1] + "_last_period/",
+            endpoint=self.get_last_period,
+            tags=tags,
+            methods=["GET"],
+            status_code=status.HTTP_200_OK,
+        )
 
     async def get_archive(
         self,
@@ -44,6 +51,11 @@ class BaseArchiveRouter:
             archive_dao = self.archive_dao(session=session)
             archives = await archive_dao.get_range(from_date, to_date, line_id)
             return archives
+
+    async def get_last_period(self):
+        async with async_session_factory() as session:
+            period = await self.archive_dao(session=session).get_last_period()
+        return {"last_period": period.isoformat() if period else None}
 
     async def get_archive_counts(
         self,
