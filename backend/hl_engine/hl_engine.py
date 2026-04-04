@@ -1,3 +1,4 @@
+import asyncio
 import os
 from datetime import datetime, date
 from typing import Type
@@ -14,6 +15,31 @@ from backend.db.models.line_model import Line as LineModel
 from backend.hl_engine.data_classes.base_dataclass import BaseDataclass
 from utils.files_utils import find_files_by_mask, read_archive_file
 from utils.logger import logger_setup
+
+
+def _read_file_records_sync(file: str, struct, date_flag: bool, line_id: int, model_fields: set) -> list[dict]:
+    """Read all records from a binary archive file synchronously.
+    Intended to run in a thread pool via asyncio.to_thread."""
+    records = []
+    for file_dict in read_archive_file(file, struct):
+        try:
+            if date_flag:
+                period = date(file_dict["year"] + 2000, file_dict["month"], file_dict["day"])
+            else:
+                period = datetime(
+                    file_dict["year"] + 2000,
+                    file_dict["month"],
+                    file_dict["day"],
+                    file_dict["hour"],
+                    file_dict["minutes"],
+                    file_dict.get("seconds", 0),
+                )
+            file_dict["period"] = period
+            file_dict["line_id"] = line_id
+            records.append({k: v for k, v in file_dict.items() if k in model_fields})
+        except (ValueError, KeyError):
+            continue
+    return records
 
 
 class Hostlib:
@@ -60,6 +86,8 @@ class Hostlib:
             for ln in line_result.scalars().all():
                 _line_cache[(ln.gas_volume_calc_id, ln.line)] = ln.id
 
+        model_fields = set(self.create_class.model_fields)
+
         for file in files:
             flow_params = self.get_params_from_file_name(file)
             address = flow_params["address"]
@@ -78,42 +106,16 @@ class Hostlib:
                 _line_cache[key] = gas_volume_line.id
             line_id = _line_cache[key]
 
-            read_archive_gen = read_archive_file(file, self.struct)
-            while True:
-                try:
-                    file_dict = next(read_archive_gen)
-                    if self.date_flag:
-                        datetime_period = date(
-                            file_dict["year"] + 2000,
-                            file_dict["month"],
-                            file_dict["day"],
-                        )
-                    else:
-                        datetime_period = datetime(
-                            file_dict["year"] + 2000,
-                            file_dict["month"],
-                            file_dict["day"],
-                            file_dict["hour"],
-                            file_dict["minutes"],
-                            file_dict.get("seconds", 0),
-                        )
-                    file_dict["period"] = datetime_period
-                    file_dict["line_id"] = line_id
-                    archive_dict = {
-                        key: value
-                        for key, value in file_dict.items()
-                        if key in self.create_class.model_fields
-                    }
-                    archive_dict_list.append(archive_dict)
-                    if len(archive_dict_list) == self.chunk_size:
-                        yield archive_dict_list
-                        archive_dict_list = []
+            # Read binary file in thread pool — avoids blocking the event loop
+            file_records = await asyncio.to_thread(
+                _read_file_records_sync, file, self.struct, self.date_flag, line_id, model_fields
+            )
 
-                except StopIteration:
-                    break
-
-                except ValueError as e:
-                    self.logger.debug(e)
+            for record in file_records:
+                archive_dict_list.append(record)
+                if len(archive_dict_list) == self.chunk_size:
+                    yield archive_dict_list
+                    archive_dict_list = []
 
         if archive_dict_list:
             yield archive_dict_list

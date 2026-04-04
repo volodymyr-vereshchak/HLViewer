@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import shutil
+from collections import defaultdict
 from types import SimpleNamespace
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -61,6 +62,29 @@ async def update_worker(
     await update_archive(archives_gen, archive_dao, constraint, session)
 
 
+WORKERS = [
+    (DailyEngine,  DailyArchiveDao,  DAILY_ARCHIVE_CONSTRAINT),
+    (HourlyEngine, HourlyArchiveDao, HOURLY_ARCHIVE_CONSTRAINT),
+    (EditEngine,   EditArchiveDao,   EDIT_ARCHIVE_CONSTRAINT),
+    (SysEngine,    SysArchiveDao,    SYS_ARCHIVE_CONSTRAINT),
+    (ParamEngine,  ParamDao,         PARAM_CONSTRAINT),
+]
+
+
+async def _run_engine(engine, path, archive_dao, constraint, chunk_size, lumg_id_val):
+    """Run a single engine in its own session."""
+    async with update_session_factory() as worker_session:
+        await update_worker(engine, path, archive_dao, constraint, chunk_size, worker_session, lumg_id_val)
+
+
+async def _run_all_engines_parallel(path: str, lumg_id_val: int, chunk_size: int):
+    """Run all 5 archive engines in parallel for one (path, lumg_id) pair."""
+    await asyncio.gather(*[
+        _run_engine(engine, path, archive_dao, constraint, chunk_size, lumg_id_val)
+        for engine, archive_dao, constraint in WORKERS
+    ])
+
+
 async def update_hostlibs(session: AsyncSession, lumg_id: int | None = None, progress: dict | None = None):
     _cleanup_orphan_temp_dirs()
     query = select(LumgDataPath).where(LumgDataPath.active == True)
@@ -84,13 +108,6 @@ async def update_hostlibs(session: AsyncSession, lumg_id: int | None = None, pro
             progress[lp.lumg_id] = "pending"
 
     chunk_size = backend_settings.get("CHUNK_SIZE")
-    workers = [
-        (DailyEngine, DailyArchiveDao, DAILY_ARCHIVE_CONSTRAINT),
-        (HourlyEngine, HourlyArchiveDao, HOURLY_ARCHIVE_CONSTRAINT),
-        (EditEngine, EditArchiveDao, EDIT_ARCHIVE_CONSTRAINT),
-        (SysEngine, SysArchiveDao, SYS_ARCHIVE_CONSTRAINT),
-        (ParamEngine, ParamDao, PARAM_CONSTRAINT),
-    ]
 
     # Load all EIS code → lumg_id mappings once
     eis_result = await session.execute(select(LumgEisCode))
@@ -107,31 +124,25 @@ async def update_hostlibs(session: AsyncSession, lumg_id: int | None = None, pro
 
     _sem = asyncio.Semaphore(6)
 
-    async def _process_lumg(lumg_path):
+    async def _process_lumg_in_temp(lumg_path, temp_path: str):
+        """Process one LUMG using a shared already-unzipped temp directory."""
         if progress is not None:
             progress[lumg_path.lumg_id] = "queued"
         async with _sem:
             if progress is not None:
                 progress[lumg_path.lumg_id] = "running"
-            if not os.path.exists(lumg_path.path):
-                logger.error(f"Hostlib path does not exist: {lumg_path.path!r} — skipping lumg_id={lumg_path.lumg_id}")
-                if progress is not None:
-                    progress[lumg_path.lumg_id] = "error"
-                return
             try:
-                async with UnzipUtils(lumg_path.path) as unzip_utils:
-                    eis_dirs = _find_eis_dirs(unzip_utils.temp_path)
-                    if eis_dirs:
-                        # Mode 1: EIS routing — each folder → its LUMG
-                        for eis_path, resolved_lumg_id in eis_dirs:
-                            for engine, archive_dao, constraint in workers:
-                                async with update_session_factory() as worker_session:
-                                    await update_worker(engine, eis_path, archive_dao, constraint, chunk_size, worker_session, resolved_lumg_id)
-                    else:
-                        # Mode 2: direct — all files → this LUMG
-                        for engine, archive_dao, constraint in workers:
-                            async with update_session_factory() as worker_session:
-                                await update_worker(engine, unzip_utils.temp_path, archive_dao, constraint, chunk_size, worker_session, lumg_path.lumg_id)
+                eis_dirs = _find_eis_dirs(temp_path)
+                if eis_dirs:
+                    # Mode 1: EIS routing — each folder → its LUMG (all engines parallel)
+                    await asyncio.gather(*[
+                        _run_all_engines_parallel(eis_path, resolved_lumg_id, chunk_size)
+                        for eis_path, resolved_lumg_id in eis_dirs
+                    ])
+                else:
+                    # Mode 2: direct — all files → this LUMG (all engines parallel)
+                    await _run_all_engines_parallel(temp_path, lumg_path.lumg_id, chunk_size)
+
                 if progress is not None:
                     progress[lumg_path.lumg_id] = "done"
             except Exception as e:
@@ -139,7 +150,41 @@ async def update_hostlibs(session: AsyncSession, lumg_id: int | None = None, pro
                 if progress is not None:
                     progress[lumg_path.lumg_id] = "error"
 
-    await asyncio.gather(*[_process_lumg(p) for p in lumg_paths])
+    async def _process_path_group(path: str, lumg_path_list: list):
+        """Unzip once, then process all LUMGs sharing this path concurrently."""
+        if not os.path.exists(path):
+            logger.error(f"Hostlib path does not exist: {path!r} — skipping {len(lumg_path_list)} LUMGs")
+            if progress is not None:
+                for lp in lumg_path_list:
+                    progress[lp.lumg_id] = "error"
+            return
+        try:
+            async with UnzipUtils(path) as unzip_utils:
+                logger.info(f"Unzipped {path!r} → {unzip_utils.temp_path} (shared by {len(lumg_path_list)} LUMGs)")
+                await asyncio.gather(*[
+                    _process_lumg_in_temp(lp, unzip_utils.temp_path)
+                    for lp in lumg_path_list
+                ])
+        except Exception as e:
+            logger.error(f"Error processing path {path!r}: {e}", exc_info=True)
+            if progress is not None:
+                for lp in lumg_path_list:
+                    if progress.get(lp.lumg_id) not in ("done", "error"):
+                        progress[lp.lumg_id] = "error"
+
+    # ── Group LUMGs by path — unzip each unique path only once ─────────────────
+    path_groups: dict[str, list] = defaultdict(list)
+    for lp in lumg_paths:
+        path_groups[lp.path].append(lp)
+
+    logger.info(
+        f"Starting update: {len(lumg_paths)} LUMGs across {len(path_groups)} unique path(s)"
+    )
+
+    await asyncio.gather(*[
+        _process_path_group(path, lumg_list)
+        for path, lumg_list in path_groups.items()
+    ])
 
 
 async def update_direct(path: str, lumg_id: int, session: AsyncSession, progress: dict | None = None):
@@ -148,13 +193,6 @@ async def update_direct(path: str, lumg_id: int, session: AsyncSession, progress
         progress[lumg_id] = "running"
 
     chunk_size = backend_settings.get("CHUNK_SIZE")
-    workers = [
-        (DailyEngine, DailyArchiveDao, DAILY_ARCHIVE_CONSTRAINT),
-        (HourlyEngine, HourlyArchiveDao, HOURLY_ARCHIVE_CONSTRAINT),
-        (EditEngine, EditArchiveDao, EDIT_ARCHIVE_CONSTRAINT),
-        (SysEngine, SysArchiveDao, SYS_ARCHIVE_CONSTRAINT),
-        (ParamEngine, ParamDao, PARAM_CONSTRAINT),
-    ]
 
     if not os.path.exists(path):
         logger.error(f"Direct update path does not exist: {path!r}")
@@ -164,9 +202,7 @@ async def update_direct(path: str, lumg_id: int, session: AsyncSession, progress
 
     try:
         async with UnzipUtils(path) as unzip_utils:
-            for engine, archive_dao, constraint in workers:
-                async with update_session_factory() as worker_session:
-                    await update_worker(engine, unzip_utils.temp_path, archive_dao, constraint, chunk_size, worker_session, lumg_id)
+            await _run_all_engines_parallel(unzip_utils.temp_path, lumg_id, chunk_size)
         if progress is not None:
             progress[lumg_id] = "done"
     except Exception as e:
