@@ -34,29 +34,45 @@ class UnzipUtils:
         await asyncio.to_thread(self.delete_unzip_folder)
         return False
 
+    @staticmethod
+    def _latest_zip_per_dir(path: str) -> list[str]:
+        """For each directory under path, return only the most recently modified zip.
+
+        When a data source uploads multiple hourly snapshots (e.g.
+        Zaporizgaz_2026_04_04_0.zip … Zaporizgaz_2026_04_04_19.zip) each
+        containing a full copy of all device files, we only need the newest one.
+        Extracting all 20 would take 20× as long for zero extra data.
+        """
+        result = []
+        for root, dirs, files in os.walk(path):
+            zips = [os.path.join(root, f) for f in files if f.endswith(".zip")]
+            if not zips:
+                continue
+            # Pick the single newest zip in this directory
+            latest = max(zips, key=os.path.getmtime)
+            result.append(latest)
+        return result
+
     def unzip_files(self):
         os.makedirs(self.temp_path, exist_ok=True)
 
-        for root, _, files in os.walk(self.path):
-            for file in files:
-                if file.endswith(".zip"):
-                    zip_path = os.path.join(root, file)
-                    with zipfile.ZipFile(zip_path, "r") as zip_file:
-                        for file_info in zip_file.infolist():
-                            if file_info.is_dir():
-                                continue
-                            extracted_path = os.path.join(
-                                self.temp_path, file_info.filename
-                            )
-
-                            if os.path.exists(extracted_path):
-                                existing_size = os.stat(extracted_path).st_size
-                                new_size = file_info.file_size
-
-                                if new_size > existing_size:
-                                    zip_file.extract(file_info.filename, self.temp_path)
-                            else:
-                                zip_file.extract(file_info.filename, self.temp_path)
+        for zip_path in self._latest_zip_per_dir(self.path):
+            with zipfile.ZipFile(zip_path, "r") as zip_file:
+                for file_info in zip_file.infolist():
+                    if file_info.is_dir():
+                        continue
+                    extracted_path = os.path.join(
+                        self.temp_path, file_info.filename
+                    )
+                    if os.path.isfile(extracted_path):
+                        try:
+                            existing_size = os.path.getsize(extracted_path)
+                        except OSError:
+                            existing_size = -1
+                        if file_info.file_size > existing_size:
+                            zip_file.extract(file_info.filename, self.temp_path)
+                    else:
+                        zip_file.extract(file_info.filename, self.temp_path)
 
     def delete_unzip_folder(self):
         if os.path.exists(self.temp_path):
