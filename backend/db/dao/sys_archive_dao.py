@@ -30,9 +30,10 @@ class SysArchiveDao(BasicDao):
             .outerjoin(GasVolumeCalc, Line.gas_volume_calc_id == GasVolumeCalc.id)
             .outerjoin(GasVolumeCalcType, GasVolumeCalc.type_id == GasVolumeCalcType.id)
             .outerjoin(
-                SysType, GasVolumeCalcType.type_id == SysType.gas_volume_calc_type_id
+                SysType,
+                (GasVolumeCalcType.type_id == SysType.gas_volume_calc_type_id)
+                & (self.model.sys_type_id == SysType.sys_type_id),
             )
-            .where(self.model.sys_type_id == SysType.sys_type_id)
         )
         if from_date:
             statement = statement.where(self.model.period >= from_date)

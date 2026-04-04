@@ -30,9 +30,10 @@ class EditArchiveDao(BasicDao):
             .outerjoin(GasVolumeCalc, Line.gas_volume_calc_id == GasVolumeCalc.id)
             .outerjoin(GasVolumeCalcType, GasVolumeCalc.type_id == GasVolumeCalcType.id)
             .outerjoin(
-                EditType, GasVolumeCalcType.type_id == EditType.gas_volume_calc_type_id
+                EditType,
+                (GasVolumeCalcType.type_id == EditType.gas_volume_calc_type_id)
+                & (self.model.edit_type_id == EditType.edit_type_id),
             )
-            .where(self.model.edit_type_id == EditType.edit_type_id)
         )
         if from_date:
             statement = statement.where(self.model.period >= from_date)
