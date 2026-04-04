@@ -51,3 +51,4 @@ MANIFEST
 /backend/*.log
 /backend/*.txt.claude/
 packages/
+.claude/
