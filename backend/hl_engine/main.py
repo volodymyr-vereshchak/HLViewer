@@ -153,14 +153,14 @@ async def update_hostlibs(session: AsyncSession, lumg_id: int | None = None, pro
     async def _process_path_group(path: str, lumg_path_list: list):
         """Unzip once, then process all LUMGs sharing this path concurrently."""
         if not os.path.exists(path):
-            logger.error(f"Hostlib path does not exist: {path!r} — skipping {len(lumg_path_list)} LUMGs")
+            logger.error(f"Hostlib path does not exist: {path!r} - skipping {len(lumg_path_list)} LUMGs")
             if progress is not None:
                 for lp in lumg_path_list:
                     progress[lp.lumg_id] = "error"
             return
         try:
             async with UnzipUtils(path) as unzip_utils:
-                logger.info(f"Unzipped {path!r} → {unzip_utils.temp_path} (shared by {len(lumg_path_list)} LUMGs)")
+                logger.info(f"Unzipped {path!r} -> {unzip_utils.temp_path} (shared by {len(lumg_path_list)} LUMGs)")
                 await asyncio.gather(*[
                     _process_lumg_in_temp(lp, unzip_utils.temp_path)
                     for lp in lumg_path_list
