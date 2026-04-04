@@ -52,9 +52,16 @@ class BaseArchiveRouter:
             archives = await archive_dao.get_range(from_date, to_date, line_id)
             return archives
 
-    async def get_last_period(self):
+    async def get_last_period(self, line_id: list[int] = Query(None)):
+        from sqlalchemy import func
+        from sqlmodel import select
         async with async_session_factory() as session:
-            period = await self.archive_dao(session=session).get_last_period()
+            dao = self.archive_dao(session=session)
+            stmt = select(func.max(dao.model.period))
+            if line_id:
+                stmt = stmt.where(dao.model.line_id.in_(line_id))
+            result = await session.execute(stmt)
+            period = result.scalar()
         return {"last_period": period.isoformat() if period else None}
 
     async def get_archive_counts(
