@@ -253,7 +253,7 @@ class HostlibUpdater:
         # Build line_flags from DB (include_in_report / is_high_pressure)
         from sqlmodel import select
         from backend.db.models.line_model import Line
-        from backend.db.models.grmu_branch_model import VirtualLine
+        from backend.db.models.grmu_branch_model import VirtualLine, VirtualLineMember
 
         async with async_session_factory() as session:
             phys_result = await session.execute(
@@ -261,13 +261,22 @@ class HostlibUpdater:
             )
             phys_lines = phys_result.scalars().all()
 
-            virt_result = await session.execute(
-                select(VirtualLine)
+            # Load virtual line → member physical line ID mappings
+            vlm_result = await session.execute(
+                select(VirtualLine.id, VirtualLineMember.line_id).join(
+                    VirtualLineMember, VirtualLineMember.virtual_line_id == VirtualLine.id
+                )
             )
-            virt_lines = virt_result.scalars().all()
+            vlm_rows = vlm_result.all()
 
         line_flags = {l.id: l.is_high_pressure for l in phys_lines}
-        line_flags.update({vl.id: vl.is_high_pressure for vl in virt_lines})
+
+        # Derive is_high_pressure for virtual lines from their member physical lines
+        vl_member_lines: dict[int, list[int]] = {}
+        for vl_id, member_line_id in vlm_rows:
+            vl_member_lines.setdefault(vl_id, []).append(member_line_id)
+        for vl_id, member_ids in vl_member_lines.items():
+            line_flags[vl_id] = any(line_flags.get(mid, False) for mid in member_ids)
 
         # Fallback to settings if DB has no flagged lines yet (pre-migration or empty DB)
         if not line_flags:
