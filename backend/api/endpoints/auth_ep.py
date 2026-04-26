@@ -172,30 +172,8 @@ async def logout(response: Response):
 
 
 @router.get("/me", response_model=AppUserRead)
-async def get_me(hlviewer_token: Optional[str] = Cookie(default=None)):
-    if hlviewer_token:
-        try:
-            payload = jwt.decode(hlviewer_token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-            user_id = int(payload["sub"])
-            async with async_session_factory() as session:
-                result = await session.execute(select(AppUser).where(AppUser.id == user_id))
-                user = result.scalar_one_or_none()
-            if user and user.active:
-                return await _build_user_read(user)
-        except Exception:
-            pass  # Invalid/expired token — fall through to public mode or 401
-
-    if os.getenv("PUBLIC_MODE", "false").lower() == "true":
-        return AppUserRead(
-            id=0,
-            username="user",
-            display_name="user",
-            role="viewer",
-            active=True,
-            allowed_branch_ids=[],
-        )
-
-    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+async def get_me(user: AppUser = Depends(get_current_user)):
+    return await _build_user_read(user)
 
 
 @router.get("/users", response_model=List[AppUserRead])
