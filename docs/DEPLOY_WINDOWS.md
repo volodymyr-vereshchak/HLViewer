@@ -44,7 +44,6 @@ ADMIN_PASSWORD=початковий-пароль-адміна
 CORS_ORIGINS=http://localhost:3001,http://your-server-ip:3001
 
 # ── Шляхи ─────────────────────────────────────────────────────────────────
-HOSTLIB_PATH=D:\Metr\hostlibs
 ENTERPRISE_MAPPINGS_PATH=backend/data/enterprise_mappings.xlsx
 
 # ── Telegram (необов'язково) ───────────────────────────────────────────────

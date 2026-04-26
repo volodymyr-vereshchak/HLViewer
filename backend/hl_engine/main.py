@@ -3,7 +3,6 @@ import logging
 import os
 import shutil
 from collections import defaultdict
-from types import SimpleNamespace
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
@@ -93,14 +92,8 @@ async def update_hostlibs(session: AsyncSession, lumg_id: int | None = None, pro
     result = await session.execute(query)
     lumg_paths = result.scalars().all()
 
-    # Fallback to env var for backwards compatibility (if table is empty)
     if not lumg_paths:
-        env_path = backend_settings.get("HOSTLIB_PATH")
-        if env_path:
-            lumg_paths = [SimpleNamespace(lumg_id=1, path=env_path)]
-
-    if not lumg_paths:
-        logger.warning("No active LumgDataPath found in DB and no HOSTLIB_PATH env var set")
+        logger.warning("No active LumgDataPath found in DB — skipping hostlib update")
         return
 
     if progress is not None:
