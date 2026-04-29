@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends, status, HTTPException
+from sqlalchemy import text
 
 from backend.api.endpoints.auth_ep import get_current_user
 from backend.db.dao.custom_exceptions import DatabaseIntegrityError
 from backend.db.dao.gas_volume_calc_type_dao import GasVolumeCalcTypeDao
 from backend.db.engine import DbEngine, async_session_factory
 from backend.db.models import GasVolumeCalcTypeCreate, GasVolumeCalcTypeList
-from backend.db.models.gas_volume_calc_type_model import GasVolumeCalcTypeUpdate
+from backend.db.models.gas_volume_calc_type_model import GasVolumeCalcType, GasVolumeCalcTypeUpdate
 
 
 class GasVolumeCalcTypeRouter:
@@ -70,13 +71,17 @@ class GasVolumeCalcTypeRouter:
 
     async def delete_gvct(self, gvct_id: int):
         async with async_session_factory() as session:
-            delete_gvct = await GasVolumeCalcTypeDao(session=session).delete_item(
-                gvct_id
+            exists = await session.get(GasVolumeCalcType, gvct_id)
+            if not exists:
+                raise HTTPException(
+                    status_code=404, detail="Type of gas volume calc not found"
+                )
+            # Raw SQL so PostgreSQL handles CASCADE at DB level (not ORM which
+            # would load all related GasVolumeCalc → Line → archive rows into memory)
+            await session.execute(
+                text("DELETE FROM gas_vol_calc_type WHERE id = :id"), {"id": gvct_id}
             )
-        if not delete_gvct:
-            raise HTTPException(
-                status_code=404, detail="Type of gas volume calc not found"
-            )
+            await session.commit()
         return {"ok": True}
 
 
