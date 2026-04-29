@@ -1,59 +1,15 @@
 {
 "FLOWTYPE": [
 	{
-		"ID_TYPE" : 5,
-		"TYPENAME" : "Флоутек                       "
-	},
-	{
-		"ID_TYPE" : 56,
-		"TYPENAME" : "Флоутек ПК-В                  "
-	},
-	{
-		"ID_TYPE" : 0,
-		"TYPENAME" : "SF21UA30 - приграничная версия"
-	},
-	{
 		"ID_TYPE" : 33,
-		"TYPENAME" : "Флоутек-ТМ ГОСТ586            "
+		"TYPENAME" : "Флоутек-ТМ ГОСТ586"
 	},
 	{
 		"ID_TYPE" : 49,
-		"TYPENAME" : "Данифлоу вер.7                "
+		"TYPENAME" : "Данифлоу вер.7"
 	},
 	{
-		"ID_TYPE" : 1,
-		"TYPENAME" : "SF20UA30 - украинская версия  "
-	},
-	{
-		"ID_TYPE" : 3,
-		"TYPENAME" : "SF20UA40                      "
-	},
-	{
-		"ID_TYPE" : 10,
-		"TYPENAME" : "ПМ-3В                         "
-	},
-	{
-		"ID_TYPE" : 4,
-		"TYPENAME" : "SF20UA50                      "
-	},
-	{
-		"ID_TYPE" : 6,
-		"TYPENAME" : "Флоукор                       "
-	},
-	{
-		"ID_TYPE" : 9,
-		"TYPENAME" : "ФлоИнэк                       "
-	},
-	{
-		"ID_TYPE" : 17,
-		"TYPENAME" : "ОКВГ-01                       "
-	},
-	{
-		"ID_TYPE" : 29,
-		"TYPENAME" : "Флоутек-ТМ 3.4                "
-	},
-	{
-		"ID_TYPE" : 34,
-		"TYPENAME" : "Флоинэк ГОСТ586               "
+		"ID_TYPE" : 56,
+		"TYPENAME" : "Флоутек ПК-В"
 	}
 ]}

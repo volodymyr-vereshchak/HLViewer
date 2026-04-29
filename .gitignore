@@ -52,3 +52,6 @@ MANIFEST
 /backend/*.txt.claude/
 packages/
 .claude/
+
+# Preload JSON backups
+backend/db/preload_db/*_old.json
