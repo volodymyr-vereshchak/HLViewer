@@ -141,10 +141,32 @@ async def _seed_admin():
             logger.info("Seeded initial admin user: %s", username)
 
 
+async def _seed_default_user():
+    """Create default viewer_all user from env vars if not exists."""
+    username = os.getenv("DEFAULT_USERNAME")
+    password = os.getenv("DEFAULT_PASSWORD")
+    if not username or not password:
+        return
+    async with async_session_factory() as session:
+        result = await session.execute(select(AppUser).where(AppUser.username == username))
+        if result.scalar_one_or_none() is None:
+            user = AppUser(
+                username=username,
+                display_name=username,
+                role="viewer_all",
+                active=True,
+                password_hash=hash_password(password),
+            )
+            session.add(user)
+            await session.commit()
+            logger.info("Seeded default viewer user: %s", username)
+
+
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     _cleanup_orphan_temp_dirs()
     await _seed_admin()
+    await _seed_default_user()
     yield
 
 

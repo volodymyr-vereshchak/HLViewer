@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 import bcrypt
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from jose import JWTError, jwt
 from pydantic import BaseModel
 from sqlmodel import select
@@ -94,7 +94,7 @@ async def get_branch_filter(
     user: AppUser = Depends(get_current_user),
 ) -> list[int] | None:
     """None = admin (no restrictions). list[int] = allowed branch_ids for viewer."""
-    if user.role == "admin":
+    if user.role in ("admin", "viewer_all"):
         return None
     async with async_session_factory() as session:
         result = await session.execute(
@@ -172,8 +172,42 @@ async def logout(response: Response):
 
 
 @router.get("/me", response_model=AppUserRead)
-async def get_me(user: AppUser = Depends(get_current_user)):
-    return await _build_user_read(user)
+async def get_me(request: Request, response: Response):
+    # 1. Try valid cookie
+    token = request.cookies.get(COOKIE_NAME)
+    if token:
+        try:
+            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            user_id = int(payload["sub"])
+            async with async_session_factory() as session:
+                user = (await session.execute(
+                    select(AppUser).where(AppUser.id == user_id)
+                )).scalar_one_or_none()
+            if user and user.active:
+                return await _build_user_read(user)
+        except Exception:
+            pass
+
+    # 2. AUTO_LOGIN — issue real JWT for default user
+    if os.getenv("AUTO_LOGIN", "false").lower() == "true":
+        default_username = os.getenv("DEFAULT_USERNAME")
+        if default_username:
+            async with async_session_factory() as session:
+                default_user = (await session.execute(
+                    select(AppUser).where(AppUser.username == default_username)
+                )).scalar_one_or_none()
+            if default_user and default_user.active:
+                new_token = _create_token(default_user.id)
+                response.set_cookie(
+                    key=COOKIE_NAME,
+                    value=new_token,
+                    httponly=True,
+                    max_age=JWT_EXPIRE_HOURS * 3600,
+                    samesite="lax",
+                )
+                return await _build_user_read(default_user)
+
+    raise HTTPException(status_code=401, detail="Not authenticated")
 
 
 @router.get("/users", response_model=List[AppUserRead])
