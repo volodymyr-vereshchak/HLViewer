@@ -142,24 +142,30 @@ async def _seed_admin():
 
 
 async def _seed_default_user():
-    """Create default viewer_all user from env vars if not exists."""
+    """Create default viewer user from env vars if not exists. Fixes legacy viewer_all role."""
     username = os.getenv("DEFAULT_USERNAME")
     password = os.getenv("DEFAULT_PASSWORD")
     if not username or not password:
         return
     async with async_session_factory() as session:
         result = await session.execute(select(AppUser).where(AppUser.username == username))
-        if result.scalar_one_or_none() is None:
+        existing = result.scalar_one_or_none()
+        if existing is None:
             user = AppUser(
                 username=username,
                 display_name=username,
-                role="viewer_all",
+                role="viewer",
                 active=True,
                 password_hash=hash_password(password),
             )
             session.add(user)
             await session.commit()
             logger.info("Seeded default viewer user: %s", username)
+        elif existing.role == "viewer_all":
+            existing.role = "viewer"
+            session.add(existing)
+            await session.commit()
+            logger.info("Migrated default user role viewer_all → viewer: %s", username)
 
 
 @asynccontextmanager

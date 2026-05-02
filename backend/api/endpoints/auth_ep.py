@@ -93,14 +93,16 @@ async def get_current_user(hlviewer_token: Optional[str] = Cookie(default=None))
 async def get_branch_filter(
     user: AppUser = Depends(get_current_user),
 ) -> list[int] | None:
-    """None = admin (no restrictions). list[int] = allowed branch_ids for viewer."""
-    if user.role in ("admin", "viewer_all"):
+    """None = no restrictions (admin, or viewer with no branch entries). list[int] = restricted."""
+    if user.role == "admin":
         return None
     async with async_session_factory() as session:
         result = await session.execute(
             select(AppUserBranchAccess.branch_id).where(AppUserBranchAccess.user_id == user.id)
         )
-        return list(result.scalars().all())
+        branch_ids = list(result.scalars().all())
+    # Viewer with no branch entries = access to all branches
+    return None if not branch_ids else branch_ids
 
 
 async def get_allowed_line_ids(
@@ -251,6 +253,7 @@ async def _set_branch_access(session, user_id: int, branch_ids: list[int]):
     )
     for row in existing.scalars().all():
         await session.delete(row)
+    await session.flush()  # execute DELETEs before INSERTs to avoid unique constraint violation
     for bid in branch_ids:
         session.add(AppUserBranchAccess(user_id=user_id, branch_id=bid))
 
