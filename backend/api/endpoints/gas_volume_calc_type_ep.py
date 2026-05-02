@@ -1,5 +1,9 @@
+import json
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, status, HTTPException
 from sqlalchemy import text
+from sqlmodel import select
 
 from backend.api.endpoints.auth_ep import get_current_user
 from backend.db.dao.custom_exceptions import DatabaseIntegrityError
@@ -7,6 +11,9 @@ from backend.db.dao.gas_volume_calc_type_dao import GasVolumeCalcTypeDao
 from backend.db.engine import DbEngine, async_session_factory
 from backend.db.models import GasVolumeCalcTypeCreate, GasVolumeCalcTypeList
 from backend.db.models.gas_volume_calc_type_model import GasVolumeCalcType, GasVolumeCalcTypeUpdate
+from backend.db.models.sys_type_model import SysType
+from backend.db.models.edit_type_model import EditType
+from backend.db.models.app_user_model import AppUser
 
 
 class GasVolumeCalcTypeRouter:
@@ -43,6 +50,13 @@ class GasVolumeCalcTypeRouter:
             endpoint=self.delete_gvct,
             methods=["DELETE"],
             status_code=status.HTTP_204_NO_CONTENT,
+        )
+        self.router.add_api_route(
+            path="/gas-volume-calc-types/export-preload",
+            tags=["Gas volume types"],
+            endpoint=self.export_preload_json,
+            methods=["POST"],
+            status_code=status.HTTP_200_OK,
         )
 
     async def get_gvct(self):
@@ -83,6 +97,37 @@ class GasVolumeCalcTypeRouter:
             )
             await session.commit()
         return {"ok": True}
+
+
+    async def export_preload_json(self, user: AppUser = Depends(get_current_user)):
+        if user.role != "admin":
+            raise HTTPException(status_code=403, detail="Admin only")
+
+        async with async_session_factory() as session:
+            calc_types = (await session.execute(
+                select(GasVolumeCalcType).order_by(GasVolumeCalcType.type_id)
+            )).scalars().all()
+            sys_types = (await session.execute(
+                select(SysType).order_by(SysType.gas_volume_calc_type_id, SysType.sys_type_id)
+            )).scalars().all()
+            edit_types = (await session.execute(
+                select(EditType).order_by(EditType.gas_volume_calc_type_id, EditType.edit_type_id)
+            )).scalars().all()
+
+        base = Path("backend/db/preload_db")
+        flowtype = {"FLOWTYPE": [{"ID_TYPE": c.type_id, "TYPENAME": c.type_name} for c in calc_types]}
+        sysname  = {"SYSNAME":  [{"ID_TYPE": s.gas_volume_calc_type_id, "SYS_ID":  s.sys_type_id,  "SYSNAME":  s.sys_name}  for s in sys_types]}
+        editname = {"EDITNAME": [{"ID_TYPE": e.gas_volume_calc_type_id, "EDIT_ID": e.edit_type_id, "EDITNAME": e.edit_name} for e in edit_types]}
+
+        (base / "FLOWTYPE.json").write_text(json.dumps(flowtype,  ensure_ascii=False, indent=2), encoding="utf-8")
+        (base / "SYSNAME.json").write_text( json.dumps(sysname,   ensure_ascii=False, indent=2), encoding="utf-8")
+        (base / "EDITNAME.json").write_text(json.dumps(editname,  ensure_ascii=False, indent=2), encoding="utf-8")
+
+        return {"ok": True, "exported": {
+            "flowtype": len(calc_types),
+            "sysname":  len(sys_types),
+            "editname": len(edit_types),
+        }}
 
 
 gvct_router = GasVolumeCalcTypeRouter().router
