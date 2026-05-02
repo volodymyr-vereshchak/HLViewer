@@ -31,6 +31,11 @@ wheels/
 *.egg
 MANIFEST
 
+# backend/data — only askcfgs is tracked; everything else fills up during operation
+/backend/data/*
+!/backend/data/askcfgs/
+!/backend/data/askcfgs/**
+
 # Database dumps
 /backend/data/server_dump.sql
 /backend/data/server_dump.dump
