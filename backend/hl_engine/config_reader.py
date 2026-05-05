@@ -78,7 +78,7 @@ class ConfigReader:
                     lines.append({
                         "name": line_name,
                         "line": line_struct.line_num,
-                        "meter": line_struct.meter_type,
+                        "meter": bool(line_struct.meter_type),
                     })
                     cursor += LineStruct.size
 
@@ -130,7 +130,7 @@ class ConfigReader:
         line_dao = LineDao(session=session)
 
         for flow in flows:
-            type_id = await gas_volume_type_dao.get_or_create_by_type_id(flow["type_id"])
+            type_id = await gas_volume_type_dao.get_by_type_id(flow["type_id"])
             gas_volume_db = await gas_volume_calc_dao.update_if_exists(
                 lumg_id=lumg_id,
                 address=flow["address"],
