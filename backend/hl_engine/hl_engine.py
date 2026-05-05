@@ -1,4 +1,5 @@
 import asyncio
+import math
 import os
 from datetime import datetime, date
 from typing import Type
@@ -36,7 +37,11 @@ def _read_file_records_sync(file: str, struct, date_flag: bool, line_id: int, mo
                 )
             file_dict["period"] = period
             file_dict["line_id"] = line_id
-            records.append({k: v for k, v in file_dict.items() if k in model_fields})
+            row = {k: v for k, v in file_dict.items() if k in model_fields}
+            # Skip records with inf/NaN (uninitialized device registers, not real measurements)
+            if any(isinstance(v, float) and not math.isfinite(v) for v in row.values()):
+                continue
+            records.append(row)
         except (ValueError, KeyError):
             continue
     return records

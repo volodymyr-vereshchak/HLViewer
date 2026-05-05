@@ -233,7 +233,6 @@ class BasicDao:
             await self.session.commit()
             await self.session.refresh(db_item)
         except IntegrityError as e:
-            self.logger.exception(e)
             await self.session.rollback()
             raise DatabaseIntegrityError(str(e.orig)) from e
         except Exception as e:

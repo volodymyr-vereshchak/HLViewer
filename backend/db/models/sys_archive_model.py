@@ -1,5 +1,3 @@
-from decimal import Decimal
-
 from sqlmodel import Field, Relationship, UniqueConstraint
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -14,7 +12,7 @@ if TYPE_CHECKING:
 class SysArchiveBase(HlBaseModel):
     period: datetime = Field(index=True)
     sys_type_id: int
-    volume: Decimal = Field(max_digits=20, decimal_places=3)
+    volume: float
 
 
 SYS_ARCHIVE_CONSTRAINT = ["period", "sys_type_id", "line_id", "volume"]
