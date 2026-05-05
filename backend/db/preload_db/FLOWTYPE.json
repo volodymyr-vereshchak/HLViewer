@@ -1,8 +1,20 @@
 {
 "FLOWTYPE": [
 	{
+		"ID_TYPE" : 29,
+		"TYPENAME" : "Флоутек ТМ 3-4"
+	},
+	{
 		"ID_TYPE" : 33,
 		"TYPENAME" : "Флоутек-ТМ ГОСТ586"
+	},
+	{
+		"ID_TYPE" : 43,
+		"TYPENAME" : "КПЛГ"
+	},
+	{
+		"ID_TYPE" : 47,
+		"TYPENAME" : "Флоутек ВР2"
 	},
 	{
 		"ID_TYPE" : 49,
@@ -11,5 +23,13 @@
 	{
 		"ID_TYPE" : 56,
 		"TYPENAME" : "Флоутек ПК-В"
+	},
+	{
+		"ID_TYPE" : 59,
+		"TYPENAME" : "Флоутек ВР2 2020"
+	},
+	{
+		"ID_TYPE" : 61,
+		"TYPENAME" : "Данифлоу вер.8"
 	}
 ]}

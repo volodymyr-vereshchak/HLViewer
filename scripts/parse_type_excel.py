@@ -21,8 +21,8 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROBE_DIR  = os.path.join(SCRIPT_DIR, "probe_hostlib")
 PRELOAD_DIR = os.path.join(SCRIPT_DIR, "..", "backend", "db", "preload_db")
 
-SYS_JSON  = os.path.join(PRELOAD_DIR, "SYSNAME_new.json")
-EDIT_JSON = os.path.join(PRELOAD_DIR, "EDITNAME_new.json")
+SYS_JSON  = os.path.join(PRELOAD_DIR, "SYSNAME.json")
+EDIT_JSON = os.path.join(PRELOAD_DIR, "EDITNAME.json")
 
 UNKNOWN = "Невідомий код"
 

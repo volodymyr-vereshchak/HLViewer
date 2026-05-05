@@ -11,11 +11,11 @@ if TYPE_CHECKING:
 
 
 class GasVolumeCalcTypeBase(HlBaseModel):
-    type_id: int
-    type_name: str = Field(max_length=255, unique=True)
+    type_id: int = Field(unique=True)
+    type_name: str = Field(max_length=255)
 
 
-GAS_VOLUME_CALC_TYPE_CONSTRAINT = ["type_name"]
+GAS_VOLUME_CALC_TYPE_CONSTRAINT = ["type_id"]
 
 
 class GasVolumeCalcType(GasVolumeCalcTypeBase, table=True):

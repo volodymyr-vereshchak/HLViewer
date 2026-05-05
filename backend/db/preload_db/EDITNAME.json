@@ -1859,6 +1859,3451 @@
 			"ID_TYPE": 56,
 			"EDIT_ID": 247,
 			"EDITNAME": "Вища теплота згоряння"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 0,
+			"EDITNAME": "Зміна назви т/п"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 1,
+			"EDITNAME": "Густина, кг/м3"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 2,
+			"EDITNAME": "Вміст CO2, мол."
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 3,
+			"EDITNAME": "Вміст N2, мол."
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 4,
+			"EDITNAME": "Діаметр труби, мм"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 5,
+			"EDITNAME": "Діаметр діафрагми, мм"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 6,
+			"EDITNAME": "Атмосферний тиск, мм.рт.ст"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 7,
+			"EDITNAME": "Відсічка dP, кгс/м2"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 8,
+			"EDITNAME": "Изменение параметров ФХП, %"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 10,
+			"EDITNAME": "Номер канала хроматографа,"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 11,
+			"EDITNAME": "перемикання dP, кгс/м2"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 12,
+			"EDITNAME": "Тип відбору"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 13,
+			"EDITNAME": "Поч. радіус вх. крайки діфрагми, мм"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 14,
+			"EDITNAME": "Міжконтрольний інтервал діафрагми"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 19,
+			"EDITNAME": "Шорсткість, мм"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 20,
+			"EDITNAME": "A0 діафрагми"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 21,
+			"EDITNAME": "A1 діафрагми"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 22,
+			"EDITNAME": "КТР діафрагми"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 23,
+			"EDITNAME": "A2 діафрагми"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 24,
+			"EDITNAME": "КТР труби"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 25,
+			"EDITNAME": "Изменение параметра Резерв 1"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 28,
+			"EDITNAME": "Час переходу на літній час"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 29,
+			"EDITNAME": "Час переходу на зимовий час"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 30,
+			"EDITNAME": "Зміна контрактної години"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 32,
+			"EDITNAME": "Оперативний інтервал, хв."
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 33,
+			"EDITNAME": "A0 труби"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 34,
+			"EDITNAME": "A1 труби"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 35,
+			"EDITNAME": "A2 труби"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 37,
+			"EDITNAME": "Константа пит.об'єм.теплоти, Мдж/м3"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 38,
+			"EDITNAME": "Константа СО2,"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 39,
+			"EDITNAME": "Константа N2,"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 40,
+			"EDITNAME": "Режим роботи обчислювача.Константи"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 41,
+			"EDITNAME": "Константа перепаду, кгс/м2"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 42,
+			"EDITNAME": "Константа тиску, кгс/см2"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 43,
+			"EDITNAME": "Константа температури, °C"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 44,
+			"EDITNAME": "Константа об'єму при р/у, м3/г"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 45,
+			"EDITNAME": "Скорость по порту УЗС"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 46,
+			"EDITNAME": "Константа густини, кг/м3, м3/ч"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 48,
+			"EDITNAME": "Зроблена початкова конфігурація"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 49,
+			"EDITNAME": "Переконфіг.(екр.,швид.,ном.,пароль)"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 50,
+			"EDITNAME": "Запис параметрів давачів"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 60,
+			"EDITNAME": "Протокол FlowSic MODBUS"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 128,
+			"EDITNAME": "Системний час"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 129,
+			"EDITNAME": "Системна дата"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 130,
+			"EDITNAME": "Калібрувальний коеф. УНТ"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 131,
+			"EDITNAME": "Контрактна година"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 132,
+			"EDITNAME": "Мін. число Рейнольдса"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 133,
+			"EDITNAME": "Калібрування каналу тиску"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 134,
+			"EDITNAME": "Калібрування каналу температури"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 135,
+			"EDITNAME": "Константа КТР УНТ"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 136,
+			"EDITNAME": "Калібрування каналу верх. перепаду"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 137,
+			"EDITNAME": "Калібрування каналу нижн. перепаду"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 138,
+			"EDITNAME": "Калібрування каналу густини"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 139,
+			"EDITNAME": "Ознака «Заборона аварій за константами»"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 140,
+			"EDITNAME": "HART-адреса датчика T"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 141,
+			"EDITNAME": "HART-адреса датчика P"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 142,
+			"EDITNAME": "HART-адреса датчика верхнього dP"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 143,
+			"EDITNAME": "HART-адреса датчика нижнього dP"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 144,
+			"EDITNAME": "Тип давача P"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 145,
+			"EDITNAME": "Мін. тиск, кгс/см2"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 146,
+			"EDITNAME": "Верхня межа тиску, кгс/см2"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 147,
+			"EDITNAME": "Мін. температура, °C"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 148,
+			"EDITNAME": "Макс. температура, °C"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 149,
+			"EDITNAME": "Густина Ro min, кг/м3"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 150,
+			"EDITNAME": "Поч. знач. Vр.у. для лічильника, м3"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 151,
+			"EDITNAME": "Верхня межа нижн. dP, кгс/м2"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 152,
+			"EDITNAME": "Ціна імпульсу лічильника, м3/імп."
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 153,
+			"EDITNAME": "Мін. верхнього dP, кгс/м2"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 154,
+			"EDITNAME": "Мін. витрата, вимір. лічильником, м3/г"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 155,
+			"EDITNAME": "Верхня межа верх. dP, кгс/м2"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 156,
+			"EDITNAME": "Макс. витрата, вимір. лічильником, м3/г"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 157,
+			"EDITNAME": "Об'єм для одоризації т/п №1, м3/імп."
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 158,
+			"EDITNAME": "Об'єм для одоризації т/п №2, м3/імп."
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 159,
+			"EDITNAME": "Тип витратоміру лічильника"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 160,
+			"EDITNAME": "MODBUS-адреса УЗЛ"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 161,
+			"EDITNAME": "Номери HART-каналу(P,T,dPв,dPн)"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 162,
+			"EDITNAME": "Содержание метана, %"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 163,
+			"EDITNAME": "Содержание N2, %"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 164,
+			"EDITNAME": "Содержание CO2, %"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 165,
+			"EDITNAME": "Содержание етана, %"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 166,
+			"EDITNAME": "Содержание пропана, %"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 167,
+			"EDITNAME": "Содержание паров воды, %"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 168,
+			"EDITNAME": "Содержание сероводорода, %"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 169,
+			"EDITNAME": "Содержание водорода, %"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 170,
+			"EDITNAME": "Содержание монооксида СО, %"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 172,
+			"EDITNAME": "Содержание iso-бутана %"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 173,
+			"EDITNAME": "Содержание n-бутана, %"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 174,
+			"EDITNAME": "Содержание iso+neo пентана, %"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 175,
+			"EDITNAME": "Содержание n-пентана, %"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 176,
+			"EDITNAME": "Содержание n-гексана, %"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 177,
+			"EDITNAME": "Содержание n-гептана, %"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 178,
+			"EDITNAME": "Содержание n-октана, %"
+		},
+		{
+			"ID_TYPE": 61,
+			"EDIT_ID": 247,
+			"EDITNAME": "Вища теплота згоряння"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 0,
+			"EDITNAME": "Зміна назви т/п"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 1,
+			"EDITNAME": "Густина, кг/м3"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 2,
+			"EDITNAME": "Вміст CO2, мол."
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 3,
+			"EDITNAME": "Вміст N2, мол."
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 4,
+			"EDITNAME": "Діаметр труби, мм"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 5,
+			"EDITNAME": "Діаметр діафрагми, мм"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 6,
+			"EDITNAME": "Атмосферний тиск, мм.рт.ст"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 7,
+			"EDITNAME": "Відсічка dP, кгс/м2"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 8,
+			"EDITNAME": "Кор. нелінійності"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 9,
+			"EDITNAME": "Нижн.кор.нелінійності"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 10,
+			"EDITNAME": "Верхн.кор.нелінійності"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 11,
+			"EDITNAME": "перемикання dP, кгс/м2"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 12,
+			"EDITNAME": "Тип відбору"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 13,
+			"EDITNAME": "Нульова точка P"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 14,
+			"EDITNAME": "Нульова точка T"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 15,
+			"EDITNAME": "Нульова точка dP"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 16,
+			"EDITNAME": "Нульова точка Low dP"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 17,
+			"EDITNAME": "Нульова точка High dP"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 18,
+			"EDITNAME": "Тип давача P"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 19,
+			"EDITNAME": "Шорсткість, мм"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 20,
+			"EDITNAME": "A1 труби"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 21,
+			"EDITNAME": "A0 труби"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 22,
+			"EDITNAME": "A2 труби"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 23,
+			"EDITNAME": "A0 діафрагми"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 24,
+			"EDITNAME": "A1 діафрагми"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 25,
+			"EDITNAME": "A2 діафрагми"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 26,
+			"EDITNAME": "В'язкість конденсату, мкН*с/м2"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 27,
+			"EDITNAME": "Верхня межа виміру dP, кгс/м2"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 28,
+			"EDITNAME": "Коли на літній час"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 29,
+			"EDITNAME": "Коли на зимовий час"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 30,
+			"EDITNAME": "Час - перехід на літній"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 31,
+			"EDITNAME": "Час - перехід на зимовий"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 32,
+			"EDITNAME": "Оперативний інтервал, хв."
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 33,
+			"EDITNAME": "Системний час"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 34,
+			"EDITNAME": "Системна дата"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 35,
+			"EDITNAME": "Час циклу SuperFlo, c"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 36,
+			"EDITNAME": "Контрактна година"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 37,
+			"EDITNAME": "Hижня межа Uжив, B"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 38,
+			"EDITNAME": "Межа відкриття т/п №2"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 39,
+			"EDITNAME": "Межа закриття т/п №2"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 40,
+			"EDITNAME": "Тривалість імпульсу"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 41,
+			"EDITNAME": "Затримка перемикання т/п, c."
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 42,
+			"EDITNAME": "Контрольний об'єм, м3"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 43,
+			"EDITNAME": "Сплячий режим"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 44,
+			"EDITNAME": "КТР труби"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 45,
+			"EDITNAME": "КТР діафрагми"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 46,
+			"EDITNAME": "dPmin, кгс/м2"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 47,
+			"EDITNAME": "dPmax, кгс/м2"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 48,
+			"EDITNAME": "Pmin, кгс/см2"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 49,
+			"EDITNAME": "Pmax, кгс/см2"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 50,
+			"EDITNAME": "Радіус притуплення, мм"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 51,
+			"EDITNAME": "Gauge Pressure"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 52,
+			"EDITNAME": "Період повірки, р."
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 53,
+			"EDITNAME": "Удельная теплота сгорания"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 54,
+			"EDITNAME": "Калибровочный коэф. k"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 55,
+			"EDITNAME": "Мин. доп. число Re"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 56,
+			"EDITNAME": "Константа Kрозш. A"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 57,
+			"EDITNAME": "Счетчик дес.тис. при р.у."
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 58,
+			"EDITNAME": "Объем при р.у., м3"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 59,
+			"EDITNAME": "Тип ОНТ"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 60,
+			"EDITNAME": "Модель ОНТ Itabar"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 61,
+			"EDITNAME": "Ширина зонда в свете"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 62,
+			"EDITNAME": "Рівень попередження про низький dP"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 70,
+			"EDITNAME": "Час переходу на літній час"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 71,
+			"EDITNAME": "Час переходу на зимовий час"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 72,
+			"EDITNAME": "Режим роботи обчислювача.Константи"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 73,
+			"EDITNAME": "Змінений пароль"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 74,
+			"EDITNAME": "Адреса обчислювача"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 75,
+			"EDITNAME": "Швидкість опитування, біт/с"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 76,
+			"EDITNAME": "Біти конфігурації екранів"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 77,
+			"EDITNAME": "Зроблена початкова конфігурація"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 78,
+			"EDITNAME": "Запис параметрів давачів"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 80,
+			"EDITNAME": "HART-адреса датчика T"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 81,
+			"EDITNAME": "HART-адреса датчика P"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 82,
+			"EDITNAME": "HART-адреса датчика верхнього dP"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 83,
+			"EDITNAME": "HART-адреса датчика нижнього dP"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 90,
+			"EDITNAME": "Мін. тиск, кгс/см2"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 91,
+			"EDITNAME": "Верхня межа тиску, кгс/см2"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 92,
+			"EDITNAME": "Мін. температура, °C"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 93,
+			"EDITNAME": "Макс. температура, °C"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 94,
+			"EDITNAME": "Мін. нижнього dP, кгс/м2"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 95,
+			"EDITNAME": "Поч. знач. об'єму при р.у. для лічильника, м3"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 96,
+			"EDITNAME": "Верхня межа нижн. dP, кгс/м2"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 97,
+			"EDITNAME": "Ціна імпульсу лічильника, м3/імп."
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 98,
+			"EDITNAME": "Мін. верхнього dP, кгс/м2"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 99,
+			"EDITNAME": "Мін. витрата, вимір. лічильником, м3/г"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 100,
+			"EDITNAME": "Верхня межа верх. dP, кгс/м2"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 101,
+			"EDITNAME": "Макс. витрата, вимір. лічильником, м3/г"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 102,
+			"EDITNAME": "Об'єм для одоризації т/п №1, м3/імп."
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 103,
+			"EDITNAME": "Макс. витрата для підігріву"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 104,
+			"EDITNAME": "Поч. радіус вх. крайки діфрагми, мм"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 105,
+			"EDITNAME": "Міжконтрольний інтервал діафрагми"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 110,
+			"EDITNAME": "Константа перепаду, кгс/м2"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 111,
+			"EDITNAME": "Константа тиску, кгс/см2"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 112,
+			"EDITNAME": "Константа температури, °C"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 113,
+			"EDITNAME": "Константа об'єму при р/у, м3/г"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 114,
+			"EDITNAME": "Константа густини, кг/м3, м3/ч"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 115,
+			"EDITNAME": "Константа пит.об'єм.теплоти, Мдж/м3"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 116,
+			"EDITNAME": "Константа СО2,"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 117,
+			"EDITNAME": "Константа N2,"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 118,
+			"EDITNAME": "Калібрування каналу густини"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 119,
+			"EDITNAME": "Ознака «Заборона аварій за константами»"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 130,
+			"EDITNAME": "Калібрувальний коеф. УНТ"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 131,
+			"EDITNAME": "Зміна контрактної години"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 132,
+			"EDITNAME": "Мін. число Рейнольдса"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 133,
+			"EDITNAME": "Калібрування каналу тиску"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 134,
+			"EDITNAME": "Калібрування каналу температури"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 135,
+			"EDITNAME": "Константа КТР УНТ"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 136,
+			"EDITNAME": "Калібрування каналу верх. перепаду"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 137,
+			"EDITNAME": "Калібрування каналу нижн. перепаду"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 150,
+			"EDITNAME": "Мінімальна витрата (Qmin), м3/г"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 151,
+			"EDITNAME": "Верхн.  межа виміру витрати (Qmax), м3/г"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 152,
+			"EDITNAME": "Найменування об'єкта"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 153,
+			"EDITNAME": "Одиниці виміру тиску"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 154,
+			"EDITNAME": "Одиниці виміру перепаду тиску"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 155,
+			"EDITNAME": "Одиниці виміру атмосф. тиски"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 156,
+			"EDITNAME": "Тип статичного тиску"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 157,
+			"EDITNAME": "Пароль для читання даних"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 158,
+			"EDITNAME": "Період калібр. при роботі"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 159,
+			"EDITNAME": "Період калібр. при калібр."
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 160,
+			"EDITNAME": "Верхн.  межа виміру dP"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 161,
+			"EDITNAME": "Нижня межа виміру тиску, кгс/см2"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 162,
+			"EDITNAME": "Верхн. межа виміру тиску, кгс/см2"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 163,
+			"EDITNAME": "Нижня межа виміру температури, °C"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 164,
+			"EDITNAME": "Верхн.  межа виміру температури, °C"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 165,
+			"EDITNAME": "Кіл. імпульсів на 1 м3"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 166,
+			"EDITNAME": "Максимальний можливий тиск, кгс/см2"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 167,
+			"EDITNAME": "Qstop, м3/г"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 168,
+			"EDITNAME": "Макс.  доп.  витрата (р.у.), м3/г"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 169,
+			"EDITNAME": "Максимальний можливий dP, кгс/м2"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 170,
+			"EDITNAME": "Мінімальний можливий dP, кгс/м2"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 190,
+			"EDITNAME": "Некор. витрата змінена"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 191,
+			"EDITNAME": "Коеф. перетворення турбіни"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 192,
+			"EDITNAME": "Корекція фактору А"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 193,
+			"EDITNAME": "Відсічка за витратою, сек."
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 194,
+			"EDITNAME": "Коеф. масштабування об'єму"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 195,
+			"EDITNAME": "Нижня межа частоти"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 196,
+			"EDITNAME": "Константа тиску"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 197,
+			"EDITNAME": "Константа температури"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 199,
+			"EDITNAME": "Кіл. імпульсів тиску"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 200,
+			"EDITNAME": "Кіл. імпульсів температури"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 210,
+			"EDITNAME": "Кіл. факторів коррекції"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 211,
+			"EDITNAME": "Частотний фактор 1"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 212,
+			"EDITNAME": "Частотний фактор 2"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 213,
+			"EDITNAME": "Частотний фактор 3"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 214,
+			"EDITNAME": "Частотний фактор 4"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 215,
+			"EDITNAME": "Частотний фактор 5"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 216,
+			"EDITNAME": "Частотний фактор 6"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 217,
+			"EDITNAME": "Частотний фактор 7"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 218,
+			"EDITNAME": "Частотний фактор 8"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 219,
+			"EDITNAME": "Частотний фактор 9"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 220,
+			"EDITNAME": "Частотний фактор 10"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 221,
+			"EDITNAME": "Іпульсний фактор 1"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 222,
+			"EDITNAME": "Іпульсний фактор 2"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 223,
+			"EDITNAME": "Іпульсний фактор 3"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 224,
+			"EDITNAME": "Іпульсний фактор 4"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 225,
+			"EDITNAME": "Іпульсний фактор 5"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 226,
+			"EDITNAME": "Іпульсний фактор 6"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 227,
+			"EDITNAME": "Іпульсний фактор 7"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 228,
+			"EDITNAME": "Іпульсний фактор 8"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 229,
+			"EDITNAME": "Іпульсний фактор 9"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 230,
+			"EDITNAME": "Іпульсний фактор 10"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 235,
+			"EDITNAME": "Консистенція газу трубопроводів"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 236,
+			"EDITNAME": "Логічний інтервал"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 237,
+			"EDITNAME": "Релейна функція"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 238,
+			"EDITNAME": "Дискретність імпульсів для ВТ 1"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 239,
+			"EDITNAME": "Дискретність імпульсів для ВТ 2"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 240,
+			"EDITNAME": "Режим зберігання"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 241,
+			"EDITNAME": "Показання АЦП та значення тиску(кгс/см2) при градуюванні"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 242,
+			"EDITNAME": "Показання АЦП та значення температури(°C) при градуюванні"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 243,
+			"EDITNAME": "Показання АЦП та значення перепаду тиску(кгс/м2) при градуюванні"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 244,
+			"EDITNAME": "Показання АЦП та значення перепаду тиску нижнього діапазону(кгс/м2) при градуюванні"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 245,
+			"EDITNAME": "Показання АЦП та значення перепаду тиску верхнього діапазону(кгс/м2) при градуюванні"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 246,
+			"EDITNAME": "Встановлення літнього часу"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 247,
+			"EDITNAME": "Вища теплота згоряння"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 249,
+			"EDITNAME": "Густина Ro min, кг/м3"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 250,
+			"EDITNAME": "Поч. знач. Vр.у. для лічильника, м3"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 251,
+			"EDITNAME": "Тип витратоміру лічильника"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 252,
+			"EDITNAME": "MODBUS-адреса УЗЛ"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 253,
+			"EDITNAME": "Номери HART-каналу(P,T,dPв,dPн)"
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 254,
+			"EDITNAME": "Об'єм для одоризації т/п №2, м3/імп."
+		},
+		{
+			"ID_TYPE": 29,
+			"EDIT_ID": 255,
+			"EDITNAME": "Переконфіг.(екр.,швид.,ном.,пароль)"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 0,
+			"EDITNAME": "Зміна назви т/п"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 1,
+			"EDITNAME": "Густина, кг/м3"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 2,
+			"EDITNAME": "Вміст CO2, мол."
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 3,
+			"EDITNAME": "Вміст N2, мол."
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 4,
+			"EDITNAME": "Діаметр труби, мм"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 5,
+			"EDITNAME": "Діаметр діафрагми, мм"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 6,
+			"EDITNAME": "Атмосферний тиск, мм.рт.ст"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 7,
+			"EDITNAME": "Відсічка dP, кгс/м2"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 8,
+			"EDITNAME": "Кор. нелінійності"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 9,
+			"EDITNAME": "Нижн.кор.нелінійності"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 10,
+			"EDITNAME": "Верхн.кор.нелінійності"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 11,
+			"EDITNAME": "перемикання dP, кгс/м2"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 12,
+			"EDITNAME": "Тип відбору"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 13,
+			"EDITNAME": "Нульова точка P"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 14,
+			"EDITNAME": "Нульова точка T"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 15,
+			"EDITNAME": "Нульова точка dP"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 16,
+			"EDITNAME": "Нульова точка Low dP"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 17,
+			"EDITNAME": "Нульова точка High dP"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 18,
+			"EDITNAME": "Тип давача P"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 19,
+			"EDITNAME": "Шорсткість, мм"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 20,
+			"EDITNAME": "A1 труби"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 21,
+			"EDITNAME": "A0 труби"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 22,
+			"EDITNAME": "A2 труби"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 23,
+			"EDITNAME": "A0 діафрагми"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 24,
+			"EDITNAME": "A1 діафрагми"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 25,
+			"EDITNAME": "A2 діафрагми"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 26,
+			"EDITNAME": "В'язкість конденсату, мкН*с/м2"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 27,
+			"EDITNAME": "Верхня межа виміру dP, кгс/м2"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 28,
+			"EDITNAME": "Коли на літній час"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 29,
+			"EDITNAME": "Коли на зимовий час"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 30,
+			"EDITNAME": "Час - перехід на літній"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 31,
+			"EDITNAME": "Час - перехід на зимовий"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 32,
+			"EDITNAME": "Оперативний інтервал, хв."
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 33,
+			"EDITNAME": "Системний час"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 34,
+			"EDITNAME": "Системна дата"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 35,
+			"EDITNAME": "Час циклу SuperFlo, c"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 36,
+			"EDITNAME": "Контрактна година"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 37,
+			"EDITNAME": "Hижня межа Uжив, B"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 38,
+			"EDITNAME": "Межа відкриття т/п №2"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 39,
+			"EDITNAME": "Межа закриття т/п №2"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 40,
+			"EDITNAME": "Тривалість імпульсу"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 41,
+			"EDITNAME": "Затримка перемикання т/п, c."
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 42,
+			"EDITNAME": "Контрольний об'єм, м3"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 43,
+			"EDITNAME": "Сплячий режим"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 44,
+			"EDITNAME": "КТР труби"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 45,
+			"EDITNAME": "КТР діафрагми"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 46,
+			"EDITNAME": "dPmin, кгс/м2"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 47,
+			"EDITNAME": "dPmax, кгс/м2"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 48,
+			"EDITNAME": "Pmin, кгс/см2"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 49,
+			"EDITNAME": "Pmax, кгс/см2"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 50,
+			"EDITNAME": "Радіус притуплення, мм"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 51,
+			"EDITNAME": "Gauge Pressure"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 52,
+			"EDITNAME": "Період повірки, р."
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 53,
+			"EDITNAME": "Удельная теплота сгорания"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 54,
+			"EDITNAME": "Калибровочный коэф. k"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 55,
+			"EDITNAME": "Мин. доп. число Re"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 56,
+			"EDITNAME": "Константа Kрозш. A"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 57,
+			"EDITNAME": "Счетчик дес.тис. при р.у."
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 58,
+			"EDITNAME": "Объем при р.у., м3"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 59,
+			"EDITNAME": "Тип ОНТ"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 60,
+			"EDITNAME": "Модель ОНТ Itabar"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 61,
+			"EDITNAME": "Ширина зонда в свете"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 62,
+			"EDITNAME": "Рівень попередження про низький dP"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 70,
+			"EDITNAME": "Час переходу на літній час"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 71,
+			"EDITNAME": "Час переходу на зимовий час"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 72,
+			"EDITNAME": "Режим роботи обчислювача.Константи"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 73,
+			"EDITNAME": "Змінений пароль"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 74,
+			"EDITNAME": "Адреса обчислювача"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 75,
+			"EDITNAME": "Швидкість опитування, біт/с"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 76,
+			"EDITNAME": "Біти конфігурації екранів"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 77,
+			"EDITNAME": "Зроблена початкова конфігурація"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 78,
+			"EDITNAME": "Запис параметрів давачів"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 80,
+			"EDITNAME": "HART-адреса датчика T"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 81,
+			"EDITNAME": "HART-адреса датчика P"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 82,
+			"EDITNAME": "HART-адреса датчика верхнього dP"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 83,
+			"EDITNAME": "HART-адреса датчика нижнього dP"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 90,
+			"EDITNAME": "Мін. тиск, кгс/см2"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 91,
+			"EDITNAME": "Верхня межа тиску, кгс/см2"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 92,
+			"EDITNAME": "Мін. температура, °C"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 93,
+			"EDITNAME": "Макс. температура, °C"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 94,
+			"EDITNAME": "Мін. нижнього dP, кгс/м2"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 95,
+			"EDITNAME": "Поч. знач. об'єму при р.у. для лічильника, м3"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 96,
+			"EDITNAME": "Верхня межа нижн. dP, кгс/м2"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 97,
+			"EDITNAME": "Ціна імпульсу лічильника, м3/імп."
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 98,
+			"EDITNAME": "Мін. верхнього dP, кгс/м2"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 99,
+			"EDITNAME": "Мін. витрата, вимір. лічильником, м3/г"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 100,
+			"EDITNAME": "Верхня межа верх. dP, кгс/м2"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 101,
+			"EDITNAME": "Макс. витрата, вимір. лічильником, м3/г"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 102,
+			"EDITNAME": "Об'єм для одоризації т/п №1, м3/імп."
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 103,
+			"EDITNAME": "Макс. витрата для підігріву"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 104,
+			"EDITNAME": "Поч. радіус вх. крайки діфрагми, мм"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 105,
+			"EDITNAME": "Міжконтрольний інтервал діафрагми"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 110,
+			"EDITNAME": "Константа перепаду, кгс/м2"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 111,
+			"EDITNAME": "Константа тиску, кгс/см2"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 112,
+			"EDITNAME": "Константа температури, °C"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 113,
+			"EDITNAME": "Константа об'єму при р/у, м3/г"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 114,
+			"EDITNAME": "Константа густини, кг/м3, м3/ч"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 115,
+			"EDITNAME": "Константа пит.об'єм.теплоти, Мдж/м3"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 116,
+			"EDITNAME": "Константа СО2,"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 117,
+			"EDITNAME": "Константа N2,"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 118,
+			"EDITNAME": "Калібрування каналу густини"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 119,
+			"EDITNAME": "Ознака «Заборона аварій за константами»"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 130,
+			"EDITNAME": "Калібрувальний коеф. УНТ"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 131,
+			"EDITNAME": "Зміна контрактної години"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 132,
+			"EDITNAME": "Мін. число Рейнольдса"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 133,
+			"EDITNAME": "Калібрування каналу тиску"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 134,
+			"EDITNAME": "Калібрування каналу температури"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 135,
+			"EDITNAME": "Константа КТР УНТ"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 136,
+			"EDITNAME": "Калібрування каналу верх. перепаду"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 137,
+			"EDITNAME": "Калібрування каналу нижн. перепаду"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 150,
+			"EDITNAME": "Мінімальна витрата (Qmin), м3/г"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 151,
+			"EDITNAME": "Верхн.  межа виміру витрати (Qmax), м3/г"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 152,
+			"EDITNAME": "Найменування об'єкта"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 153,
+			"EDITNAME": "Одиниці виміру тиску"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 154,
+			"EDITNAME": "Одиниці виміру перепаду тиску"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 155,
+			"EDITNAME": "Одиниці виміру атмосф. тиски"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 156,
+			"EDITNAME": "Тип статичного тиску"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 157,
+			"EDITNAME": "Пароль для читання даних"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 158,
+			"EDITNAME": "Період калібр. при роботі"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 159,
+			"EDITNAME": "Період калібр. при калібр."
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 160,
+			"EDITNAME": "Верхн.  межа виміру dP"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 161,
+			"EDITNAME": "Нижня межа виміру тиску, кгс/см2"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 162,
+			"EDITNAME": "Верхн. межа виміру тиску, кгс/см2"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 163,
+			"EDITNAME": "Нижня межа виміру температури, °C"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 164,
+			"EDITNAME": "Верхн.  межа виміру температури, °C"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 165,
+			"EDITNAME": "Кіл. імпульсів на 1 м3"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 166,
+			"EDITNAME": "Максимальний можливий тиск, кгс/см2"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 167,
+			"EDITNAME": "Qstop, м3/г"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 168,
+			"EDITNAME": "Макс.  доп.  витрата (р.у.), м3/г"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 169,
+			"EDITNAME": "Максимальний можливий dP, кгс/м2"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 170,
+			"EDITNAME": "Мінімальний можливий dP, кгс/м2"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 190,
+			"EDITNAME": "Некор. витрата змінена"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 191,
+			"EDITNAME": "Коеф. перетворення турбіни"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 192,
+			"EDITNAME": "Корекція фактору А"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 193,
+			"EDITNAME": "Відсічка за витратою, сек."
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 194,
+			"EDITNAME": "Коеф. масштабування об'єму"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 195,
+			"EDITNAME": "Нижня межа частоти"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 196,
+			"EDITNAME": "Константа тиску"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 197,
+			"EDITNAME": "Константа температури"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 199,
+			"EDITNAME": "Кіл. імпульсів тиску"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 200,
+			"EDITNAME": "Кіл. імпульсів температури"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 210,
+			"EDITNAME": "Кіл. факторів коррекції"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 211,
+			"EDITNAME": "Частотний фактор 1"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 212,
+			"EDITNAME": "Частотний фактор 2"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 213,
+			"EDITNAME": "Частотний фактор 3"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 214,
+			"EDITNAME": "Частотний фактор 4"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 215,
+			"EDITNAME": "Частотний фактор 5"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 216,
+			"EDITNAME": "Частотний фактор 6"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 217,
+			"EDITNAME": "Частотний фактор 7"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 218,
+			"EDITNAME": "Частотний фактор 8"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 219,
+			"EDITNAME": "Частотний фактор 9"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 220,
+			"EDITNAME": "Частотний фактор 10"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 221,
+			"EDITNAME": "Іпульсний фактор 1"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 222,
+			"EDITNAME": "Іпульсний фактор 2"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 223,
+			"EDITNAME": "Іпульсний фактор 3"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 224,
+			"EDITNAME": "Іпульсний фактор 4"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 225,
+			"EDITNAME": "Іпульсний фактор 5"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 226,
+			"EDITNAME": "Іпульсний фактор 6"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 227,
+			"EDITNAME": "Іпульсний фактор 7"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 228,
+			"EDITNAME": "Іпульсний фактор 8"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 229,
+			"EDITNAME": "Іпульсний фактор 9"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 230,
+			"EDITNAME": "Іпульсний фактор 10"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 235,
+			"EDITNAME": "Консистенція газу трубопроводів"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 236,
+			"EDITNAME": "Логічний інтервал"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 237,
+			"EDITNAME": "Релейна функція"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 238,
+			"EDITNAME": "Дискретність імпульсів для ВТ 1"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 239,
+			"EDITNAME": "Дискретність імпульсів для ВТ 2"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 240,
+			"EDITNAME": "Режим зберігання"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 241,
+			"EDITNAME": "Показання АЦП та значення тиску(кгс/см2) при градуюванні"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 242,
+			"EDITNAME": "Показання АЦП та значення температури(°C) при градуюванні"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 243,
+			"EDITNAME": "Показання АЦП та значення перепаду тиску(кгс/м2) при градуюванні"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 244,
+			"EDITNAME": "Показання АЦП та значення перепаду тиску нижнього діапазону(кгс/м2) при градуюванні"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 245,
+			"EDITNAME": "Показання АЦП та значення перепаду тиску верхнього діапазону(кгс/м2) при градуюванні"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 246,
+			"EDITNAME": "Встановлення літнього часу"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 247,
+			"EDITNAME": "Вища теплота згоряння"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 249,
+			"EDITNAME": "Густина Ro min, кг/м3"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 250,
+			"EDITNAME": "Поч. знач. Vр.у. для лічильника, м3"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 251,
+			"EDITNAME": "Тип витратоміру лічильника"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 252,
+			"EDITNAME": "MODBUS-адреса УЗЛ"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 253,
+			"EDITNAME": "Номери HART-каналу(P,T,dPв,dPн)"
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 254,
+			"EDITNAME": "Об'єм для одоризації т/п №2, м3/імп."
+		},
+		{
+			"ID_TYPE": 43,
+			"EDIT_ID": 255,
+			"EDITNAME": "Переконфіг.(екр.,швид.,ном.,пароль)"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 0,
+			"EDITNAME": "Найменування трубопроводу"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 1,
+			"EDITNAME": "Густина"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 2,
+			"EDITNAME": "Молярна частка  CO2"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 3,
+			"EDITNAME": "Молярна частка  N2"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 4,
+			"EDITNAME": "Діаметр трубопроводу"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 5,
+			"EDITNAME": "Діаметр пристрою звуження"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 6,
+			"EDITNAME": "Атмосферний тиск"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 7,
+			"EDITNAME": "Нижнє відсічення пер.тиску"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 8,
+			"EDITNAME": "Верхня межа вимірювань витрати (Qmin)"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 9,
+			"EDITNAME": "Нижня межа вимірювань витрати (Qmax)"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 10,
+			"EDITNAME": "Поріг перемикання ПРТ"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 11,
+			"EDITNAME": "Тип відбору перепаду тиску"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 12,
+			"EDITNAME": "Питома теплота згоряння"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 14,
+			"EDITNAME": "Коеф. %s для розрахунку Ктлр пристрою звуження"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 15,
+			"EDITNAME": "Параметры доступу користувача"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 16,
+			"EDITNAME": "Контрольна сума ПЗ"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 18,
+			"EDITNAME": "Фільтр високої частоти"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 19,
+			"EDITNAME": "Шорсткість трубопроводу"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 20,
+			"EDITNAME": "Коэф. Ae для розрахунку Ктлр ЗП"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 21,
+			"EDITNAME": "Коэф. Be для розрахунку Ктлр ЗП"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 22,
+			"EDITNAME": "Kтлр материалу ЗП"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 23,
+			"EDITNAME": "Коеф. Ce для розрахунку Ктлр ЗП"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 24,
+			"EDITNAME": "Kтлр материалу трубопроводу"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 25,
+			"EDITNAME": "Довгий  адрес ЦП (перші 2 байти)"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 26,
+			"EDITNAME": "Довгий  адрес ЦП (останні 3 байти)"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 27,
+			"EDITNAME": "Модуль обліку маси, т"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 28,
+			"EDITNAME": "Коли на летній час (місяць, день, година)"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 29,
+			"EDITNAME": "Коли на зимній час (місяць, день, година)"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 30,
+			"EDITNAME": "Время - переход на летнее"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 31,
+			"EDITNAME": "Время - переход на зимнее"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 32,
+			"EDITNAME": "Оперативний інтервал"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 33,
+			"EDITNAME": "Время (часы, минуты, секунды)"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 34,
+			"EDITNAME": "Коеф. Be для расчета Ктлр трубы"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 35,
+			"EDITNAME": "Коэф. Ce для расчета Ктлр трубы"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 36,
+			"EDITNAME": "Счетчик десятков тис. м3 в показаниях счетчика"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 37,
+			"EDITNAME": "Объем при р.у. (значение меньше 10 тис) в показаниях счетчика"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 41,
+			"EDITNAME": "Счетчик десятков тыс. т. массы в показаниях счетчика"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 42,
+			"EDITNAME": "Масса меньше 10000 т в показаниях счетчика"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 43,
+			"EDITNAME": "Запис повнокомпонентного складу ФХП газу"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 45,
+			"EDITNAME": "Необходимость пароля для чтения данных"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 46,
+			"EDITNAME": "Период калибровки АЦП при работе"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 47,
+			"EDITNAME": "Период калибровки АЦП при калибровке"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 48,
+			"EDITNAME": "ВПИ перепада давления"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 49,
+			"EDITNAME": "НПИ давления"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 50,
+			"EDITNAME": "ВПИ давления"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 51,
+			"EDITNAME": "НПИ температуры"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 52,
+			"EDITNAME": "ВПИ температуры"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 53,
+			"EDITNAME": "Кол. импульсов на 1 м3"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 54,
+			"EDITNAME": "Макс.возможное давление"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 55,
+			"EDITNAME": "Расход (р.у.), при котором счетчик останавливается"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 56,
+			"EDITNAME": "Макс.допускаемый расход через счетчик при р.у."
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 57,
+			"EDITNAME": "Макс.возможный ПД"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 58,
+			"EDITNAME": "НПИ перепада давления"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 59,
+			"EDITNAME": "НПИ плотности"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 60,
+			"EDITNAME": "ВПИ плотности"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 61,
+			"EDITNAME": "Использование НСХП цифро.канала P"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 62,
+			"EDITNAME": "Использование НСХП цифр.канала T"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 63,
+			"EDITNAME": "Коэф. a0 для Ктр трубы"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 64,
+			"EDITNAME": "Коэф. a1 для Ктр трубы"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 65,
+			"EDITNAME": "Коэф. a2 для Ктр трубы"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 66,
+			"EDITNAME": "Коэффициент a0 для Ктр СУ"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 67,
+			"EDITNAME": "Коэффициент a1 для Ктр СУ"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 68,
+			"EDITNAME": "Коэффициент a2 для Ктр СУ"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 69,
+			"EDITNAME": "Несанкц. использ. НСХП цифр.канала Р"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 70,
+			"EDITNAME": "Когда на летнее время"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 71,
+			"EDITNAME": "Когда на зимнее время"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 72,
+			"EDITNAME": "Несанкц. использ. НСХП цифр.канала dPниз"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 73,
+			"EDITNAME": "Смещение Т"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 74,
+			"EDITNAME": "Коэффициент наклона Т"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 79,
+			"EDITNAME": "код 79"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 80,
+			"EDITNAME": "код 80"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 81,
+			"EDITNAME": "Код 81"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 82,
+			"EDITNAME": "Нач.радиус вх.кр. диаф.,мм"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 83,
+			"EDITNAME": "Межконтрольный инт. СУ,гг"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 90,
+			"EDITNAME": "Снят.Т с санкц.   конст"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 91,
+			"EDITNAME": "Снят.DP с санкц.   конст"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 130,
+			"EDITNAME": "Период цикла опроса(расчета)"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 131,
+			"EDITNAME": "Контрактный час"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 132,
+			"EDITNAME": "Минимально допускаемое число Рейнольдса"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 133,
+			"EDITNAME": "Коэффициент истечения"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 142,
+			"EDITNAME": "Начальный радиус входной кромки диафрагмы"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 143,
+			"EDITNAME": "Межконтрольный интервал СУ"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 144,
+			"EDITNAME": "Постановка  на константу"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 145,
+			"EDITNAME": "Снятие  с константы"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 146,
+			"EDITNAME": "Параметры калибровки"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 147,
+			"EDITNAME": "Смещение перепада давления"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 148,
+			"EDITNAME": "Коэффициент наклона перепада давления"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 149,
+			"EDITNAME": "Смещение давления"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 150,
+			"EDITNAME": "Коэффициент наклона давления"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 151,
+			"EDITNAME": "Установка нуля"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 152,
+			"EDITNAME": "Параметры АЦП"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 153,
+			"EDITNAME": "Константа давления(санкц.изм.), кгс/см2"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 154,
+			"EDITNAME": "Константа температуры(санкц.изм.), град.С"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 155,
+			"EDITNAME": "Константа dP(расх)(санкц.изм.), кгс/м2(м3/час)"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 156,
+			"EDITNAME": "Константа плотности(санкц.изм.), кг/м3"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 158,
+			"EDITNAME": "Константа температуры(несанкц.изм.),град.С"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 159,
+			"EDITNAME": "Константа dP(расхода)(несанкц.изм.),кгс/м2(м3/час)"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 160,
+			"EDITNAME": "Константа плотности(несанкц.изм.), кг/м3"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 172,
+			"EDITNAME": "Молярная доля метана"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 173,
+			"EDITNAME": "Молярная доля этана"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 174,
+			"EDITNAME": "Молярная доля пропана"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 175,
+			"EDITNAME": "Молярная доля бутана"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 176,
+			"EDITNAME": "Молярная доля пентана"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 177,
+			"EDITNAME": "Молярная доля водорода"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 178,
+			"EDITNAME": "Параметры преобразователя"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 181,
+			"EDITNAME": "Константа давления, кгс/см2"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 182,
+			"EDITNAME": "Константа температуры, град.С"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 183,
+			"EDITNAME": "Константа перепада давления(расхода), кгс/м2(м3/час)"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 184,
+			"EDITNAME": "Константа плотности, кг/м3"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 185,
+			"EDITNAME": "Макс. допускаемая скорость потока, м/с"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 186,
+			"EDITNAME": "Адрес регистра расхода"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 187,
+			"EDITNAME": "Адрес регистра объёма"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 188,
+			"EDITNAME": "Адрес регистра скорости потока"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 189,
+			"EDITNAME": "Порядок байтов по протоколу Modbus"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 190,
+			"EDITNAME": "Режим работы по протоколу Modbus"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 191,
+			"EDITNAME": "Адрес регистра разрешения счётчика"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 192,
+			"EDITNAME": "Адрес регистра аварийного объема"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 193,
+			"EDITNAME": "Адрес ультразвукового счётчика"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 194,
+			"EDITNAME": "Порядок байтов переменных в ответе функции"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 195,
+			"EDITNAME": "Конфигурация импульсного выхода 1"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 196,
+			"EDITNAME": "Конфигурация импульсного выхода 2"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 197,
+			"EDITNAME": "Конфигурация импульсного выхода 3"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 198,
+			"EDITNAME": "Длинный адрес ЦП"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 199,
+			"EDITNAME": "Адрес вычислителя"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 202,
+			"EDITNAME": "Конфигурация линий подключения ЦП"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 203,
+			"EDITNAME": "Объем газа в м3 на 1 импульс для импульсного выхода 1"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 204,
+			"EDITNAME": "Объем газа в м3 на 1 импульс для импульсного выхода 2"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 205,
+			"EDITNAME": "Объем газа в м3 на 1 импульс для импульсного выхода 3"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 206,
+			"EDITNAME": "Тип ультразвукового лічильнику"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 207,
+			"EDITNAME": "Швидкість зв'язку по каналу"
+		},
+		{
+			"ID_TYPE": 47,
+			"EDIT_ID": 247,
+			"EDITNAME": "Вища теплота згоряння"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 0,
+			"EDITNAME": "Найменування трубопроводу"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 1,
+			"EDITNAME": "Густина"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 2,
+			"EDITNAME": "Молярна частка  CO2"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 3,
+			"EDITNAME": "Молярна частка  N2"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 4,
+			"EDITNAME": "Діаметр трубопроводу"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 5,
+			"EDITNAME": "Діаметр пристрою звуження"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 6,
+			"EDITNAME": "Атмосферний тиск"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 7,
+			"EDITNAME": "Нижнє відсічення пер.тиску"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 8,
+			"EDITNAME": "Верхня межа вимірювань витрати (Qmin)"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 9,
+			"EDITNAME": "Нижня межа вимірювань витрати (Qmax)"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 10,
+			"EDITNAME": "Поріг перемикання ПРТ"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 11,
+			"EDITNAME": "Тип відбору перепаду тиску"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 12,
+			"EDITNAME": "Питома теплота згоряння"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 15,
+			"EDITNAME": "Параметры доступу користувача"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 16,
+			"EDITNAME": "Контрольна сума ПЗ"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 19,
+			"EDITNAME": "Шорсткість трубопроводу"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 20,
+			"EDITNAME": "Коэффициент a0 для Ктр СУ"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 21,
+			"EDITNAME": "Коэффициент a1 для Ктр СУ"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 22,
+			"EDITNAME": "Необходимость пароля для чтения данных"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 23,
+			"EDITNAME": "Коэффициент a2 для Ктр СУ"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 25,
+			"EDITNAME": "Довгий  адрес ЦП (перші 2 байти)"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 26,
+			"EDITNAME": "Довгий  адрес ЦП (останні 3 байти)"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 27,
+			"EDITNAME": "Модуль обліку маси, т"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 28,
+			"EDITNAME": "Когда на летнее время"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 29,
+			"EDITNAME": "Когда на зимнее время"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 30,
+			"EDITNAME": "Контрактный час"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 31,
+			"EDITNAME": "Время - переход на зимнее"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 32,
+			"EDITNAME": "Оперативний інтервал"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 33,
+			"EDITNAME": "Коэф. a0 для Ктр трубы"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 34,
+			"EDITNAME": "Коэф. a1 для Ктр трубы"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 35,
+			"EDITNAME": "Коэф. a2 для Ктр трубы"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 36,
+			"EDITNAME": "Счетчик десятков тис. м3 в показаниях счетчика"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 40,
+			"EDITNAME": "Несанкц. использ. НСХП цифр.канала dPниз"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 43,
+			"EDITNAME": "Запис повнокомпонентного складу ФХП газу"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 47,
+			"EDITNAME": "Период калибровки АЦП при калибровке"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 48,
+			"EDITNAME": "ВПИ перепада давления"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 49,
+			"EDITNAME": "НПИ давления"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 50,
+			"EDITNAME": "ВПИ давления"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 51,
+			"EDITNAME": "НПИ температуры"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 52,
+			"EDITNAME": "ВПИ температуры"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 53,
+			"EDITNAME": "Кол. импульсов на 1 м3"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 54,
+			"EDITNAME": "Макс.возможное давление"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 55,
+			"EDITNAME": "Расход (р.у.), при котором счетчик останавливается"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 56,
+			"EDITNAME": "Макс.допускаемый расход через счетчик при р.у."
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 57,
+			"EDITNAME": "Макс.возможный ПД"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 58,
+			"EDITNAME": "НПИ перепада давления"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 59,
+			"EDITNAME": "НПИ плотности"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 60,
+			"EDITNAME": "ВПИ плотности"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 61,
+			"EDITNAME": "Использование НСХП цифро.канала P"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 62,
+			"EDITNAME": "Использование НСХП цифр.канала T"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 69,
+			"EDITNAME": "Несанкц. использ. НСХП цифр.канала Р"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 73,
+			"EDITNAME": "Смещение Т"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 74,
+			"EDITNAME": "Коэффициент наклона Т"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 79,
+			"EDITNAME": "код 79"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 80,
+			"EDITNAME": "код 80"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 81,
+			"EDITNAME": "Код 81"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 82,
+			"EDITNAME": "Нач.радиус вх.кр. диаф.,мм"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 83,
+			"EDITNAME": "Межконтрольный инт. СУ,гг"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 90,
+			"EDITNAME": "Снят.Т с санкц.   конст"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 91,
+			"EDITNAME": "Снят.DP с санкц.   конст"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 128,
+			"EDITNAME": "Время (часы, минуты, секунды)"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 129,
+			"EDITNAME": "Коеф. Be для расчета Ктлр трубы"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 130,
+			"EDITNAME": "Период цикла опроса(расчета)"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 132,
+			"EDITNAME": "Минимально допускаемое число Рейнольдса"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 133,
+			"EDITNAME": "Коэффициент истечения"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 144,
+			"EDITNAME": "Фільтр високої частоти"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 172,
+			"EDITNAME": "Молярная доля метана"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 173,
+			"EDITNAME": "Молярная доля этана"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 174,
+			"EDITNAME": "Молярная доля пропана"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 175,
+			"EDITNAME": "Молярная доля бутана"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 176,
+			"EDITNAME": "Молярная доля пентана"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 177,
+			"EDITNAME": "Молярная доля водорода"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 178,
+			"EDITNAME": "Параметры преобразователя"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 179,
+			"EDITNAME": "Постановка  на константу"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 180,
+			"EDITNAME": "Снятие  с константы"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 181,
+			"EDITNAME": "Константа давления, кгс/см2"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 182,
+			"EDITNAME": "Константа температуры, град.С"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 183,
+			"EDITNAME": "Константа перепада давления(расхода), кгс/м2(м3/час)"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 184,
+			"EDITNAME": "Константа плотности, кг/м3"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 185,
+			"EDITNAME": "Макс. допускаемая скорость потока, м/с"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 186,
+			"EDITNAME": "Адрес регистра расхода"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 187,
+			"EDITNAME": "Адрес регистра объёма"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 188,
+			"EDITNAME": "Адрес регистра скорости потока"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 189,
+			"EDITNAME": "Порядок байтов по протоколу Modbus"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 190,
+			"EDITNAME": "Режим работы по протоколу Modbus"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 191,
+			"EDITNAME": "Адрес регистра разрешения счётчика"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 192,
+			"EDITNAME": "Адрес регистра аварийного объема"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 193,
+			"EDITNAME": "Адрес ультразвукового счётчика"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 194,
+			"EDITNAME": "Порядок байтов переменных в ответе функции"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 195,
+			"EDITNAME": "Конфигурация импульсного выхода 1"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 196,
+			"EDITNAME": "Конфигурация импульсного выхода 2"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 197,
+			"EDITNAME": "Конфигурация импульсного выхода 3"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 198,
+			"EDITNAME": "Длинный адрес ЦП"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 199,
+			"EDITNAME": "Адрес вычислителя"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 202,
+			"EDITNAME": "Конфигурация линий подключения ЦП"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 203,
+			"EDITNAME": "Объем газа в м3 на 1 импульс для импульсного выхода 1"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 204,
+			"EDITNAME": "Объем газа в м3 на 1 импульс для импульсного выхода 2"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 205,
+			"EDITNAME": "Объем газа в м3 на 1 импульс для импульсного выхода 3"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 206,
+			"EDITNAME": "Тип ультразвукового лічильнику"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 207,
+			"EDITNAME": "Швидкість зв'язку по каналу"
+		},
+		{
+			"ID_TYPE": 59,
+			"EDIT_ID": 247,
+			"EDITNAME": "Вища теплота згоряння"
 		}
 	]
 }
