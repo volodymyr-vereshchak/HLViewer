@@ -40,8 +40,8 @@ from sqlmodel import select
 
 logger = logging.getLogger(__name__)
 
-# File logging: backend.log next to the working directory, rotates at 10 MB, keeps 3 backups
-_log_path = os.path.join(os.getcwd(), "backend.log")
+# File logging: backend.log next to the backend package root, rotates at 10 MB, keeps 3 backups
+_log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend.log")
 _file_handler = RotatingFileHandler(_log_path, maxBytes=10 * 1024 * 1024, backupCount=3, encoding="utf-8")
 _file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
 logging.getLogger().addHandler(_file_handler)
