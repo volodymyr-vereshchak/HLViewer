@@ -131,7 +131,6 @@ git clone /opt/repos/back_repo /opt/backend
 
 # Створити потрібні папки (їх немає в репо)
 mkdir -p /opt/backend/backend/data/askcfgs
-mkdir -p /opt/backend/hostlibs
 ```
 
 ### 3.2. Скопіювати конфіги та образи

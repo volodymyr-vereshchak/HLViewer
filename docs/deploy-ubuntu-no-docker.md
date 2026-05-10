@@ -88,7 +88,6 @@ mkdir -p /opt/repos
 
 # Робочі папки
 mkdir -p /opt/backend/backend/data/askcfgs
-mkdir -p /opt/backend/hostlibs
 mkdir -p /opt/backend/logs
 ```
 
