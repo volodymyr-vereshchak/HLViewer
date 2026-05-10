@@ -247,7 +247,15 @@ sudo systemctl start hlviewer-api hlviewer-scheduler
 
 ## 5. Фронтенд — nginx
 
-### nginx конфіг (`/etc/nginx/sites-available/hlviewer`)
+`/etc/nginx/sites-available/` — стандартна папка nginx на Ubuntu для конфігів віртуальних хостів. Файл треба **створити вручну**:
+
+```bash
+sudo nano /etc/nginx/sites-available/hlviewer
+```
+
+Вставити вміст нижче, зберегти (`Ctrl+O`, `Enter`, `Ctrl+X`).
+
+### Вміст файлу
 
 ```nginx
 server {
