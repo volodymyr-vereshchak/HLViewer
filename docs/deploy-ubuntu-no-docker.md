@@ -146,16 +146,87 @@ sudo umount /mnt/usb
 
 ---
 
-## 3. Встановлення ПЗ на сервері
+## 3. Встановлення ПЗ на сервері (офлайн)
+
+> Всі пакети завантажуються на машині з інтернетом, переносяться на сервер будь-яким способом з розділу 2.
 
 ### 3.1. Python 3.11
 
+Спочатку перевірте що вже є на сервері:
 ```bash
-sudo apt update
-sudo apt install -y software-properties-common
-sudo add-apt-repository ppa:deadsnakes/ppa   # якщо Ubuntu < 24.04
-sudo apt install -y python3.11 python3.11-venv python3.11-dev
+python3 --version
+python3.11 --version  # можливо вже є
 ```
+
+#### Варіант А — зібрати .deb пакети на машині з інтернетом
+
+На Ubuntu-машині **з інтернетом** (та **такою самою версією** ОС як сервер):
+
+```bash
+# Додати deadsnakes PPA і завантажити пакети без встановлення
+sudo add-apt-repository ppa:deadsnakes/ppa
+sudo apt update
+
+mkdir -p ~/python311-debs
+apt-get download \
+    python3.11 \
+    python3.11-venv \
+    python3.11-dev \
+    python3.11-lib2to3 \
+    python3.11-distutils \
+    libpython3.11 \
+    libpython3.11-dev \
+    libpython3.11-stdlib
+# Якщо якийсь пакет не знайдено — пропустити, він може не бути потрібним
+```
+
+Перенести папку `~/python311-debs/` на сервер (варіанти з розділу 2).
+
+На сервері встановити:
+```bash
+cd /tmp/python311-debs
+sudo dpkg -i *.deb
+# Якщо є помилки залежностей:
+sudo apt-get install -f   # спробує вирішити залежності локально
+```
+
+#### Варіант Б — зібрати Python з вихідного коду (найнадійніший офлайн)
+
+На машині з інтернетом завантажити:
+```bash
+wget https://www.python.org/ftp/python/3.11.9/Python-3.11.9.tgz
+```
+
+Перенести `Python-3.11.9.tgz` на сервер.
+
+На сервері встановити залежності для компіляції (якщо є базовий інтернет або вже встановлені):
+```bash
+sudo apt install -y build-essential zlib1g-dev libssl-dev libffi-dev \
+    libsqlite3-dev libbz2-dev libreadline-dev libncurses5-dev
+```
+
+Зібрати та встановити:
+```bash
+cd /tmp
+tar -xzf Python-3.11.9.tgz
+cd Python-3.11.9
+
+./configure --enable-optimizations --prefix=/usr/local
+make -j$(nproc)           # компіляція (~5-15 хв)
+sudo make altinstall      # altinstall — не замінює системний python3
+
+# Перевірка
+python3.11 --version
+```
+
+#### Варіант В — якщо є стара версія python3 і pip
+
+Перевірити яка версія Python є на сервері:
+```bash
+python3 --version  # Python 3.10 або 3.12?
+```
+
+Якщо версія 3.10+ — FastAPI і більшість залежностей **запрацюють на 3.10 або 3.12**. Лише змінити версію у командах нижче: `python3.11` → `python3`.
 
 Перевірка:
 ```bash
@@ -164,11 +235,34 @@ python3.11 --version  # Python 3.11.x
 
 ### 3.2. PostgreSQL 15
 
+#### Варіант А — завантажити .deb пакети
+
+На машині з інтернетом:
 ```bash
-sudo apt install -y postgresql postgresql-client
-# або конкретна версія:
-sudo apt install -y postgresql-15
+mkdir -p ~/postgres15-debs
+# Для Ubuntu 22.04:
+wget https://apt.postgresql.org/pub/repos/apt/pool/main/p/postgresql-15/postgresql-15_15.x_amd64.deb
+# Або через apt-get download після додавання postgresql репо:
+apt-get download postgresql-15 postgresql-client-15 postgresql-common libpq5
 ```
+
+На сервері:
+```bash
+cd /tmp/postgres15-debs
+sudo dpkg -i *.deb
+sudo apt-get install -f  # виправити залежності якщо потрібно
+```
+
+#### Варіант Б — використати вбудований PostgreSQL Ubuntu
+
+Ubuntu 22.04 містить PostgreSQL 14 без додаткових репо:
+```bash
+sudo dpkg -i /tmp/postgres-debs/postgresql*.deb
+# або якщо є часткова мережа:
+sudo apt install -y postgresql
+```
+
+PostgreSQL 14 повністю сумісний з нашим проектом.
 
 Запуск і автозапуск:
 ```bash
@@ -177,6 +271,21 @@ sudo systemctl enable postgresql
 ```
 
 ### 3.3. nginx
+
+#### Завантажити .deb на машині з інтернетом:
+```bash
+mkdir -p ~/nginx-debs
+apt-get download nginx nginx-common libnginx-mod-http-gzip-static
+```
+
+На сервері:
+```bash
+sudo dpkg -i /tmp/nginx-debs/*.deb
+sudo systemctl start nginx
+sudo systemctl enable nginx
+```
+
+### 3.4. Node.js 20 (тільки якщо збираєте React на сервері)
 
 ```bash
 sudo apt install -y nginx

@@ -97,37 +97,75 @@ tar -czf hlviewer-server-package.tar.gz hlviewer-server-package/
 
 ## 2. Встановлення Docker на сервері (офлайн)
 
-### 2.1. Завантажити пакети Docker на машині з інтернетом
+> Всі файли завантажуються на машині з інтернетом і переносяться на сервер.
+
+### Варіант А — статичний бінарник (найпростіший, без apt)
+
+На машині з інтернетом завантажити:
+```
+https://download.docker.com/linux/static/stable/x86_64/docker-26.1.4.tgz
+```
+(або останню версію з цієї директорії)
+
+Перенести на сервер (варіанти з розділу 3). На сервері:
 
 ```bash
-# На Ubuntu 22.04
+tar -xzf docker-26.1.4.tgz
+sudo cp docker/* /usr/local/bin/
+sudo chmod +x /usr/local/bin/docker*
+
+# Запустити dockerd як системний сервіс
+sudo nano /etc/systemd/system/docker.service
+```
+
+Вміст `/etc/systemd/system/docker.service`:
+```ini
+[Unit]
+Description=Docker Application Container Engine
+After=network.target
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/dockerd
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl start docker
+sudo systemctl enable docker
+```
+
+### Варіант Б — .deb пакети з офіційного репозиторію
+
+На машині з інтернетом (Ubuntu тієї ж версії):
+
+```bash
+# Додати Docker репо і завантажити .deb без встановлення
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker.gpg
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
+    | sudo tee /etc/apt/sources.list.d/docker.list
+sudo apt update
+
+mkdir -p ~/docker-debs
+cd ~/docker-debs
 apt-get download \
     docker-ce \
     docker-ce-cli \
     containerd.io \
     docker-buildx-plugin \
-    docker-compose-plugin \
-    docker-ce-rootless-extras
-
-# Або завантажити статичний бінарник Docker з:
-# https://download.docker.com/linux/static/stable/x86_64/
+    docker-compose-plugin
 ```
 
-Або скачати офлайн-інсталятор через скрипт [get.docker.com](https://get.docker.com) і зберегти.
-
-### 2.2. Встановити Docker на сервері
+Перенести папку `~/docker-debs/` на сервер. На сервері:
 
 ```bash
-# Варіант зі статичним бінарником:
-tar -xzf docker-25.x.x.tgz
-sudo cp docker/* /usr/local/bin/
-
-# Варіант з .deb пакетами:
+cd /tmp/docker-debs
 sudo dpkg -i *.deb
-
-# Запустити dockerd
-sudo dockerd &
-# або через systemd (якщо встановлено через deb):
 sudo systemctl start docker
 sudo systemctl enable docker
 ```
