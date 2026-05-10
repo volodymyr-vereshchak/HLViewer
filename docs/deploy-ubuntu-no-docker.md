@@ -45,23 +45,15 @@ pip download -r requirements.txt \
 pip download -r requirements.txt --dest packages_linux/
 ```
 
-### 1.2. Зібрати React
+### 1.2. Що переносити на сервер
 
-```bash
-cd frontend/react-frontend
-npm ci --legacy-peer-deps
-npm run build
-# Результат: dist/
-```
-
-### 1.3. Що переносити на сервер
+`dist/` (зібраний React) вже закомічена у `front_repo` — окремо збирати і переносити не потрібно.
 
 ```
 hlviewer-deploy/
 ├── back_repo/        # bare git репозиторій бекенду (D:\Projects\HLViewer\HLViewer\back_repo\)
 ├── front_repo/       # bare git репозиторій фронтенду (D:\Projects\HLViewer\frontend\front_repo\)
-├── packages_linux/   # Linux wheels
-└── react-dist/       # зібраний фронтенд (dist/) — якщо не будуєте на сервері
+└── packages_linux/   # Linux wheels
 ```
 
 ---
@@ -258,9 +250,11 @@ sudo systemctl start hlviewer-api hlviewer-scheduler
 
 ### Скопіювати React
 
+`dist/` вже є у склонованому `front_repo`:
+
 ```bash
 sudo mkdir -p /var/www/hlviewer
-sudo cp -r /tmp/hlviewer-deploy/react-dist/. /var/www/hlviewer/
+sudo cp -r /opt/frontend/react-frontend/dist/. /var/www/hlviewer/
 sudo chown -R www-data:www-data /var/www/hlviewer
 ```
 

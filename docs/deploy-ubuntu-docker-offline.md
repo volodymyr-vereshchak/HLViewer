@@ -57,15 +57,17 @@ docker save postgres:15          -o postgres-15.tar
 ```
 hlviewer-server/
 ├── hlviewer-fastapi-v2.tar      # образ бекенду
-├── hlviewer-frontend-v2.tar     # образ фронтенду
+├── hlviewer-frontend-v2.tar     # образ фронтенду (містить вже зібраний dist/)
 ├── postgres-15.tar              # образ PostgreSQL
 ├── back_repo/                   # bare git репозиторій бекенду
-├── front_repo/                  # bare git репозиторій фронтенду (опціонально)
+├── front_repo/                  # bare git репозиторій фронтенду
 ├── docker-compose.v2.yml        # compose файл
 ├── wait_for_it.sh               # скрипт очікування БД
 ├── nginx.v2.conf                # nginx конфіг фронтенду
 └── .env.v2.template             # шаблон конфігурації
 ```
+
+> `dist/` (зібраний React) вже закомічена у `front_repo` і вбудована в Docker-образ `hlviewer-frontend-v2` — окремо переносити не потрібно.
 
 ```powershell
 $src = "D:\Projects\HLViewer\HLViewer"
