@@ -59,18 +59,15 @@ hlviewer-server/
 ├── hlviewer-fastapi-v2.tar      # образ бекенду
 ├── hlviewer-frontend-v2.tar     # образ фронтенду
 ├── postgres-15.tar              # образ PostgreSQL
+├── back_repo/                   # bare git репозиторій бекенду
+├── front_repo/                  # bare git репозиторій фронтенду (опціонально)
 ├── docker-compose.v2.yml        # compose файл
 ├── wait_for_it.sh               # скрипт очікування БД
 ├── nginx.v2.conf                # nginx конфіг фронтенду
-├── .env.v2.template             # шаблон конфігурації
-└── preload_db/
-    ├── FLOWTYPE.json
-    ├── SYSNAME.json
-    └── EDITNAME.json
+└── .env.v2.template             # шаблон конфігурації
 ```
 
 ```powershell
-# Скопіювати потрібні файли
 $src = "D:\Projects\HLViewer\HLViewer"
 $dst = "D:\hlviewer-server"
 New-Item -ItemType Directory -Force $dst
@@ -80,11 +77,11 @@ Copy-Item "$src\wait_for_it.sh" $dst
 Copy-Item "$src\.env.v2" "$dst\.env.v2.template"
 Copy-Item "$src\..\frontend\react-frontend\nginx.v2.conf" $dst
 
-New-Item -ItemType Directory -Force "$dst\preload_db"
-Copy-Item "$src\backend\db\preload_db\FLOWTYPE.json" "$dst\preload_db\"
-Copy-Item "$src\backend\db\preload_db\SYSNAME.json"  "$dst\preload_db\"
-Copy-Item "$src\backend\db\preload_db\EDITNAME.json" "$dst\preload_db\"
+# Bare репозиторії
+Copy-Item -Recurse "$src\back_repo"                         "$dst\back_repo"
+Copy-Item -Recurse "$src\..\frontend\front_repo"            "$dst\front_repo"
 
+# Docker образи
 Copy-Item "hlviewer-fastapi-v2.tar"  $dst
 Copy-Item "hlviewer-frontend-v2.tar" $dst
 Copy-Item "postgres-15.tar"          $dst
@@ -96,14 +93,14 @@ Copy-Item "postgres-15.tar"          $dst
 
 **scp з PowerShell:**
 ```powershell
-scp -r D:\hlviewer-server\ user@192.168.1.100:/opt/hlviewer/
+scp -r D:\hlviewer-server\ user@192.168.1.100:/tmp/hlviewer-server/
 ```
 
 **WinSCP** — GUI, підключення SFTP на порт 22, перетягнути мишкою.
 
 **RDP drive sharing** — при підключенні через RDP увімкнути "Локальні диски", на сервері:
 ```bash
-cp -r /mnt/tsclient/D/hlviewer-server/. /opt/hlviewer/
+cp -r /mnt/tsclient/D/hlviewer-server/. /tmp/hlviewer-server/
 ```
 
 **USB:**
@@ -117,20 +114,46 @@ sudo umount /mnt/usb
 
 ## 3. Розгортання на сервері
 
-### 3.1. Структура папок
+### 3.1. Структура папок та розгортання коду з репозиторіїв
 
 ```bash
+# Папки для bare-репозиторіїв
+mkdir -p /opt/repos
+
+# Скопіювати bare repos з переданих файлів
+cp -r /tmp/hlviewer-server/back_repo  /opt/repos/back_repo
+cp -r /tmp/hlviewer-server/front_repo /opt/repos/front_repo
+
+# Клонувати бекенд у робочу папку
+git clone /opt/repos/back_repo /opt/hlviewer
+
+# Створити потрібні папки (їх немає в репо)
 mkdir -p /opt/hlviewer/backend/data/askcfgs
-mkdir -p /opt/hlviewer/backend/db/preload_db
 mkdir -p /opt/hlviewer/hostlibs
 ```
 
+### 3.2. Скопіювати конфіги та образи
+
 ```bash
-# Скопіювати preload довідники
-cp /opt/hlviewer/preload_db/*.json /opt/hlviewer/backend/db/preload_db/
+cp /tmp/hlviewer-server/docker-compose.v2.yml /opt/hlviewer/
+cp /tmp/hlviewer-server/wait_for_it.sh        /opt/hlviewer/
+cp /tmp/hlviewer-server/nginx.v2.conf         /opt/hlviewer/
+cp /tmp/hlviewer-server/.env.v2.template      /opt/hlviewer/.env.v2
+chmod +x /opt/hlviewer/wait_for_it.sh
+
+cp /tmp/hlviewer-server/*.tar /opt/hlviewer/
 ```
 
-### 3.2. Імпортувати Docker-образи
+### 3.3. Надалі — оновлення коду
+
+```bash
+# Скопіювати оновлений back_repo на сервер (з Windows через scp/WinSCP)
+# потім на сервері:
+cd /opt/hlviewer
+git pull origin master          # або потрібна гілка
+```
+
+### 3.4. Імпортувати Docker-образи
 
 ```bash
 cd /opt/hlviewer

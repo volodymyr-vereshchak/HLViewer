@@ -58,9 +58,10 @@ npm run build
 
 ```
 hlviewer-deploy/
-├── HLViewer/                  # весь бекенд репозиторій
-├── packages_linux/            # Linux wheels
-└── react-dist/                # зібраний фронтенд (dist/)
+├── back_repo/        # bare git репозиторій бекенду (D:\Projects\HLViewer\HLViewer\back_repo\)
+├── front_repo/       # bare git репозиторій фронтенду (D:\Projects\HLViewer\frontend\front_repo\)
+├── packages_linux/   # Linux wheels
+└── react-dist/       # зібраний фронтенд (dist/) — якщо не будуєте на сервері
 ```
 
 ---
@@ -90,15 +91,44 @@ scp -r D:\Projects\HLViewer\hlviewer-deploy\ user@192.168.1.100:/tmp/
 sudo mkdir -p /opt/hlviewer
 sudo chown $USER:$USER /opt/hlviewer
 
+# Папки для bare-репозиторіїв (звідси робитиметься git clone/pull)
+mkdir -p /opt/repos
+
+# Робочі папки
 mkdir -p /opt/hlviewer/backend/data/askcfgs
 mkdir -p /opt/hlviewer/hostlibs
 mkdir -p /opt/hlviewer/logs
 ```
 
-### 3.2. Розпакувати код
+### 3.2. Скопіювати bare-репозиторії
 
 ```bash
-cp -r /tmp/hlviewer-deploy/HLViewer/. /opt/hlviewer/
+cp -r /tmp/hlviewer-deploy/back_repo/  /opt/repos/back_repo
+cp -r /tmp/hlviewer-deploy/front_repo/ /opt/repos/front_repo
+```
+
+### 3.3. Клонувати код з bare-репозиторіїв
+
+```bash
+# Бекенд
+git clone /opt/repos/back_repo /opt/hlviewer
+# або якщо папка вже існує:
+cd /opt/hlviewer && git init && git remote add origin /opt/repos/back_repo && git pull origin master
+
+# Фронтенд (якщо будуєте React на сервері)
+git clone /opt/repos/front_repo /opt/frontend
+```
+
+### 3.4. Надалі — оновлення коду з репо
+
+```bash
+# Бекенд
+cd /opt/hlviewer
+git pull origin master          # або потрібна гілка, наприклад feature/grmu-branch-db-config
+
+# Фронтенд
+cd /opt/frontend
+git pull origin master
 ```
 
 ### 3.3. Virtualenv та залежності
