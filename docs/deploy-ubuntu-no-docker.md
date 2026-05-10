@@ -17,7 +17,7 @@ Python 3.11 — потрібна саме ця версія (або 3.10+). Пе
 ## Архітектура
 
 ```
-[Браузер] → nginx:80 → [React /var/www/hlviewer_front_front]
+[Браузер] → nginx:80 → [React /opt/frontend/react-frontend/dist]
                       → proxy → [uvicorn:8001]  ← FastAPI
 [uvicorn] → [PostgreSQL:5432]
 [scheduler_runner] → [PostgreSQL:5432]  ← APScheduler, оновлення кожні 30 хв
@@ -247,16 +247,6 @@ sudo systemctl start hlviewer-api hlviewer-scheduler
 
 ## 5. Фронтенд — nginx
 
-### Скопіювати React
-
-`dist/` вже є у склонованому `front_repo`:
-
-```bash
-sudo mkdir -p /var/www/hlviewer_front
-sudo cp -r /opt/frontend/react-frontend/dist/. /var/www/hlviewer_front/
-sudo chown -R www-data:www-data /var/www/hlviewer_front
-```
-
 ### nginx конфіг (`/etc/nginx/sites-available/hlviewer`)
 
 ```nginx
@@ -264,7 +254,7 @@ server {
     listen 80;
     server_name ВАШ_IP_АБО_ДОМЕН;
 
-    root /var/www/hlviewer_front;
+    root /opt/frontend/react-frontend/dist;
     index index.html;
 
     gzip on;
@@ -330,5 +320,6 @@ cd backend && alembic upgrade head && cd ..
 sudo systemctl restart hlviewer-api hlviewer-scheduler
 
 # Якщо змінився фронтенд:
-sudo cp -r /tmp/new-dist/. /var/www/hlviewer_front/
+cd /opt/frontend && git pull origin master
+# nginx одразу роздає оновлений dist/ — перезапуск не потрібен
 ```
