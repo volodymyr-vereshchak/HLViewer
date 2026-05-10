@@ -119,7 +119,7 @@ git pull origin feature/grmu-branch-db-config
 
 # Фронтенд
 cd /opt/frontend
-git pull origin feature/grmu-branch-db-config
+git pull origin master
 ```
 
 ### 3.3. Virtualenv та залежності
