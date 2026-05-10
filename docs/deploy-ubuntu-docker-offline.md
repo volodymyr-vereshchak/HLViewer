@@ -148,13 +148,48 @@ docker compose version
 
 ## 3. Копіювання файлів на сервер
 
-```bash
-# З локальної машини:
-scp docker-export.tar.gz user@server:/tmp/
-scp hlviewer-server-package.tar.gz user@server:/tmp/
+> Якщо Ubuntu без GUI і доступ через Remote Desktop — оберіть один з варіантів нижче.
+
+### Варіант А — scp з Windows PowerShell (рекомендовано)
+
+```powershell
+scp D:\Projects\HLViewer\docker-export.tar.gz user@192.168.1.100:/tmp/
+scp D:\Projects\HLViewer\hlviewer-server-package.tar.gz user@192.168.1.100:/tmp/
 ```
 
-На сервері:
+Якщо SSH на нестандартному порту:
+```powershell
+scp -P 2222 D:\Projects\HLViewer\docker-export.tar.gz user@192.168.1.100:/tmp/
+```
+
+### Варіант Б — WinSCP (GUI)
+
+1. Встановити **WinSCP** з [winscp.net](https://winscp.net)
+2. Підключитись: протокол **SFTP**, IP сервера, порт 22
+3. Перетягнути `docker-export.tar.gz` і `hlviewer-server-package.tar.gz` в `/tmp/`
+
+### Варіант В — через RDP drive sharing
+
+Якщо підключаєтесь до Ubuntu через RDP (xrdp):
+
+1. У Windows клієнті RDP: **"Параметри"** → **"Локальные ресурсы"** → **"Подробнее"** → поставити галочку на диску `D:`
+2. У терміналі Ubuntu:
+```bash
+cp /mnt/tsclient/D/Projects/HLViewer/docker-export.tar.gz /tmp/
+cp /mnt/tsclient/D/Projects/HLViewer/hlviewer-server-package.tar.gz /tmp/
+```
+
+### Варіант Г — USB-носій
+
+```bash
+sudo mkdir -p /mnt/usb
+sudo mount /dev/sdb1 /mnt/usb
+cp /mnt/usb/docker-export.tar.gz /tmp/
+cp /mnt/usb/hlviewer-server-package.tar.gz /tmp/
+sudo umount /mnt/usb
+```
+
+На сервері розпакувати:
 ```bash
 cd /tmp
 tar -xzf docker-export.tar.gz

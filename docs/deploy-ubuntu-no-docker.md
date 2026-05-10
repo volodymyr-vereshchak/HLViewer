@@ -65,15 +65,84 @@ hlviewer-deploy/
 
 ## 2. Копіювання файлів на сервер
 
-### Варіант А — через SCP
+> Якщо Ubuntu без GUI і доступ через Remote Desktop — оберіть один з варіантів нижче.
 
-```bash
-scp -r hlviewer-deploy/ user@server:/tmp/
+### Варіант А — scp з Windows PowerShell (рекомендовано)
+
+На Windows 10/11 OpenSSH вже вбудований. Відкрити PowerShell і виконати:
+
+```powershell
+# Скопіювати всю папку
+scp -r D:\Projects\HLViewer\hlviewer-deploy\ user@192.168.1.100:/tmp/
+
+# Або окремі архіви
+scp D:\Projects\HLViewer\hlviewer-deploy.tar.gz user@192.168.1.100:/tmp/
 ```
 
-### Варіант Б — через USB / мережеву папку
+Якщо SSH на нестандартному порту:
+```powershell
+scp -P 2222 -r D:\Projects\HLViewer\hlviewer-deploy\ user@192.168.1.100:/tmp/
+```
 
-Скопіювати папку `hlviewer-deploy/` на сервер будь-яким способом.
+На сервері розпакувати:
+```bash
+cd /tmp && tar -xzf hlviewer-deploy.tar.gz
+```
+
+### Варіант Б — WinSCP (GUI, найзручніший)
+
+1. Встановити **WinSCP** з [winscp.net](https://winscp.net) (є portable версія без інсталяції)
+2. Підключитись: протокол **SFTP**, хост — IP сервера, порт 22, логін/пароль
+3. Перетягнути папку `hlviewer-deploy/` мишкою з лівої панелі (Windows) у праву (Ubuntu `/tmp/`)
+
+### Варіант В — через RDP drive sharing
+
+Якщо підключаєтесь до Ubuntu через RDP (xrdp):
+
+1. У Windows клієнті RDP перед підключенням:
+   **"Параметри"** → вкладка **"Локальные ресурсы"** → **"Подробнее"**
+   → поставити галочку на диску `D:` (або потрібному)
+2. Підключитись до Ubuntu через RDP
+3. У терміналі Ubuntu диск буде доступний:
+```bash
+ls /mnt/tsclient/
+# D/   ← ваш Windows диск D:
+
+cp -r "/mnt/tsclient/D/Projects/HLViewer/hlviewer-deploy/" /tmp/
+```
+
+### Варіант Г — мережева папка (SMB)
+
+Якщо Ubuntu і Windows в одній мережі:
+
+```bash
+# На Ubuntu встановити cifs-utils (якщо немає):
+sudo apt install -y cifs-utils
+
+# Підмонтувати Windows шару
+sudo mkdir -p /mnt/winshare
+sudo mount -t cifs //192.168.1.50/share /mnt/winshare \
+    -o username=WINDOWS_USER,password=ПАРОЛЬ,uid=$(id -u),gid=$(id -g)
+
+# Скопіювати файли
+cp -r /mnt/winshare/hlviewer-deploy/ /tmp/
+
+# Відмонтувати
+sudo umount /mnt/winshare
+```
+
+### Варіант Д — USB-носій
+
+```bash
+# Знайти USB пристрій
+lsblk
+# sdb1 — зазвичай перша флешка
+
+sudo mkdir -p /mnt/usb
+sudo mount /dev/sdb1 /mnt/usb
+cp -r /mnt/usb/hlviewer-deploy/ /tmp/
+sudo umount /mnt/usb
+```
 
 ---
 
