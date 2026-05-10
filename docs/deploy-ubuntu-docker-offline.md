@@ -151,7 +151,7 @@ cp /tmp/hlviewer-server/*.tar /opt/backend/
 # Скопіювати оновлений back_repo на сервер (з Windows через scp/WinSCP)
 # потім на сервері:
 cd /opt/backend
-git pull origin master          # або потрібна гілка
+git pull origin feature/grmu-branch-db-config
 ```
 
 ### 3.4. Імпортувати Docker-образи

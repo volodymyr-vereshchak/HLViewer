@@ -104,7 +104,7 @@ cp -r /tmp/hlviewer-deploy/front_repo/ /opt/repos/front_repo
 # Бекенд
 git clone /opt/repos/back_repo /opt/backend
 # або якщо папка вже існує:
-cd /opt/backend && git init && git remote add origin /opt/repos/back_repo && git pull origin master
+cd /opt/backend && git init && git remote add origin /opt/repos/back_repo && git pull origin feature/grmu-branch-db-config
 
 # Фронтенд (якщо будуєте React на сервері)
 git clone /opt/repos/front_repo /opt/frontend
@@ -115,11 +115,11 @@ git clone /opt/repos/front_repo /opt/frontend
 ```bash
 # Бекенд
 cd /opt/backend
-git pull origin master          # або потрібна гілка, наприклад feature/grmu-branch-db-config
+git pull origin feature/grmu-branch-db-config
 
 # Фронтенд
 cd /opt/frontend
-git pull origin master
+git pull origin feature/grmu-branch-db-config
 ```
 
 ### 3.3. Virtualenv та залежності
