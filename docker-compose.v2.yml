@@ -48,7 +48,7 @@ services:
       context: ../frontend/react-frontend
       dockerfile: Dockerfile
       args:
-        VITE_API_URL: ""
+        VITE_API_URL: "/api"
     image: hlviewer-frontend-v2
     container_name: frontend_app_v2
     volumes:

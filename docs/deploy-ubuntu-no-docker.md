@@ -270,24 +270,23 @@ server {
     gzip on;
     gzip_types text/plain text/css application/javascript application/json;
 
-    location ~ ^/(auth|grmu_branch|lumgs|virtual_lines|enterprise|enterprise-mappings|device-catalog)/ {
-        proxy_pass http://127.0.0.1:8001;
+    # update_data — подовжений таймаут
+    location /api/update_data {
+        proxy_pass http://127.0.0.1:8001/update_data;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-    }
-
-    location ~ ^/update_data {
-        proxy_pass http://127.0.0.1:8001;
         proxy_read_timeout 600s;
         proxy_send_timeout 600s;
     }
 
-    location ~ ^/(lines|gas-volume-calcs|gas-volume-calc-types|edit_counts|sys_counts|edit|edit-types|daily|daily_virtual|hourly|hourly_virtual|sys|sys-types|param|users|preload_data) {
-        proxy_pass http://127.0.0.1:8001;
+    # Всі API запити — nginx відрізає /api перед передачею на FastAPI
+    location /api/ {
+        proxy_pass http://127.0.0.1:8001/;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
     }
 
+    # React SPA
     location / {
         try_files $uri $uri/ /index.html;
         add_header Cache-Control "no-cache";
