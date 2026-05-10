@@ -260,8 +260,9 @@ sudo nano /etc/nginx/sites-available/hlviewer
 ```nginx
 server {
     listen 80;
-    server_name _;  # catch-all: відповідає на будь-який IP/домен
-    # або вказати конкретний IP: server_name 192.168.1.100;
+    # server_name _;             # catch-all — відповідає на будь-який запит
+    # server_name 192.168.1.100; # по конкретному IP
+    server_name hlviewer;        # по імені (потрібно прописати в hosts або DNS)
 
     root /opt/frontend/react-frontend/dist;
     index index.html;
@@ -307,33 +308,11 @@ sudo systemctl reload nginx
 
 ### Доступ по імені замість IP
 
-Щоб звертатись `http://hlviewer/` замість `http://192.168.1.100/`:
-
-**Варіант А — прописати на кожному клієнті (Windows)**
-
-Відкрити від імені адміністратора `C:\Windows\System32\drivers\etc\hosts`, додати рядок:
+Щоб звертатись `http://hlviewer/` замість `http://192.168.1.100/` — прописати на кожному Windows-клієнті файл `C:\Windows\System32\drivers\etc\hosts` (від імені адміністратора):
 ```
 192.168.1.100   hlviewer
 ```
-Після цього в браузері працює `http://hlviewer/`.
-
-**Варіант Б — налаштувати ім'я на самому сервері Ubuntu**
-
-```bash
-sudo hostnamectl set-hostname hlviewer
-```
-
-І прописати в `/etc/hosts` на сервері:
-```
-127.0.0.1   hlviewer
-```
-
-Якщо в мережі є DNS-сервер — додати туди запис `hlviewer → 192.168.1.100`, тоді всі машини в мережі знайдуть сервер по імені без правки hosts на кожному ПК.
-
-У nginx конфізі тоді вказати:
-```nginx
-server_name hlviewer;
-```
+Якщо в мережі є DNS-сервер — додати запис там, тоді правити hosts на кожному ПК не потрібно.
 
 ---
 
