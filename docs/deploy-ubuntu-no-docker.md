@@ -260,7 +260,8 @@ sudo nano /etc/nginx/sites-available/hlviewer
 ```nginx
 server {
     listen 80;
-    server_name ВАШ_IP_АБО_ДОМЕН;
+    server_name _;  # catch-all: відповідає на будь-який IP/домен
+    # або вказати конкретний IP: server_name 192.168.1.100;
 
     root /opt/frontend/react-frontend/dist;
     index index.html;
