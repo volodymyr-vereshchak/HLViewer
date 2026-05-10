@@ -1,33 +1,37 @@
 # Розгортання HLViewer на Ubuntu без Docker
 
-Повна інструкція розгортання бекенду, фронтенду та бази даних на Ubuntu Server (22.04 / 24.04) без інтернету та Docker.
+---
+
+## Необхідне ПЗ на сервері
+
+| ПЗ | Версія | Призначення |
+|---|---|---|
+| Python | 3.11 | бекенд |
+| PostgreSQL | 15 (або 14) | база даних |
+| nginx | будь-яка актуальна | роздача фронтенду + проксі |
+
+Python 3.11 — потрібна саме ця версія (або 3.10+). Перевірити що є: `python3 --version`.
 
 ---
 
 ## Архітектура
 
 ```
-[Браузер] → nginx:80 → [React static files]
-                      → [FastAPI uvicorn:8001]
-                      → [Scheduler (APScheduler)]
-[FastAPI] → [PostgreSQL:5432]
+[Браузер] → nginx:80 → [React /var/www/hlviewer]
+                      → proxy → [uvicorn:8001]  ← FastAPI
+[uvicorn] → [PostgreSQL:5432]
+[scheduler_runner] → [PostgreSQL:5432]  ← APScheduler, оновлення кожні 30 хв
 ```
-
-Три процеси на сервері:
-- **uvicorn** — FastAPI бекенд
-- **scheduler_runner** — APScheduler (оновлення даних кожні 30 хв)
-- **nginx** — роздача React SPA + проксі до бекенду
 
 ---
 
-## 1. Підготовка на локальній машині
+## 1. Підготовка на локальній машині (Windows)
 
-### 1.1. Зібрати Linux-колеса (wheels) для Python-залежностей
+### 1.1. Python wheels для Linux
 
-> **Важливо:** Колеса в папці `packages/` зібрані під Windows. Для Ubuntu потрібні Linux-колеса.
+Пакети в `packages/` зібрані під Windows — для Ubuntu потрібні Linux wheels.
 
-На Linux-машині або у WSL:
-
+На машині з інтернетом і Linux (або WSL):
 ```bash
 pip download -r requirements.txt \
     --platform linux_x86_64 \
@@ -36,408 +40,143 @@ pip download -r requirements.txt \
     --dest packages_linux/
 ```
 
-Якщо деякі пакети не мають binary wheel — завантажити source:
+Якщо деякі пакети не мають binary wheel — без прапорців:
 ```bash
 pip download -r requirements.txt --dest packages_linux/
 ```
 
-### 1.2. Зібрати React-додаток
+### 1.2. Зібрати React
 
-На локальній машині:
 ```bash
 cd frontend/react-frontend
 npm ci --legacy-peer-deps
 npm run build
-# Результат: frontend/react-frontend/dist/
+# Результат: dist/
 ```
 
-### 1.3. Підготувати архіви для копіювання на сервер
+### 1.3. Що переносити на сервер
 
 ```
 hlviewer-deploy/
-├── backend-repo/        # git bare clone або zip бекенду
-├── packages_linux/      # Linux wheels
-├── react-dist/          # зібраний React (dist/)
-└── postgres-15.tar      # (опціонально, якщо PostgreSQL теж офлайн)
+├── HLViewer/                  # весь бекенд репозиторій
+├── packages_linux/            # Linux wheels
+└── react-dist/                # зібраний фронтенд (dist/)
 ```
 
 ---
 
-## 2. Копіювання файлів на сервер
+## 2. Копіювання на сервер
 
-> Якщо Ubuntu без GUI і доступ через Remote Desktop — оберіть один з варіантів нижче.
+З Windows на Ubuntu (без інтернету на сервері):
 
-### Варіант А — scp з Windows PowerShell (рекомендовано)
-
-На Windows 10/11 OpenSSH вже вбудований. Відкрити PowerShell і виконати:
-
+**scp з PowerShell:**
 ```powershell
-# Скопіювати всю папку
 scp -r D:\Projects\HLViewer\hlviewer-deploy\ user@192.168.1.100:/tmp/
-
-# Або окремі архіви
-scp D:\Projects\HLViewer\hlviewer-deploy.tar.gz user@192.168.1.100:/tmp/
 ```
 
-Якщо SSH на нестандартному порту:
-```powershell
-scp -P 2222 -r D:\Projects\HLViewer\hlviewer-deploy\ user@192.168.1.100:/tmp/
-```
+**WinSCP** — GUI, підключення SFTP на порт 22, перетягнути мишкою.
 
-На сервері розпакувати:
-```bash
-cd /tmp && tar -xzf hlviewer-deploy.tar.gz
-```
+**RDP drive sharing** — при підключенні через RDP увімкнути "Локальні диски", на сервері доступний `/mnt/tsclient/D/...`
 
-### Варіант Б — WinSCP (GUI, найзручніший)
-
-1. Встановити **WinSCP** з [winscp.net](https://winscp.net) (є portable версія без інсталяції)
-2. Підключитись: протокол **SFTP**, хост — IP сервера, порт 22, логін/пароль
-3. Перетягнути папку `hlviewer-deploy/` мишкою з лівої панелі (Windows) у праву (Ubuntu `/tmp/`)
-
-### Варіант В — через RDP drive sharing
-
-Якщо підключаєтесь до Ubuntu через RDP (xrdp):
-
-1. У Windows клієнті RDP перед підключенням:
-   **"Параметри"** → вкладка **"Локальные ресурсы"** → **"Подробнее"**
-   → поставити галочку на диску `D:` (або потрібному)
-2. Підключитись до Ubuntu через RDP
-3. У терміналі Ubuntu диск буде доступний:
-```bash
-ls /mnt/tsclient/
-# D/   ← ваш Windows диск D:
-
-cp -r "/mnt/tsclient/D/Projects/HLViewer/hlviewer-deploy/" /tmp/
-```
-
-### Варіант Г — мережева папка (SMB)
-
-Якщо Ubuntu і Windows в одній мережі:
-
-```bash
-# На Ubuntu встановити cifs-utils (якщо немає):
-sudo apt install -y cifs-utils
-
-# Підмонтувати Windows шару
-sudo mkdir -p /mnt/winshare
-sudo mount -t cifs //192.168.1.50/share /mnt/winshare \
-    -o username=WINDOWS_USER,password=ПАРОЛЬ,uid=$(id -u),gid=$(id -g)
-
-# Скопіювати файли
-cp -r /mnt/winshare/hlviewer-deploy/ /tmp/
-
-# Відмонтувати
-sudo umount /mnt/winshare
-```
-
-### Варіант Д — USB-носій
-
-```bash
-# Знайти USB пристрій
-lsblk
-# sdb1 — зазвичай перша флешка
-
-sudo mkdir -p /mnt/usb
-sudo mount /dev/sdb1 /mnt/usb
-cp -r /mnt/usb/hlviewer-deploy/ /tmp/
-sudo umount /mnt/usb
-```
+**USB / мережева папка** — будь-який зручний спосіб.
 
 ---
 
-## 3. Встановлення ПЗ на сервері (офлайн)
+## 3. Розгортання на сервері
 
-> Всі пакети завантажуються на машині з інтернетом, переносяться на сервер будь-яким способом з розділу 2.
-
-### 3.1. Python 3.11
-
-Спочатку перевірте що вже є на сервері:
-```bash
-python3 --version
-python3.11 --version  # можливо вже є
-```
-
-#### Варіант А — зібрати .deb пакети на машині з інтернетом
-
-На Ubuntu-машині **з інтернетом** (та **такою самою версією** ОС як сервер):
-
-```bash
-# Додати deadsnakes PPA і завантажити пакети без встановлення
-sudo add-apt-repository ppa:deadsnakes/ppa
-sudo apt update
-
-mkdir -p ~/python311-debs
-apt-get download \
-    python3.11 \
-    python3.11-venv \
-    python3.11-dev \
-    python3.11-lib2to3 \
-    python3.11-distutils \
-    libpython3.11 \
-    libpython3.11-dev \
-    libpython3.11-stdlib
-# Якщо якийсь пакет не знайдено — пропустити, він може не бути потрібним
-```
-
-Перенести папку `~/python311-debs/` на сервер (варіанти з розділу 2).
-
-На сервері встановити:
-```bash
-cd /tmp/python311-debs
-sudo dpkg -i *.deb
-# Якщо є помилки залежностей:
-sudo apt-get install -f   # спробує вирішити залежності локально
-```
-
-#### Варіант Б — зібрати Python з вихідного коду (найнадійніший офлайн)
-
-На машині з інтернетом завантажити:
-```bash
-wget https://www.python.org/ftp/python/3.11.9/Python-3.11.9.tgz
-```
-
-Перенести `Python-3.11.9.tgz` на сервер.
-
-На сервері встановити залежності для компіляції (якщо є базовий інтернет або вже встановлені):
-```bash
-sudo apt install -y build-essential zlib1g-dev libssl-dev libffi-dev \
-    libsqlite3-dev libbz2-dev libreadline-dev libncurses5-dev
-```
-
-Зібрати та встановити:
-```bash
-cd /tmp
-tar -xzf Python-3.11.9.tgz
-cd Python-3.11.9
-
-./configure --enable-optimizations --prefix=/usr/local
-make -j$(nproc)           # компіляція (~5-15 хв)
-sudo make altinstall      # altinstall — не замінює системний python3
-
-# Перевірка
-python3.11 --version
-```
-
-#### Варіант В — якщо є стара версія python3 і pip
-
-Перевірити яка версія Python є на сервері:
-```bash
-python3 --version  # Python 3.10 або 3.12?
-```
-
-Якщо версія 3.10+ — FastAPI і більшість залежностей **запрацюють на 3.10 або 3.12**. Лише змінити версію у командах нижче: `python3.11` → `python3`.
-
-Перевірка:
-```bash
-python3.11 --version  # Python 3.11.x
-```
-
-### 3.2. PostgreSQL 15
-
-#### Варіант А — завантажити .deb пакети
-
-На машині з інтернетом:
-```bash
-mkdir -p ~/postgres15-debs
-# Для Ubuntu 22.04:
-wget https://apt.postgresql.org/pub/repos/apt/pool/main/p/postgresql-15/postgresql-15_15.x_amd64.deb
-# Або через apt-get download після додавання postgresql репо:
-apt-get download postgresql-15 postgresql-client-15 postgresql-common libpq5
-```
-
-На сервері:
-```bash
-cd /tmp/postgres15-debs
-sudo dpkg -i *.deb
-sudo apt-get install -f  # виправити залежності якщо потрібно
-```
-
-#### Варіант Б — використати вбудований PostgreSQL Ubuntu
-
-Ubuntu 22.04 містить PostgreSQL 14 без додаткових репо:
-```bash
-sudo dpkg -i /tmp/postgres-debs/postgresql*.deb
-# або якщо є часткова мережа:
-sudo apt install -y postgresql
-```
-
-PostgreSQL 14 повністю сумісний з нашим проектом.
-
-Запуск і автозапуск:
-```bash
-sudo systemctl start postgresql
-sudo systemctl enable postgresql
-```
-
-### 3.3. nginx
-
-#### Завантажити .deb на машині з інтернетом:
-```bash
-mkdir -p ~/nginx-debs
-apt-get download nginx nginx-common libnginx-mod-http-gzip-static
-```
-
-На сервері:
-```bash
-sudo dpkg -i /tmp/nginx-debs/*.deb
-sudo systemctl start nginx
-sudo systemctl enable nginx
-```
-
-### 3.4. Node.js 20 (тільки якщо збираєте React на сервері)
-
-```bash
-sudo apt install -y nginx
-sudo systemctl start nginx
-sudo systemctl enable nginx
-```
-
-### 3.4. Node.js 20 (тільки якщо збираєте React на сервері)
-
-```bash
-# Офлайн: завантажити .deb пакет з nodejs.org і встановити:
-sudo dpkg -i nodejs_20.x.x_amd64.deb
-```
-
-Якщо React вже зібраний локально — Node.js на сервері не потрібен.
-
----
-
-## 4. Налаштування PostgreSQL
-
-```bash
-sudo -u postgres psql
-```
-
-```sql
-CREATE USER hlviewer WITH PASSWORD 'ВАШ_ПАРОЛЬ';
-CREATE DATABASE hostlib_db OWNER hlviewer;
-\q
-```
-
-Перевірка підключення:
-```bash
-psql -U hlviewer -d hostlib_db -h localhost
-```
-
----
-
-## 5. Розгортання бекенду
-
-### 5.1. Структура папок
+### 3.1. Структура папок
 
 ```bash
 sudo mkdir -p /opt/hlviewer
 sudo chown $USER:$USER /opt/hlviewer
-mkdir -p /opt/hlviewer/backend
-mkdir -p /opt/hlviewer/logs
+
 mkdir -p /opt/hlviewer/backend/data/askcfgs
 mkdir -p /opt/hlviewer/hostlibs
+mkdir -p /opt/hlviewer/logs
 ```
 
-### 5.2. Розпакувати код бекенду
+### 3.2. Розпакувати код
 
 ```bash
-# Варіант: через git bare repo
-cd /opt/hlviewer
-git clone /tmp/hlviewer-deploy/backend-repo .
-
-# Або: розпакувати zip
-unzip /tmp/hlviewer-deploy/backend.zip -d /opt/hlviewer/
+cp -r /tmp/hlviewer-deploy/HLViewer/. /opt/hlviewer/
 ```
 
-### 5.3. Створити virtualenv та встановити залежності
+### 3.3. Virtualenv та залежності
 
 ```bash
 cd /opt/hlviewer
 python3.11 -m venv .venv
 source .venv/bin/activate
 
-# Встановити з локальних wheels (без інтернету)
 pip install --no-index --find-links=/tmp/hlviewer-deploy/packages_linux/ -r requirements.txt
 ```
 
-Перевірка:
-```bash
-pip list | grep fastapi
-pip list | grep uvicorn
-```
-
-### 5.4. Налаштувати .env файл
+### 3.4. Налаштувати .env
 
 ```bash
 cp /opt/hlviewer/.env.v2 /opt/hlviewer/.env.production
 nano /opt/hlviewer/.env.production
 ```
 
-Заповнити:
 ```env
 POSTGRES_DB=hostlib_db
 POSTGRES_USER=hlviewer
-POSTGRES_PASSWORD=ВАШ_ПАРОЛЬ
+POSTGRES_PASSWORD=НАДІЙНИЙ_ПАРОЛЬ
 DB_HOST=localhost
 DB_PORT=5432
-DATABASE_URL=postgresql+asyncpg://hlviewer:ВАШ_ПАРОЛЬ@localhost:5432/hostlib_db
+DATABASE_URL=postgresql+asyncpg://hlviewer:НАДІЙНИЙ_ПАРОЛЬ@localhost:5432/hostlib_db
 
-JWT_SECRET=ДОВГИЙ_ВИПАДКОВИЙ_РЯДОК_МИН_32_СИМВОЛИ
+JWT_SECRET=МІНІМУМ_32_ВИПАДКОВИХ_СИМВОЛИ
 ADMIN_USERNAME=admin
-ADMIN_PASSWORD=ВАШИЙ_ПАРОЛЬ_АДМІНА
-
+ADMIN_PASSWORD=ПАРОЛЬ_АДМІНА
 DEFAULT_USERNAME=viewer
-DEFAULT_PASSWORD=ВАШИЙ_ПАРОЛЬ_VIEWER
+DEFAULT_PASSWORD=ПАРОЛЬ_VIEWER
 AUTO_LOGIN=false
 
-CORS_ORIGINS=http://ВАШ_IP,http://ВАШ_ДОМЕН
-
+CORS_ORIGINS=http://ВАШ_IP
 TZ=Europe/Kyiv
-BOT_TOKEN=                    # якщо є Telegram бот
-EMAIL_PASSWORD=               # якщо є email нотифікації
 DEBUG=false
 ```
 
-### 5.5. Запустити міграції та preload
+### 3.5. PostgreSQL — створити БД
+
+```bash
+sudo -u postgres psql
+```
+```sql
+CREATE USER hlviewer WITH PASSWORD 'НАДІЙНИЙ_ПАРОЛЬ';
+CREATE DATABASE hostlib_db OWNER hlviewer;
+\q
+```
+
+### 3.6. Міграції та початкові дані
 
 ```bash
 cd /opt/hlviewer
 source .venv/bin/activate
+export $(grep -v '^#' .env.production | xargs)
 
-# Міграції
-cd backend
-alembic upgrade head
-cd ..
-
-# Початкове завантаження довідників (FLOWTYPE, SYSNAME, EDITNAME)
+cd backend && alembic upgrade head && cd ..
 python -m backend.db.preload_db.preload_db
 ```
 
-### 5.6. Перевірити запуск uvicorn вручну
+### 3.7. Перевірити вручну
 
 ```bash
-cd /opt/hlviewer
-source .venv/bin/activate
-
-export $(grep -v '^#' .env.production | xargs)
-
 uvicorn backend.api.main:app --host 0.0.0.0 --port 8001
-# Ctrl+C після перевірки
+# Відкрити http://ВАШ_IP:8001/docs — має відповісти
+# Ctrl+C
 ```
-
-Відкрити в браузері: `http://ВАШ_IP:8001/docs`
 
 ---
 
-## 6. systemd сервіси
+## 4. systemd сервіси
 
-### 6.1. Uvicorn (FastAPI)
-
-```bash
-sudo nano /etc/systemd/system/hlviewer-api.service
-```
+### FastAPI (`/etc/systemd/system/hlviewer-api.service`)
 
 ```ini
 [Unit]
-Description=HLViewer FastAPI backend
+Description=HLViewer FastAPI
 After=network.target postgresql.service
 
 [Service]
@@ -455,11 +194,7 @@ StandardError=append:/opt/hlviewer/logs/api.log
 WantedBy=multi-user.target
 ```
 
-### 6.2. Scheduler (APScheduler)
-
-```bash
-sudo nano /etc/systemd/system/hlviewer-scheduler.service
-```
+### Scheduler (`/etc/systemd/system/hlviewer-scheduler.service`)
 
 ```ini
 [Unit]
@@ -481,45 +216,25 @@ StandardError=append:/opt/hlviewer/logs/scheduler.log
 WantedBy=multi-user.target
 ```
 
-### 6.3. Активувати та запустити
-
 ```bash
 sudo systemctl daemon-reload
-
-sudo systemctl enable hlviewer-api.service
-sudo systemctl enable hlviewer-scheduler.service
-
-sudo systemctl start hlviewer-api.service
-sudo systemctl start hlviewer-scheduler.service
-
-# Перевірка
-sudo systemctl status hlviewer-api.service
-sudo systemctl status hlviewer-scheduler.service
-```
-
-Логи:
-```bash
-tail -f /opt/hlviewer/logs/api.log
-tail -f /opt/hlviewer/logs/scheduler.log
+sudo systemctl enable hlviewer-api hlviewer-scheduler
+sudo systemctl start hlviewer-api hlviewer-scheduler
 ```
 
 ---
 
-## 7. Розгортання фронтенду
+## 5. Фронтенд — nginx
 
-### 7.1. Скопіювати зібраний React
+### Скопіювати React
 
 ```bash
 sudo mkdir -p /var/www/hlviewer
-sudo cp -r /tmp/hlviewer-deploy/react-dist/* /var/www/hlviewer/
+sudo cp -r /tmp/hlviewer-deploy/react-dist/. /var/www/hlviewer/
 sudo chown -R www-data:www-data /var/www/hlviewer
 ```
 
-### 7.2. Налаштувати nginx
-
-```bash
-sudo nano /etc/nginx/sites-available/hlviewer
-```
+### nginx конфіг (`/etc/nginx/sites-available/hlviewer`)
 
 ```nginx
 server {
@@ -530,132 +245,67 @@ server {
     index index.html;
 
     gzip on;
-    gzip_vary on;
-    gzip_min_length 1024;
-    gzip_types text/plain text/css text/xml text/javascript application/javascript application/json;
+    gzip_types text/plain text/css application/javascript application/json;
 
-    # FastAPI проксі
     location ~ ^/(auth|grmu_branch|lumgs|virtual_lines|enterprise|enterprise-mappings|device-catalog)/ {
         proxy_pass http://127.0.0.1:8001;
-        proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
     }
 
     location ~ ^/update_data {
         proxy_pass http://127.0.0.1:8001;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
         proxy_read_timeout 600s;
         proxy_send_timeout 600s;
     }
 
     location ~ ^/(lines|gas-volume-calcs|gas-volume-calc-types|edit_counts|sys_counts|edit|edit-types|daily|daily_virtual|hourly|hourly_virtual|sys|sys-types|param|users|preload_data) {
         proxy_pass http://127.0.0.1:8001;
-        proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    # SPA fallback
     location / {
         try_files $uri $uri/ /index.html;
         add_header Cache-Control "no-cache";
     }
 
-    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+    location ~* \.(js|css|png|ico|svg|woff2)$ {
         expires 1y;
         add_header Cache-Control "public, immutable";
     }
 }
 ```
 
-Активувати:
 ```bash
 sudo ln -s /etc/nginx/sites-available/hlviewer /etc/nginx/sites-enabled/
-sudo nginx -t        # перевірка конфігу
+sudo nginx -t
 sudo systemctl reload nginx
 ```
 
 ---
 
-## 8. Налаштування firewall
+## 6. Перевірка
 
 ```bash
-sudo ufw allow 80/tcp
-sudo ufw allow 22/tcp   # SSH
-sudo ufw enable
+sudo systemctl status hlviewer-api hlviewer-scheduler nginx postgresql
+ss -tlnp | grep -E '80|8001|5432'
+tail -f /opt/hlviewer/logs/api.log
 ```
 
-Порт 8001 (FastAPI) залишити закритим — доступ тільки через nginx.
+Відкрити: `http://ВАШ_IP/`
 
 ---
 
-## 9. Оновлення коду (наступний раз)
+## 7. Оновлення
 
 ```bash
 cd /opt/hlviewer
-git pull offline_repo master     # або скопіювати нові файли
-
+git pull                                      # або скопіювати нові файли
 source .venv/bin/activate
 cd backend && alembic upgrade head && cd ..
-
-sudo systemctl restart hlviewer-api.service
-sudo systemctl restart hlviewer-scheduler.service
+sudo systemctl restart hlviewer-api hlviewer-scheduler
 
 # Якщо змінився фронтенд:
-sudo cp -r /tmp/new-dist/* /var/www/hlviewer/
-```
-
----
-
-## 10. Перевірка роботи
-
-```bash
-# Статус сервісів
-sudo systemctl status hlviewer-api.service
-sudo systemctl status hlviewer-scheduler.service
-sudo systemctl status nginx
-sudo systemctl status postgresql
-
-# Порти
-ss -tlnp | grep -E '80|8001|5432'
-
-# Логи
-tail -100 /opt/hlviewer/logs/api.log
-```
-
-Відкрити в браузері: `http://ВАШ_IP/`
-
----
-
-## Структура фінального розгортання
-
-```
-/opt/hlviewer/
-├── backend/              # код бекенду
-│   ├── api/
-│   ├── db/
-│   │   ├── alembic/
-│   │   └── preload_db/
-│   │       ├── FLOWTYPE.json
-│   │       ├── SYSNAME.json
-│   │       └── EDITNAME.json
-│   ├── data/
-│   │   └── askcfgs/      # CFG файли конфігурації приладів
-│   └── hl_engine/
-├── hostlibs/             # архіви хостлібів
-├── .venv/                # Python virtualenv
-├── .env.production       # конфігурація
-├── requirements.txt
-└── logs/
-    ├── api.log
-    └── scheduler.log
-
-/var/www/hlviewer/        # React SPA
+sudo cp -r /tmp/new-dist/. /var/www/hlviewer/
 ```
