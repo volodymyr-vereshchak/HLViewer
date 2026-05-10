@@ -6,6 +6,7 @@ from backend.db.dao.line_dao import LineDao
 from backend.db.engine import async_session_factory
 from backend.hl_engine.data_classes.cfg_dataclass import (
     HeaderStruct,
+    GroupStruct,
     GisStruct,
     FlowStruct,
     LineStruct,
@@ -20,9 +21,17 @@ class ConfigReader:
     def read(self) -> list[dict]:
         """Read all GIS (LUMG) entries from the CFG file.
 
-        GIS entries are separated by variable-length path gaps, so after each
-        complete GIS we scan forward for the next \\x04\\x00 marker.
-        header.gis_num gives the total number of GIS entries.
+        Layout:
+          HeaderStruct (48 bytes) — "PssCfg" signature + 42 unknown
+          GroupStruct  (36 bytes) — group name + gis_num
+          repeat gis_num times:
+            GisStruct  (38 bytes) — \x04\x00 marker + name + flow_num
+            repeat flow_num times:
+              FlowStruct          (38 bytes)
+              repeat line_num times:
+                LineStruct        (165 bytes)
+              GasVolumeCalcStruct (238 bytes)
+            1 byte path_len + path_len bytes archive path
 
         Returns a list of dicts:
           [{"gis_name": str, "flows": [{"name", "address", "type_id", "lines": [...]}]}]
@@ -30,27 +39,26 @@ class ConfigReader:
         with open(self.file, "rb") as cfg_file:
             raw = cfg_file.read()
 
-        if len(raw) < HeaderStruct.size:
+        if len(raw) < HeaderStruct.size + GroupStruct.size:
             return []
+
         header = HeaderStruct.unpack(raw[:HeaderStruct.size])
         if HeaderStruct.get_string_from_bytes(header.header) != "PssCfg":
             return []
 
-        gis_count = header.gis_num  # actual count of GIS entries
         cursor = HeaderStruct.size
+        group = GroupStruct.unpack(raw[cursor:cursor + GroupStruct.size])
+        cursor += GroupStruct.size
+
         gis_list = []
-        marker = b'\x04\x00'
 
-        for _ in range(gis_count):
-            # Skip any gap (path string) between entries by finding next marker
-            marker_pos = raw.find(marker, cursor)
-            if marker_pos == -1 or marker_pos + GisStruct.size > len(raw):
+        for _ in range(group.gis_num):
+            if cursor + GisStruct.size > len(raw):
                 break
-            cursor = marker_pos
 
-            gis_struct = GisStruct.unpack(raw[cursor: cursor + GisStruct.size])
+            gis_struct = GisStruct.unpack(raw[cursor:cursor + GisStruct.size])
             lumg_name = GisStruct.get_string_from_bytes(gis_struct.gis_name)[
-                : gis_struct.gis_name_length
+                :gis_struct.gis_name_length
             ]
             cursor += GisStruct.size
 
@@ -60,9 +68,9 @@ class ConfigReader:
                 if cursor + FlowStruct.size > len(raw):
                     ok = False
                     break
-                flow_struct = FlowStruct.unpack(raw[cursor: cursor + FlowStruct.size])
+                flow_struct = FlowStruct.unpack(raw[cursor:cursor + FlowStruct.size])
                 flow_name = FlowStruct.get_string_from_bytes(flow_struct.flow_name)[
-                    : flow_struct.flow_name_length
+                    :flow_struct.flow_name_length
                 ]
                 cursor += FlowStruct.size
 
@@ -71,9 +79,9 @@ class ConfigReader:
                     if cursor + LineStruct.size > len(raw):
                         ok = False
                         break
-                    line_struct = LineStruct.unpack(raw[cursor: cursor + LineStruct.size])
+                    line_struct = LineStruct.unpack(raw[cursor:cursor + LineStruct.size])
                     line_name = LineStruct.get_string_from_bytes(line_struct.line_name)[
-                        : line_struct.line_name_length
+                        :line_struct.line_name_length
                     ]
                     lines.append({
                         "name": line_name,
@@ -85,7 +93,7 @@ class ConfigReader:
                 if cursor + GasVolumeCalcStruct.size > len(raw):
                     ok = False
                     break
-                gvc_struct = GasVolumeCalcStruct.unpack(raw[cursor: cursor + GasVolumeCalcStruct.size])
+                gvc_struct = GasVolumeCalcStruct.unpack(raw[cursor:cursor + GasVolumeCalcStruct.size])
                 cursor += GasVolumeCalcStruct.size
 
                 flows.append({
@@ -94,6 +102,11 @@ class ConfigReader:
                     "type_id": gvc_struct.flow_id,
                     "lines": lines,
                 })
+
+            # Skip archive path at end of each GIS entry
+            if ok and cursor < len(raw):
+                path_len = raw[cursor]
+                cursor += 1 + path_len
 
             gis_list.append({"gis_name": lumg_name, "flows": flows})
             if not ok:

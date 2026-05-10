@@ -8,18 +8,25 @@ from backend.hl_engine.data_classes.base_dataclass import BaseDataclass
 class HeaderStruct(BaseDataclass):
     header: bytes
     unk: bytes
-    object_name: bytes
-    unk1: bytes
-    gis_num: int
-    zero_byte: int
 
-    format = "=6s43s7s26sBB"
+    format = "=6s42s"
     size = struct.calcsize(format)
 
     @staticmethod
     def get_string_from_bytes(bytes_str: bytes) -> str:
-        """Convert the header bytes to a string"""
         return bytes_str.decode("ascii").strip("\x00")
+
+
+@dataclass
+class GroupStruct(BaseDataclass):
+    name_length: int
+    name: bytes
+    zero_byte: int
+    gis_num: int
+    zero_byte1: int
+
+    format = "=B32sBBB"
+    size = struct.calcsize(format)
 
 
 @dataclass
