@@ -108,7 +108,7 @@ cp -r /mnt/tsclient/D/hlviewer-server/. /tmp/hlviewer-server/
 **USB:**
 ```bash
 sudo mount /dev/sdb1 /mnt/usb
-cp -r /mnt/usb/hlviewer-server/. /opt/hlviewer/
+cp -r /mnt/usb/hlviewer-server/. /opt/backend/
 sudo umount /mnt/usb
 ```
 
@@ -127,23 +127,23 @@ cp -r /tmp/hlviewer-server/back_repo  /opt/repos/back_repo
 cp -r /tmp/hlviewer-server/front_repo /opt/repos/front_repo
 
 # Клонувати бекенд у робочу папку
-git clone /opt/repos/back_repo /opt/hlviewer
+git clone /opt/repos/back_repo /opt/backend
 
 # Створити потрібні папки (їх немає в репо)
-mkdir -p /opt/hlviewer/backend/data/askcfgs
-mkdir -p /opt/hlviewer/hostlibs
+mkdir -p /opt/backend/backend/data/askcfgs
+mkdir -p /opt/backend/hostlibs
 ```
 
 ### 3.2. Скопіювати конфіги та образи
 
 ```bash
-cp /tmp/hlviewer-server/docker-compose.v2.yml /opt/hlviewer/
-cp /tmp/hlviewer-server/wait_for_it.sh        /opt/hlviewer/
-cp /tmp/hlviewer-server/nginx.v2.conf         /opt/hlviewer/
-cp /tmp/hlviewer-server/.env.v2.template      /opt/hlviewer/.env.v2
-chmod +x /opt/hlviewer/wait_for_it.sh
+cp /tmp/hlviewer-server/docker-compose.v2.yml /opt/backend/
+cp /tmp/hlviewer-server/wait_for_it.sh        /opt/backend/
+cp /tmp/hlviewer-server/nginx.v2.conf         /opt/backend/
+cp /tmp/hlviewer-server/.env.v2.template      /opt/backend/.env.v2
+chmod +x /opt/backend/wait_for_it.sh
 
-cp /tmp/hlviewer-server/*.tar /opt/hlviewer/
+cp /tmp/hlviewer-server/*.tar /opt/backend/
 ```
 
 ### 3.3. Надалі — оновлення коду
@@ -151,14 +151,14 @@ cp /tmp/hlviewer-server/*.tar /opt/hlviewer/
 ```bash
 # Скопіювати оновлений back_repo на сервер (з Windows через scp/WinSCP)
 # потім на сервері:
-cd /opt/hlviewer
+cd /opt/backend
 git pull origin master          # або потрібна гілка
 ```
 
 ### 3.4. Імпортувати Docker-образи
 
 ```bash
-cd /opt/hlviewer
+cd /opt/backend
 
 docker load -i postgres-15.tar
 docker load -i hlviewer-fastapi-v2.tar
@@ -171,8 +171,8 @@ docker images
 ### 3.3. Налаштувати .env
 
 ```bash
-cp /opt/hlviewer/.env.v2.template /opt/hlviewer/.env.v2
-nano /opt/hlviewer/.env.v2
+cp /opt/backend/.env.v2.template /opt/backend/.env.v2
+nano /opt/backend/.env.v2
 ```
 
 Обов'язково змінити:
@@ -198,7 +198,7 @@ DEBUG=false
 ### 3.4. Оновити паролі в docker-compose.v2.yml
 
 ```bash
-nano /opt/hlviewer/docker-compose.v2.yml
+nano /opt/backend/docker-compose.v2.yml
 ```
 
 Змінити в секції `db_v2`:
@@ -218,7 +218,7 @@ nano /opt/hlviewer/docker-compose.v2.yml
 ### 3.5. Запустити
 
 ```bash
-cd /opt/hlviewer
+cd /opt/backend
 docker compose -f docker-compose.v2.yml up -d
 ```
 
@@ -253,7 +253,7 @@ Requires=docker.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-WorkingDirectory=/opt/hlviewer
+WorkingDirectory=/opt/backend
 ExecStart=docker compose -f docker-compose.v2.yml up -d
 ExecStop=docker compose -f docker-compose.v2.yml down
 TimeoutStartSec=300
@@ -272,7 +272,7 @@ sudo systemctl enable hlviewer-docker
 ## 5. Корисні команди
 
 ```bash
-cd /opt/hlviewer
+cd /opt/backend
 
 # Статус
 docker compose -f docker-compose.v2.yml ps
@@ -310,12 +310,12 @@ docker save hlviewer-fastapi-v2 -o hlviewer-fastapi-v2-new.tar
 На сервері:
 ```bash
 docker load -i /tmp/hlviewer-fastapi-v2-new.tar
-cd /opt/hlviewer
+cd /opt/backend
 docker compose -f docker-compose.v2.yml up -d --no-deps fastapi_v2 scheduler_v2
 ```
 
 Оновити довідники (SYSNAME, EDITNAME, FLOWTYPE):
 ```bash
-cp /tmp/new/*.json /opt/hlviewer/backend/db/preload_db/
+cp /tmp/new/*.json /opt/backend/backend/db/preload_db/
 # Потім через Swagger: POST http://ВАШ_IP:8001/preload_data/
 ```

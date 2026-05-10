@@ -17,7 +17,7 @@ Python 3.11 — потрібна саме ця версія (або 3.10+). Пе
 ## Архітектура
 
 ```
-[Браузер] → nginx:80 → [React /var/www/hlviewer]
+[Браузер] → nginx:80 → [React /var/www/hlviewer_front_front]
                       → proxy → [uvicorn:8001]  ← FastAPI
 [uvicorn] → [PostgreSQL:5432]
 [scheduler_runner] → [PostgreSQL:5432]  ← APScheduler, оновлення кожні 30 хв
@@ -80,16 +80,16 @@ scp -r D:\Projects\HLViewer\hlviewer-deploy\ user@192.168.1.100:/tmp/
 ### 3.1. Структура папок
 
 ```bash
-sudo mkdir -p /opt/hlviewer
-sudo chown $USER:$USER /opt/hlviewer
+sudo mkdir -p /opt/backend
+sudo chown $USER:$USER /opt/backend
 
 # Папки для bare-репозиторіїв (звідси робитиметься git clone/pull)
 mkdir -p /opt/repos
 
 # Робочі папки
-mkdir -p /opt/hlviewer/backend/data/askcfgs
-mkdir -p /opt/hlviewer/hostlibs
-mkdir -p /opt/hlviewer/logs
+mkdir -p /opt/backend/backend/data/askcfgs
+mkdir -p /opt/backend/hostlibs
+mkdir -p /opt/backend/logs
 ```
 
 ### 3.2. Скопіювати bare-репозиторії
@@ -103,9 +103,9 @@ cp -r /tmp/hlviewer-deploy/front_repo/ /opt/repos/front_repo
 
 ```bash
 # Бекенд
-git clone /opt/repos/back_repo /opt/hlviewer
+git clone /opt/repos/back_repo /opt/backend
 # або якщо папка вже існує:
-cd /opt/hlviewer && git init && git remote add origin /opt/repos/back_repo && git pull origin master
+cd /opt/backend && git init && git remote add origin /opt/repos/back_repo && git pull origin master
 
 # Фронтенд (якщо будуєте React на сервері)
 git clone /opt/repos/front_repo /opt/frontend
@@ -115,7 +115,7 @@ git clone /opt/repos/front_repo /opt/frontend
 
 ```bash
 # Бекенд
-cd /opt/hlviewer
+cd /opt/backend
 git pull origin master          # або потрібна гілка, наприклад feature/grmu-branch-db-config
 
 # Фронтенд
@@ -126,7 +126,7 @@ git pull origin master
 ### 3.3. Virtualenv та залежності
 
 ```bash
-cd /opt/hlviewer
+cd /opt/backend
 python3.11 -m venv .venv
 source .venv/bin/activate
 
@@ -136,8 +136,8 @@ pip install --no-index --find-links=/tmp/hlviewer-deploy/packages_linux/ -r requ
 ### 3.4. Налаштувати .env
 
 ```bash
-cp /opt/hlviewer/.env.v2 /opt/hlviewer/.env.production
-nano /opt/hlviewer/.env.production
+cp /opt/backend/.env.v2 /opt/backend/.env.production
+nano /opt/backend/.env.production
 ```
 
 ```env
@@ -174,7 +174,7 @@ CREATE DATABASE hostlib_db OWNER hlviewer;
 ### 3.6. Міграції та початкові дані
 
 ```bash
-cd /opt/hlviewer
+cd /opt/backend
 source .venv/bin/activate
 export $(grep -v '^#' .env.production | xargs)
 
@@ -204,13 +204,13 @@ After=network.target postgresql.service
 [Service]
 Type=simple
 User=YOUR_USER
-WorkingDirectory=/opt/hlviewer
-EnvironmentFile=/opt/hlviewer/.env.production
-ExecStart=/opt/hlviewer/.venv/bin/uvicorn backend.api.main:app --host 0.0.0.0 --port 8001
+WorkingDirectory=/opt/backend
+EnvironmentFile=/opt/backend/.env.production
+ExecStart=/opt/backend/.venv/bin/uvicorn backend.api.main:app --host 0.0.0.0 --port 8001
 Restart=always
 RestartSec=5
-StandardOutput=append:/opt/hlviewer/logs/api.log
-StandardError=append:/opt/hlviewer/logs/api.log
+StandardOutput=append:/opt/backend/logs/api.log
+StandardError=append:/opt/backend/logs/api.log
 
 [Install]
 WantedBy=multi-user.target
@@ -226,13 +226,13 @@ After=hlviewer-api.service
 [Service]
 Type=simple
 User=YOUR_USER
-WorkingDirectory=/opt/hlviewer
-EnvironmentFile=/opt/hlviewer/.env.production
-ExecStart=/opt/hlviewer/.venv/bin/python -m backend.hl_engine.scheduler_runner
+WorkingDirectory=/opt/backend
+EnvironmentFile=/opt/backend/.env.production
+ExecStart=/opt/backend/.venv/bin/python -m backend.hl_engine.scheduler_runner
 Restart=always
 RestartSec=10
-StandardOutput=append:/opt/hlviewer/logs/scheduler.log
-StandardError=append:/opt/hlviewer/logs/scheduler.log
+StandardOutput=append:/opt/backend/logs/scheduler.log
+StandardError=append:/opt/backend/logs/scheduler.log
 
 [Install]
 WantedBy=multi-user.target
@@ -253,9 +253,9 @@ sudo systemctl start hlviewer-api hlviewer-scheduler
 `dist/` вже є у склонованому `front_repo`:
 
 ```bash
-sudo mkdir -p /var/www/hlviewer
-sudo cp -r /opt/frontend/react-frontend/dist/. /var/www/hlviewer/
-sudo chown -R www-data:www-data /var/www/hlviewer
+sudo mkdir -p /var/www/hlviewer_front
+sudo cp -r /opt/frontend/react-frontend/dist/. /var/www/hlviewer_front/
+sudo chown -R www-data:www-data /var/www/hlviewer_front
 ```
 
 ### nginx конфіг (`/etc/nginx/sites-available/hlviewer`)
@@ -265,7 +265,7 @@ server {
     listen 80;
     server_name ВАШ_IP_АБО_ДОМЕН;
 
-    root /var/www/hlviewer;
+    root /var/www/hlviewer_front;
     index index.html;
 
     gzip on;
@@ -314,7 +314,7 @@ sudo systemctl reload nginx
 ```bash
 sudo systemctl status hlviewer-api hlviewer-scheduler nginx postgresql
 ss -tlnp | grep -E '80|8001|5432'
-tail -f /opt/hlviewer/logs/api.log
+tail -f /opt/backend/logs/api.log
 ```
 
 Відкрити: `http://ВАШ_IP/`
@@ -324,12 +324,12 @@ tail -f /opt/hlviewer/logs/api.log
 ## 7. Оновлення
 
 ```bash
-cd /opt/hlviewer
+cd /opt/backend
 git pull                                      # або скопіювати нові файли
 source .venv/bin/activate
 cd backend && alembic upgrade head && cd ..
 sudo systemctl restart hlviewer-api hlviewer-scheduler
 
 # Якщо змінився фронтенд:
-sudo cp -r /tmp/new-dist/. /var/www/hlviewer/
+sudo cp -r /tmp/new-dist/. /var/www/hlviewer_front/
 ```
