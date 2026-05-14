@@ -52,7 +52,7 @@ services:
     image: hlviewer-frontend-v2
     container_name: frontend_app_v2
     volumes:
-      - ../frontend/react-frontend/nginx.v2.conf:/etc/nginx/conf.d/default.conf:ro
+      - ../frontend/react-frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     ports:
       - "3001:80"
     depends_on:
