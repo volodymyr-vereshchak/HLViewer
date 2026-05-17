@@ -1,5 +1,6 @@
 from datetime import datetime
 
+from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
@@ -53,6 +54,79 @@ class SysArchiveDao(BasicDao):
             )
             result.append(row)
         return result
+
+
+    async def get_grouped(
+        self,
+        from_date: datetime = None,
+        to_date: datetime = None,
+        line_id: list[int] = None,
+    ) -> list[dict]:
+        """Aggregate sys_archive by (line_id, sys_type_id): return min/max period and count.
+        Python-side groups lines under each accident type."""
+        statement = (
+            select(
+                self.model.line_id,
+                Line.name.label("line_name"),
+                self.model.sys_type_id,
+                SysType.sys_name.label("sys_name"),
+                func.min(self.model.period).label("first_seen"),
+                func.max(self.model.period).label("last_seen"),
+                func.count().label("event_count"),
+            )
+            .outerjoin(Line, self.model.line_id == Line.id)
+            .outerjoin(GasVolumeCalc, Line.gas_volume_calc_id == GasVolumeCalc.id)
+            .outerjoin(GasVolumeCalcType, GasVolumeCalc.type_id == GasVolumeCalcType.id)
+            .outerjoin(
+                SysType,
+                (GasVolumeCalcType.type_id == SysType.gas_volume_calc_type_id)
+                & (self.model.sys_type_id == SysType.sys_type_id),
+            )
+            .group_by(
+                self.model.line_id,
+                Line.name,
+                self.model.sys_type_id,
+                SysType.sys_name,
+            )
+        )
+        if from_date:
+            statement = statement.where(self.model.period >= from_date)
+        if to_date:
+            statement = statement.where(self.model.period <= to_date)
+        if line_id:
+            statement = statement.where(self.model.line_id.in_(line_id))
+
+        result = await self.session.execute(statement)
+        rows = result.all()
+
+        grouped: dict[tuple, dict] = {}
+        for row in rows:
+            sys_name = row.sys_name or f"Невідомий код {row.sys_type_id}"
+            key = (row.sys_type_id, sys_name)
+            if key not in grouped:
+                grouped[key] = {
+                    "sys_type_id": row.sys_type_id,
+                    "sys_name": sys_name,
+                    "first_seen": row.first_seen,
+                    "last_seen": row.last_seen,
+                    "total_events": 0,
+                    "lines": [],
+                }
+            parent = grouped[key]
+            if row.first_seen < parent["first_seen"]:
+                parent["first_seen"] = row.first_seen
+            if row.last_seen > parent["last_seen"]:
+                parent["last_seen"] = row.last_seen
+            parent["total_events"] += row.event_count
+            parent["lines"].append({
+                "line_id": row.line_id,
+                "line_name": row.line_name or f"Лінія {row.line_id}",
+                "first_seen": row.first_seen,
+                "last_seen": row.last_seen,
+                "event_count": row.event_count,
+            })
+
+        return sorted(grouped.values(), key=lambda x: x["sys_type_id"])
 
 
 if __name__ == "__main__":

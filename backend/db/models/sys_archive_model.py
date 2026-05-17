@@ -2,6 +2,7 @@ from sqlmodel import Field, Relationship, UniqueConstraint
 from datetime import datetime
 from typing import TYPE_CHECKING
 from sqlalchemy import Index
+from pydantic import BaseModel
 
 from .base_model import HlBaseModel
 
@@ -49,3 +50,20 @@ class SysArchiveCreate(SysArchiveBase):
 
 class SysArchiveEndpointList(SysArchiveList):
     sys_name: str | None = None
+
+
+class SysLineGroup(BaseModel):
+    line_id: int
+    line_name: str
+    first_seen: datetime
+    last_seen: datetime
+    event_count: int
+
+
+class SysGroupedItem(BaseModel):
+    sys_type_id: int
+    sys_name: str
+    first_seen: datetime
+    last_seen: datetime
+    total_events: int
+    lines: list[SysLineGroup]

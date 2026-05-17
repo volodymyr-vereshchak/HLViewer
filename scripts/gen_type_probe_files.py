@@ -18,7 +18,7 @@ os.makedirs(OUT_DIR, exist_ok=True)
 
 # Fixed date: 2024-01-01 00:00:00  ->  month=1, day=1, year=24, hour=0, min=0, sec=0
 DATE = (1, 1, 24, 0, 0, 0)
-N = 3000
+N = 20000
 
 # ── SysStruct: "=6BHBf"  (13 bytes per record) ───────────────────────────────
 #   month, day, year, hour, min, sec, sys_type_id(H), unknown(B), volume(f)

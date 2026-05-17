@@ -29,12 +29,13 @@ class DbEngine:
             self.engine, expire_on_commit=False
         )
 
-        # Update pool — dedicated for hostlib workers, capped so it never starves the API
+        # Update pool — dedicated for hostlib workers.
+        # Sized for 6 concurrent LUMGs × 5 archive engines = 30 sessions max.
         self.update_engine = create_async_engine(
             self.postgres_url,
             echo=False,
-            pool_size=8,
-            max_overflow=2,
+            pool_size=25,
+            max_overflow=5,
             pool_timeout=60,
             pool_recycle=1800,
             connect_args={"server_settings": {"application_name": "hlviewer_update"}},

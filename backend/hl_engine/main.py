@@ -127,11 +127,11 @@ async def update_hostlibs(session: AsyncSession, lumg_id: int | None = None, pro
             try:
                 eis_dirs = _find_eis_dirs(temp_path)
                 if eis_dirs:
-                    # Mode 1: EIS routing — each folder → its LUMG (all engines parallel)
-                    await asyncio.gather(*[
-                        _run_all_engines_parallel(eis_path, resolved_lumg_id, chunk_size)
-                        for eis_path, resolved_lumg_id in eis_dirs
-                    ])
+                    # Mode 1: EIS routing — folders are processed sequentially to avoid
+                    # exhausting the DB pool (6 concurrent LUMGs × N_EIS × 5 engines).
+                    # Each folder still runs its 5 archive engines in parallel internally.
+                    for eis_path, resolved_lumg_id in eis_dirs:
+                        await _run_all_engines_parallel(eis_path, resolved_lumg_id, chunk_size)
                 else:
                     # Mode 2: direct — all files → this LUMG (all engines parallel)
                     await _run_all_engines_parallel(temp_path, lumg_path.lumg_id, chunk_size)
