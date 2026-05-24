@@ -13,6 +13,7 @@ from backend.api.endpoints.auth_ep import get_branch_filter
 from backend.db.dao.custom_exceptions import DatabaseIntegrityError
 from backend.db.dao.lumg_dao import LumgDao
 from backend.db.engine import DbEngine, async_session_factory
+from backend.utils.path_utils import resolve_stored_path
 from backend.db.models import LumgCreate, LumgList
 from backend.db.models.lumg_model import (
     Lumg, LumgUpdate, LumgDataPath, LumgDataPathRead, LumgDataPathUpsert,
@@ -226,11 +227,12 @@ class LumgRouter:
             data_path = dp_result.scalars().first()
         if not data_path:
             raise HTTPException(status_code=404, detail="Data path not set for this LUMG")
-        if not os.path.exists(data_path.path):
+        resolved = resolve_stored_path(data_path.path)
+        if not resolved.exists():
             raise HTTPException(status_code=400, detail=f"Path does not exist: {data_path.path}")
         try:
             folder_names = set()
-            for root, _, files in os.walk(data_path.path):
+            for root, _, files in os.walk(resolved):
                 for file in files:
                     if not file.endswith(".zip"):
                         continue

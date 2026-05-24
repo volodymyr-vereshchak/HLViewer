@@ -32,6 +32,7 @@ from backend.db.models.grmu_branch_model import (
 from backend.api.endpoints.auth_ep import get_branch_filter
 from backend.db.models.lumg_model import Lumg
 from backend.hl_engine.config_reader import ConfigReader
+from backend.utils.path_utils import resolve_stored_path
 from backend.services.grmu_branch_mappings import get_all_mappings
 
 _update_lock = asyncio.Lock()
@@ -230,11 +231,12 @@ async def debug_branch_config(branch_id: int):
         raise HTTPException(status_code=404, detail="No config path")
 
     import os
-    file_size = os.path.getsize(dp.path)
+    resolved = resolve_stored_path(dp.path)
+    file_size = os.path.getsize(resolved)
     output = [f"File size: {file_size} bytes"]
     output.append(f"Struct sizes: Header={HeaderStruct.size} GIS={GisStruct.size} Flow={FlowStruct.size} Line={LineStruct.size} GVC={GasVolumeCalcStruct.size}")
 
-    with open(dp.path, "rb") as f:
+    with open(resolved, "rb") as f:
         raw = f.read()
 
     hdr = HeaderStruct.unpack(raw[:HeaderStruct.size])
@@ -330,7 +332,7 @@ async def preview_branch_config(branch_id: int):
     if not dp:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Config path not set for this branch")
     try:
-        gis_list = ConfigReader(file=dp.path).read()
+        gis_list = ConfigReader(file=resolve_stored_path(dp.path)).read()
         # Return preview: gis_name + flow count + total line count (no sensitive data)
         return [
             {
@@ -432,7 +434,7 @@ async def update_branch_names(branch_id: int):
             )
 
         try:
-            await ConfigReader(file=dp.path).update_db_with_mapping(mapping_dict)
+            await ConfigReader(file=resolve_stored_path(dp.path)).update_db_with_mapping(mapping_dict)
             return {"message": f"Names updated for branch {branch_id}", "last_updated": datetime.now().isoformat()}
         except FileNotFoundError as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))

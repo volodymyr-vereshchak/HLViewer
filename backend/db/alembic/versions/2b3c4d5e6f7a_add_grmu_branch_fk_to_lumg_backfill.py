@@ -19,16 +19,7 @@ depends_on = None
 
 
 def upgrade():
-    # 1. Seed default branch (id=1) for all existing data
-    op.execute(
-        sa.text(
-            "INSERT INTO grmu_branch (id, name, short_name, active, created_at, updated_at) "
-            "VALUES (1, 'Запорізька філія', 'ЗПФ', true, NOW(), NOW()) "
-            "ON CONFLICT (id) DO NOTHING"
-        )
-    )
-
-    # 2. Add branch_id column (nullable first, so existing rows don't fail)
+    # 1. Add branch_id column (nullable first, so existing rows don't fail)
     op.add_column(
         'lumg',
         sa.Column('branch_id', sa.Integer(), nullable=True),

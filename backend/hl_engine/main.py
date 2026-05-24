@@ -23,6 +23,7 @@ from backend.db.models import (
 )
 from backend.db.models.lumg_model import LumgDataPath, LumgEisCode
 from backend.hl_engine.daily_engine import DailyEngine
+from backend.utils.path_utils import resolve_stored_path
 from backend.hl_engine.edit_engine import EditEngine
 from backend.hl_engine.hourly_engine import HourlyEngine
 from backend.hl_engine.param_engine import ParamEngine
@@ -168,7 +169,7 @@ async def update_hostlibs(session: AsyncSession, lumg_id: int | None = None, pro
     # ── Group LUMGs by path — unzip each unique path only once ─────────────────
     path_groups: dict[str, list] = defaultdict(list)
     for lp in lumg_paths:
-        path_groups[lp.path].append(lp)
+        path_groups[str(resolve_stored_path(lp.path))].append(lp)
 
     logger.info(
         f"Starting update: {len(lumg_paths)} LUMGs across {len(path_groups)} unique path(s)"
@@ -186,6 +187,7 @@ async def update_direct(path: str, lumg_id: int, session: AsyncSession, progress
         progress[lumg_id] = "running"
 
     chunk_size = backend_settings.get("CHUNK_SIZE")
+    path = str(resolve_stored_path(path))
 
     if not os.path.exists(path):
         logger.error(f"Direct update path does not exist: {path!r}")
