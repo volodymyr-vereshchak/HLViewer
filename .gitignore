@@ -3,6 +3,7 @@
 /backend/db/ask.db
 /develop_data/
 /.env
+/.env.v2
 /back_repo/
 /hostlibs/
 /logs/
