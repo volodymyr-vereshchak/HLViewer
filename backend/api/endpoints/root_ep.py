@@ -40,15 +40,15 @@ class RootRouter:
             status_code=status.HTTP_200_OK,
         )
         self.router.add_api_route(
-            path="/update_data/{lumg_id}",
-            endpoint=self.update_data_for_lumg,
+            path="/update_data/direct",
+            endpoint=self.update_data_direct,
             tags=["root"],
             methods=["POST"],
             status_code=status.HTTP_202_ACCEPTED,
         )
         self.router.add_api_route(
-            path="/update_data/direct",
-            endpoint=self.update_data_direct,
+            path="/update_data/{lumg_id}",
+            endpoint=self.update_data_for_lumg,
             tags=["root"],
             methods=["POST"],
             status_code=status.HTTP_202_ACCEPTED,
