@@ -40,7 +40,7 @@ services:
                     alembic upgrade head &&
                     cd .. &&
                     python -m backend.db.preload_db.preload_db &&
-                    uvicorn backend.api.main:app --host 0.0.0.0 --port 8001 --reload'"
+                    uvicorn backend.api.main:app --host 0.0.0.0 --port 8001 --workers 4'"
     restart: always
 
   frontend_v2:

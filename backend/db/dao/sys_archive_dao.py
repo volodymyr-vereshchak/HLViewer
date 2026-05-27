@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime
 
 from sqlalchemy import func
@@ -44,15 +45,22 @@ class SysArchiveDao(BasicDao):
             statement = statement.where(self.model.line_id.in_(line_id))
 
         query = await self.session.execute(statement)
+        rows = query.all()
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._build_range_result, rows)
+
+    @staticmethod
+    def _build_range_result(rows):
         result = []
-        for sys_archive, sys_type in query.all():
-            row = sys_archive.model_dump()
-            row["sys_name"] = (
-                sys_type.sys_name
-                if sys_type
-                else f"Неизвестный код {row['sys_type_id']}"
-            )
-            result.append(row)
+        for sys_archive, sys_type in rows:
+            result.append({
+                "id": sys_archive.id,
+                "line_id": sys_archive.line_id,
+                "period": sys_archive.period,
+                "sys_type_id": sys_archive.sys_type_id,
+                "volume": sys_archive.volume,
+                "sys_name": sys_type.sys_name if sys_type else f"Неизвестный код {sys_archive.sys_type_id}",
+            })
         return result
 
 
