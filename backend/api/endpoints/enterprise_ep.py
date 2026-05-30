@@ -18,6 +18,8 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 
+from sqlmodel import select
+
 from backend.db.engine import async_session_factory
 from backend.db.dao.enterprise_dao import EnterpriseDao
 from backend.db.models.enterprise_model import EnterpriseRead, EnterpriseCreate, EnterpriseUpdate
@@ -381,8 +383,27 @@ async def delete_enterprise(enterprise_id: int):
 # ─── Excel template & upload ─────────────────────────────────────────────────
 
 _COLUMNS  = ["Підприємство", "Серійний номер", "Виробник", "Модель коректора",
-             "Канал (0-based)", "Активний", "Увімкнений", "Лінія (назва)"]
-_COL_WIDTHS = [40, 18, 16, 24, 16, 12, 14, 30]
+             "Канал (0-based)", "Активний", "Увімкнений", "ID лінії", "Назва лінії (довідково)"]
+_COL_WIDTHS = [40, 18, 16, 24, 16, 12, 14, 12, 32]
+
+
+async def _lines_with_context(session):
+    """Lines for the reference sheet: (line_id, line_name, calc_name, lumg_name).
+
+    Line names are NOT globally unique (a line is unique only within its
+    calculator), so the reference carries the ID plus calculator + LUMG context
+    to disambiguate. The data sheet then references the line by ID."""
+    from backend.db.models.line_model import Line
+    from backend.db.models.gas_volume_calc_model import GasVolumeCalc
+    from backend.db.models.lumg_model import Lumg
+
+    stmt = (
+        select(Line.id, Line.name, GasVolumeCalc.name, Lumg.name)
+        .join(GasVolumeCalc, Line.gas_volume_calc_id == GasVolumeCalc.id)
+        .join(Lumg, GasVolumeCalc.lumg_id == Lumg.id)
+        .order_by(Lumg.name, GasVolumeCalc.name, Line.name)
+    )
+    return (await session.execute(stmt)).all()
 
 
 async def _build_template_workbook() -> openpyxl.Workbook:
@@ -392,7 +413,7 @@ async def _build_template_workbook() -> openpyxl.Workbook:
     async with async_session_factory() as session:
         manufacturers = await ManufacturerDao(session).get_all()
         corector_types = await CorectorTypeDao(session).get_all()
-        lines = await LineDao(session).get_all()
+        lines_ctx = await _lines_with_context(session)  # (id, name, calc, lumg)
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -422,7 +443,8 @@ async def _build_template_workbook() -> openpyxl.Workbook:
         "0, 1, 2, …",
         "Так / Ні",
         "Так / Ні",
-        "Назва лінії — точно як у системі або порожньо",
+        "ID лінії з аркуша 'Довідник' (або порожньо)",
+        "Заповнюється автоматично при експорті",
     ]
     for col_idx, hint in enumerate(hints, start=1):
         cell = ws.cell(row=2, column=col_idx, value=hint)
@@ -432,9 +454,10 @@ async def _build_template_workbook() -> openpyxl.Workbook:
     # example row
     ex_mfr   = manufacturers[0].short_name if manufacturers else "РадмирТех"
     ex_model = corector_types[0].model_name if corector_types else "ВЕГА-1.01"
-    ex_line  = lines[0].name if lines else ""
+    ex_lid   = lines_ctx[0][0] if lines_ctx else ""
+    ex_lname = lines_ctx[0][1] if lines_ctx else ""
     for col_idx, val in enumerate(
-        ["ТОВ Завод №1", 123456, ex_mfr, ex_model, 0, "Так", "Так", ex_line], start=1
+        ["ТОВ Завод №1", 123456, ex_mfr, ex_model, 0, "Так", "Так", ex_lid, ex_lname], start=1
     ):
         ws.cell(row=3, column=col_idx, value=val)
 
@@ -458,12 +481,19 @@ async def _build_template_workbook() -> openpyxl.Workbook:
         ref.cell(row=row, column=2, value=ct.model_name)
         row += 1
 
-    # Lines
-    ref.cell(row=1, column=4, value="Лінії у системі").font = ref_hdr_font
-    ref.cell(row=1, column=4).fill = ref_hdr_fill
-    ref.column_dimensions["D"].width = 35
-    for i, ln in enumerate(lines, start=2):
-        ref.cell(row=i, column=4, value=ln.name)
+    # Lines — ID + назва + вичислювач + ЛУМГ (look up the ID by name here, then
+    # put the ID into the 'ID лінії' column on the data sheet).
+    line_ref_cols = [("ID лінії", 10), ("Назва лінії", 32), ("Вичислювач", 28), ("ЛУМГ", 24)]
+    for j, (title, width) in enumerate(line_ref_cols, start=4):  # columns D, E, F, G
+        c = ref.cell(row=1, column=j, value=title)
+        c.font = ref_hdr_font
+        c.fill = ref_hdr_fill
+        ref.column_dimensions[get_column_letter(j)].width = width
+    for i, (lid, lname, cname, lumgname) in enumerate(lines_ctx, start=2):
+        ref.cell(row=i, column=4, value=lid)
+        ref.cell(row=i, column=5, value=lname)
+        ref.cell(row=i, column=6, value=cname)
+        ref.cell(row=i, column=7, value=lumgname)
 
     return wb
 
@@ -527,7 +557,7 @@ async def export_enterprises():
 
     hints = ["Назва точки обліку", "Серійний номер", "Скорочена назва",
              "Модель з довідника", "0, 1, 2…", "Так / Ні", "Так / Ні",
-             "Точна назва лінії або порожньо"]
+             "ID лінії (ключ для імпорту)", "Назва лінії (довідково)"]
     for col_idx, hint in enumerate(hints, start=1):
         cell = ws.cell(row=2, column=col_idx, value=hint)
         cell.font = hint_font
@@ -547,7 +577,8 @@ async def export_enterprises():
         ws.cell(row=row_idx, column=5, value=ent.ch_num)
         ws.cell(row=row_idx, column=6, value="Так" if ent.active else "Ні")
         ws.cell(row=row_idx, column=7, value="Так" if ent.enabled else "Ні")
-        ws.cell(row=row_idx, column=8, value=line_name)
+        ws.cell(row=row_idx, column=8, value=ent.line_id if ent.line_id else None)
+        ws.cell(row=row_idx, column=9, value=line_name)
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -585,9 +616,11 @@ async def upload_enterprises(file: UploadFile = File(...), branch_id: Optional[i
     ct_by_mfr_model: dict[tuple, object]   = {
         (ct.manufacturer_id, ct.model_name.strip()): ct for ct in corector_types
     }
-    line_by_name: dict[str, object] = {
-        ln.name.strip().lower(): ln for ln in all_lines
-    }
+    line_ids_set: set = {ln.id for ln in all_lines}
+    # name → [line_id, …]; a name maps to >1 id when calculators reuse line names
+    line_ids_by_name: dict[str, list] = defaultdict(list)
+    for ln in all_lines:
+        line_ids_by_name[ln.name.strip().lower()].append(ln.id)
 
 
     def parse_bool(val, default=True) -> bool:
@@ -602,8 +635,9 @@ async def upload_enterprises(file: UploadFile = File(...), branch_id: Optional[i
         if not row or not any(row):
             continue
 
-        row_padded = (list(row) + [None] * 8)[:8]
-        enterprise_name, ser_num, mfr_str, model_str, ch_num, active_str, enabled_str, line_str = row_padded
+        row_padded = (list(row) + [None] * 9)[:9]
+        (enterprise_name, ser_num, mfr_str, model_str, ch_num,
+         active_str, enabled_str, line_key, _line_name_info) = row_padded
 
         if not enterprise_name:
             errors.append(f"Рядок {row_idx}: порожня назва — пропущено")
@@ -642,14 +676,29 @@ async def upload_enterprises(file: UploadFile = File(...), branch_id: Optional[i
             errors.append(f"Рядок {row_idx}: некоректний канал '{ch_num}'")
             continue
 
-        # line_id (optional)
+        # line (optional): column "ID лінії". Primary = numeric line ID; fall back
+        # to a name match for older files — but reject ambiguous names (a name that
+        # belongs to several lines across calculators), telling the user to use the ID.
         line_id = None
-        if line_str and str(line_str).strip():
-            ln = line_by_name.get(str(line_str).strip().lower())
-            if ln:
-                line_id = ln.id
-            else:
-                errors.append(f"Рядок {row_idx}: лінія '{line_str}' не знайдена — line_id=null")
+        if line_key is not None and str(line_key).strip():
+            key = str(line_key).strip()
+            if key.replace(".", "", 1).isdigit():            # numeric → line ID
+                lid = int(float(key))
+                if lid in line_ids_set:
+                    line_id = lid
+                else:
+                    errors.append(f"Рядок {row_idx}: ID лінії {lid} не існує — line_id=null")
+            else:                                            # text → name lookup
+                ids = line_ids_by_name.get(key.lower(), [])
+                if len(ids) == 1:
+                    line_id = ids[0]
+                elif len(ids) > 1:
+                    errors.append(
+                        f"Рядок {row_idx}: назва лінії '{key}' неоднозначна "
+                        f"({len(ids)} збігів) — вкажіть ID лінії з аркуша 'Довідник'"
+                    )
+                else:
+                    errors.append(f"Рядок {row_idx}: лінія '{key}' не знайдена — line_id=null")
 
         records.append({
             "enterprise_name": str(enterprise_name).strip(),
