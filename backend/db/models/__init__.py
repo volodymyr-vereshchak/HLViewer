@@ -97,3 +97,5 @@ from .device_catalog_model import (
     Manufacturer, ManufacturerRead, ManufacturerCreate, ManufacturerUpdate,
     CorectorType, CorectorTypeRead, CorectorTypeCreate, CorectorTypeUpdate,
 )
+
+from .update_job_model import UpdateJob

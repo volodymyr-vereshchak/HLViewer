@@ -118,25 +118,15 @@ async def update_hostlibs(session: AsyncSession, lumg_id: int | None = None, pro
 
     _sem = asyncio.Semaphore(6)
 
-    async def _process_lumg_in_temp(lumg_path, temp_path: str):
-        """Process one LUMG using a shared already-unzipped temp directory."""
+    async def _process_lumg_direct(lumg_path, temp_path: str):
+        """Mode 2: write all files from temp_path directly into this LUMG (no EIS routing)."""
         if progress is not None:
             progress[lumg_path.lumg_id] = "queued"
         async with _sem:
             if progress is not None:
                 progress[lumg_path.lumg_id] = "running"
             try:
-                eis_dirs = _find_eis_dirs(temp_path)
-                if eis_dirs:
-                    # Mode 1: EIS routing — folders are processed sequentially to avoid
-                    # exhausting the DB pool (6 concurrent LUMGs × N_EIS × 5 engines).
-                    # Each folder still runs its 5 archive engines in parallel internally.
-                    for eis_path, resolved_lumg_id in eis_dirs:
-                        await _run_all_engines_parallel(eis_path, resolved_lumg_id, chunk_size)
-                else:
-                    # Mode 2: direct — all files → this LUMG (all engines parallel)
-                    await _run_all_engines_parallel(temp_path, lumg_path.lumg_id, chunk_size)
-
+                await _run_all_engines_parallel(temp_path, lumg_path.lumg_id, chunk_size)
                 if progress is not None:
                     progress[lumg_path.lumg_id] = "done"
             except Exception as e:
@@ -145,7 +135,7 @@ async def update_hostlibs(session: AsyncSession, lumg_id: int | None = None, pro
                     progress[lumg_path.lumg_id] = "error"
 
     async def _process_path_group(path: str, lumg_path_list: list):
-        """Unzip once, then process all LUMGs sharing this path concurrently."""
+        """Unzip once, find EIS dirs once, route data correctly."""
         if not os.path.exists(path):
             logger.error(f"Hostlib path does not exist: {path!r} - skipping {len(lumg_path_list)} LUMGs")
             if progress is not None:
@@ -155,10 +145,39 @@ async def update_hostlibs(session: AsyncSession, lumg_id: int | None = None, pro
         try:
             async with UnzipUtils(path) as unzip_utils:
                 logger.info(f"Unzipped {path!r} -> {unzip_utils.temp_path} (shared by {len(lumg_path_list)} LUMGs)")
-                await asyncio.gather(*[
-                    _process_lumg_in_temp(lp, unzip_utils.temp_path)
-                    for lp in lumg_path_list
-                ])
+                eis_dirs = _find_eis_dirs(unzip_utils.temp_path)
+                if eis_dirs:
+                    # Mode 1: EIS routing — discover dirs ONCE for the whole path group,
+                    # then process each dir exactly once. Previously each LUMG called
+                    # _find_eis_dirs independently, causing N×M redundant writes.
+                    targeted_ids = {lid for _, lid in eis_dirs}
+                    # Path-owner LUMGs with no EIS codes in this path: nothing to do.
+                    if progress is not None:
+                        for lp in lumg_path_list:
+                            if lp.lumg_id not in targeted_ids:
+                                progress[lp.lumg_id] = "done"
+                    async with _sem:
+                        if progress is not None:
+                            for lid in targeted_ids:
+                                progress[lid] = "running"
+                        try:
+                            for eis_path, resolved_lumg_id in eis_dirs:
+                                await _run_all_engines_parallel(eis_path, resolved_lumg_id, chunk_size)
+                            if progress is not None:
+                                for lid in targeted_ids:
+                                    progress[lid] = "done"
+                        except Exception as e:
+                            logger.error(f"EIS routing error for {path!r}: {e}", exc_info=True)
+                            if progress is not None:
+                                for lid in targeted_ids:
+                                    if progress.get(lid) != "done":
+                                        progress[lid] = "error"
+                else:
+                    # Mode 2: direct — each LUMG in this path group gets all files.
+                    await asyncio.gather(*[
+                        _process_lumg_direct(lp, unzip_utils.temp_path)
+                        for lp in lumg_path_list
+                    ])
         except Exception as e:
             logger.error(f"Error processing path {path!r}: {e}", exc_info=True)
             if progress is not None:
