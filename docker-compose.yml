@@ -9,10 +9,10 @@ services:
     container_name: postgres_db_v2
     # Raise connection cap: 8 uvicorn workers + scheduler each open pools.
     command: -c max_connections=200
-    environment:
-      POSTGRES_DB: hostlib_db_v2
-      POSTGRES_USER: diakonx
-      POSTGRES_PASSWORD: assemblerwog359
+    # Credentials (POSTGRES_DB/USER/PASSWORD) come from .env.v2 (gitignored),
+    # not hardcoded here.
+    env_file:
+      - .env.v2
     ports:
       - "5434:5432"
     # Named, external volume so prod data survives container recreation AND
@@ -34,10 +34,11 @@ services:
     working_dir: /app
     env_file:
       - .env.v2
+    # POSTGRES_* (incl. password) come from .env.v2; only non-secret networking
+    # overrides are set here. DATABASE_URL is unused (URL is built from POSTGRES_*).
     environment:
       - DB_HOST=db_v2
       - DB_PORT=5432
-      - DATABASE_URL=postgresql+asyncpg://diakonx:assemblerwog359@db_v2:5432/hostlib_db_v2
       - TZ=Europe/Kyiv
 
     ports:
@@ -87,7 +88,6 @@ services:
     environment:
       - DB_HOST=db_v2
       - DB_PORT=5432
-      - DATABASE_URL=postgresql+asyncpg://diakonx:assemblerwog359@db_v2:5432/hostlib_db_v2
       - TZ=Europe/Kyiv
     depends_on:
       - fastapi_v2
