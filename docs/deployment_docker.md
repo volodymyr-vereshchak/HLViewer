@@ -74,6 +74,10 @@ CORS_ORIGINS=http://localhost:3001,http://127.0.0.1:3001,http://<IP-СЕРВЕР
 ```bash
 cd /opt/hlviewer/HLViewer
 
+# Одноразово на новому сервері: створити named volume для даних БД.
+# Він зовнішній (external), тому compose його не видаляє навіть при `down -v`.
+docker volume create hlviewer_pgdata_v2
+
 # Перший білд: стягує базові образи з Docker Hub (~5–10 хв)
 docker compose up -d --build
 

@@ -15,6 +15,11 @@ services:
       POSTGRES_PASSWORD: assemblerwog359
     ports:
       - "5434:5432"
+    # Named, external volume so prod data survives container recreation AND
+    # `docker compose down -v`. On a fresh host create it once before first up:
+    #   docker volume create hlviewer_pgdata_v2
+    volumes:
+      - pgdata_v2:/var/lib/postgresql/data
     networks:
       - hostlib_network_v2
     restart: always
@@ -96,3 +101,8 @@ services:
 networks:
   hostlib_network_v2:
     driver: bridge
+
+volumes:
+  pgdata_v2:
+    external: true
+    name: hlviewer_pgdata_v2
