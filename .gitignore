@@ -55,9 +55,20 @@ MANIFEST
 # Logs
 *.log
 /backend/*.log
-/backend/*.txt.claude/
+/backend/*.txt
+**/logs/
 packages/
 .claude/
+
+# Build/dev artifacts that were committed by accident (now untracked)
+*_results.txt
+integration_test_output.log
+
+# Research outputs — research/ code is tracked, generated data is not
+/research/*_output/
+/research/*.xlsx
+/research/*.csv
+/research/*.png
 
 # Preload JSON backups
 backend/db/preload_db/*_old.json

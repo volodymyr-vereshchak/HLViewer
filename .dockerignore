@@ -9,6 +9,11 @@ back_repo/
 packages/
 logs/
 
+# Research / manual dev scripts — not part of the server runtime
+research/
+scripts/manual_tests/
+scripts/probe_hostlib/
+
 # Python cache
 __pycache__/
 *.pyc
