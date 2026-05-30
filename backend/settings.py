@@ -12,6 +12,9 @@ backend_settings = {
     "DB_PORT": os.getenv("DB_PORT"),
     "POSTGRES_DB": os.getenv("POSTGRES_DB"),
     "CHUNK_SIZE": 1000,
+    # Commercial-day start hour (07:00 → 07:00). Global project setting; the
+    # frontend reads it from GET /config. Override per-deployment in the env file.
+    "CONTRACT_HOUR": int(os.getenv("CONTRACT_HOUR", "7")),
     "BOT_TOKEN": os.getenv("BOT_TOKEN"),
     "CHAT_ID": os.getenv("CHAT_ID"),
     "SENDER_EMAIL": os.getenv("SENDER_EMAIL", ""),
