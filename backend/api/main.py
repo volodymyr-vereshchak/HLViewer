@@ -36,6 +36,7 @@ from backend.db.engine import async_session_factory
 from backend.db.models.app_user_model import AppUser
 from backend.api.endpoints.auth_ep import hash_password
 from backend.hl_engine.main import _cleanup_orphan_temp_dirs
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
 logger = logging.getLogger(__name__)
@@ -145,8 +146,12 @@ async def _seed_admin():
                 password_hash=hash_password(password),
             )
             session.add(user)
-            await session.commit()
-            logger.info("Seeded initial admin user: %s", username)
+            try:
+                await session.commit()
+                logger.info("Seeded initial admin user: %s", username)
+            except IntegrityError:
+                # Another worker seeded it first (startup race with --workers > 1)
+                await session.rollback()
 
 
 async def _seed_default_user():
@@ -167,8 +172,12 @@ async def _seed_default_user():
                 password_hash=hash_password(password),
             )
             session.add(user)
-            await session.commit()
-            logger.info("Seeded default viewer user: %s", username)
+            try:
+                await session.commit()
+                logger.info("Seeded default viewer user: %s", username)
+            except IntegrityError:
+                # Another worker seeded it first (startup race with --workers > 1)
+                await session.rollback()
         elif existing.role == "viewer_all":
             existing.role = "viewer"
             session.add(existing)

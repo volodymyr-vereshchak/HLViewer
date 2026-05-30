@@ -36,6 +36,9 @@ JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = 12
 JWT_REMEMBER_ME_DAYS = 30
 COOKIE_NAME = "hlviewer_token"
+# Set COOKIE_SECURE=true when serving over HTTPS so the auth cookie is not sent
+# over plain HTTP. Defaults to false for internal HTTP deployments.
+COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
 
 
 def hash_password(password: str) -> str:
@@ -161,6 +164,7 @@ async def login(body: LoginRequest, response: Response):
         key=COOKIE_NAME,
         value=token,
         httponly=True,
+        secure=COOKIE_SECURE,
         max_age=max_age,
         samesite="lax",
     )
@@ -204,6 +208,7 @@ async def get_me(request: Request, response: Response):
                     key=COOKIE_NAME,
                     value=new_token,
                     httponly=True,
+                    secure=COOKIE_SECURE,
                     max_age=JWT_EXPIRE_HOURS * 3600,
                     samesite="lax",
                 )

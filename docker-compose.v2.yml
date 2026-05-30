@@ -2,6 +2,8 @@ services:
   db_v2:
     image: postgres:15
     container_name: postgres_db_v2
+    # Raise connection cap: 4 uvicorn workers + scheduler each open pools.
+    command: -c max_connections=200
     environment:
       POSTGRES_DB: hostlib_db_v2
       POSTGRES_USER: diakonx
