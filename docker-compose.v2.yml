@@ -32,6 +32,9 @@ services:
 
     ports:
       - "8001:8001"
+    # Cap so an OOM kills/restarts this container, not the whole box.
+    # Sized for ~8 workers on an 8 GB prod (leaves room for Postgres + scheduler + OS).
+    mem_limit: 5g
     depends_on:
       - db_v2
     networks:
@@ -42,7 +45,7 @@ services:
                     alembic upgrade head &&
                     cd .. &&
                     python -m backend.db.preload_db.preload_db &&
-                    uvicorn backend.api.main:app --host 0.0.0.0 --port 8001 --workers 4'"
+                    uvicorn backend.api.main:app --host 0.0.0.0 --port 8001 --workers 8'"
     restart: always
 
   frontend_v2:
