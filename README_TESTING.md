@@ -340,7 +340,7 @@ export PYTHONPATH="${PYTHONPATH}:$(pwd)"
 
 ```bash
 # Check database is running
-docker-compose up -d db
+docker compose up -d db_v2
 
 # Check connection settings
 python -c "from backend.db.engine import async_session_factory; print('DB OK')"

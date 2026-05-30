@@ -149,7 +149,7 @@ docker ps | grep postgres_db
 
 ### Start database
 ```bash
-docker-compose up -d db
+docker compose up -d db_v2
 ```
 
 ### Stop application before import
@@ -255,7 +255,7 @@ docker info
 ### "Container not found"
 ```bash
 # Start the container
-docker-compose up -d db
+docker compose up -d db_v2
 
 # Wait for initialization
 sleep 5

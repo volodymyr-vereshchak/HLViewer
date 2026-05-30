@@ -75,10 +75,10 @@ CORS_ORIGINS=http://localhost:3001,http://127.0.0.1:3001,http://<IP-СЕРВЕР
 cd /opt/hlviewer/HLViewer
 
 # Перший білд: стягує базові образи з Docker Hub (~5–10 хв)
-docker compose -f docker-compose.v2.yml up -d --build
+docker compose up -d --build
 
 # Стежимо за запуском
-docker compose -f docker-compose.v2.yml logs -f
+docker compose logs -f
 ```
 
 Очікувана послідовність у логах:
@@ -93,7 +93,7 @@ docker compose -f docker-compose.v2.yml logs -f
 ## 5. Перевірка
 
 ```bash
-docker compose -f docker-compose.v2.yml ps
+docker compose ps
 curl http://localhost:8001/health
 curl -I http://localhost:3001
 ```
@@ -106,7 +106,7 @@ curl -I http://localhost:3001
 
 Детально: [admin_access_setup.md](admin_access_setup.md)
 
-Коротко: монтуємо мережеву шару як `/mnt/as4`, прописуємо volume у `docker-compose.v2.yml` для сервісів `fastapi_app_v2` та `scheduler_v2`:
+Коротко: монтуємо мережеву шару як `/mnt/as4`, прописуємо volume у `docker-compose.yml` для сервісів `fastapi_app_v2` та `scheduler_v2`:
 
 ```yaml
 volumes:
@@ -162,10 +162,10 @@ nano /etc/docker/daemon.json
 
 ```bash
 systemctl restart docker
-docker compose -f docker-compose.v2.yml up -d
+docker compose up -d
 ```
 
-**Варіант Б — прописати IP напряму у `docker-compose.v2.yml`** (якщо внутрішній IP відомий):
+**Варіант Б — прописати IP напряму у `docker-compose.yml`** (якщо внутрішній IP відомий):
 
 ```yaml
 fastapi_v2:

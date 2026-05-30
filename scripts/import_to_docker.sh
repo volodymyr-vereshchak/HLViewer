@@ -11,8 +11,8 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-CONTAINER_NAME="postgres_db"
-DB_NAME="hostlib_db"
+CONTAINER_NAME="postgres_db_v2"
+DB_NAME="hostlib_db_v2"
 DB_USER="diakonx"
 DUMP_DIR="backend/data"
 DUMP_FILE="${DUMP_DIR}/hostlib_backup"
@@ -56,11 +56,11 @@ check_container() {
     if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
         print_error "Container '${CONTAINER_NAME}' is not running!"
         print_info "Starting the database container..."
-        docker-compose up -d db
+        docker compose up -d db_v2
         sleep 5
 
         if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-            print_error "Failed to start container. Please run: docker-compose up -d db"
+            print_error "Failed to start container. Please run: docker compose up -d db_v2"
             exit 1
         fi
         print_success "Container started successfully"
@@ -138,9 +138,9 @@ run_alembic_migrations() {
     print_info "Running Alembic migrations to create schema..."
 
     # Check if fastapi container exists
-    if docker ps -a --format '{{.Names}}' | grep -q "fastapi_app"; then
+    if docker ps -a --format '{{.Names}}' | grep -q "fastapi_app_v2"; then
         # Run migrations through the fastapi container
-        docker exec fastapi_app sh -c "cd backend && alembic upgrade head" > /dev/null 2>&1
+        docker exec fastapi_app_v2 sh -c "cd backend && alembic upgrade head" > /dev/null 2>&1
 
         if [ $? -eq 0 ]; then
             print_success "Schema created via Alembic migrations"
