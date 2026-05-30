@@ -49,10 +49,22 @@ def _verify_password(plain: str, hashed: str) -> bool:
     return bcrypt.checkpw(plain.encode(), hashed.encode())
 
 
-def _create_token(user_id: int, remember_me: bool = False) -> str:
+def _create_token(
+    user_id: int,
+    remember_me: bool = False,
+    role: str | None = None,
+    branch_ids: list[int] | None = None,
+) -> str:
     delta = timedelta(days=JWT_REMEMBER_ME_DAYS) if remember_me else timedelta(hours=JWT_EXPIRE_HOURS)
     expire = datetime.now(timezone.utc) + delta
-    return jwt.encode({"sub": str(user_id), "exp": expire}, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    payload = {"sub": str(user_id), "exp": expire}
+    # Embed role + allowed branches so per-request auth can skip the
+    # AppUserBranchAccess lookup. Read back in get_branch_filter.
+    if role is not None:
+        payload["role"] = role
+    if branch_ids is not None:
+        payload["branches"] = branch_ids
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -74,14 +86,22 @@ async def _build_user_read(user: AppUser) -> AppUserRead:
     )
 
 
-async def get_current_user(hlviewer_token: Optional[str] = Cookie(default=None)) -> AppUser:
-    """Dependency: extracts and validates JWT from httpOnly cookie."""
+async def get_token_claims(hlviewer_token: Optional[str] = Cookie(default=None)) -> dict:
+    """Decode and validate the JWT from the httpOnly cookie, once per request.
+    FastAPI caches this within a request, so dependent deps share one decode."""
     if not hlviewer_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     try:
-        payload = jwt.decode(hlviewer_token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        user_id = int(payload["sub"])
-    except (JWTError, KeyError, ValueError):
+        return jwt.decode(hlviewer_token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except JWTError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
+
+async def get_current_user(claims: dict = Depends(get_token_claims)) -> AppUser:
+    """Dependency: validates the user from the token still exists and is active."""
+    try:
+        user_id = int(claims["sub"])
+    except (KeyError, ValueError):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
     async with async_session_factory() as session:
@@ -95,16 +115,27 @@ async def get_current_user(hlviewer_token: Optional[str] = Cookie(default=None))
 
 async def get_branch_filter(
     user: AppUser = Depends(get_current_user),
+    claims: dict = Depends(get_token_claims),
 ) -> list[int] | None:
-    """None = no restrictions (admin, or viewer with no branch entries). list[int] = restricted."""
+    """None = no restrictions (admin, or viewer with no branch entries). list[int] = restricted.
+
+    branch_ids come from the JWT (embedded at login) to avoid an AppUserBranchAccess
+    query on every request. Tokens issued before this change have no 'branches' claim,
+    so we fall back to the DB until the user re-logs in.
+
+    Note: branch access changes take effect on the user's next login (or token expiry),
+    since the list is carried in the token. Role changes are still immediate (re-read here)."""
     if user.role == "admin":
         return None
+    if "branches" in claims:
+        branch_ids = claims["branches"]
+        return None if not branch_ids else branch_ids
+    # Legacy token (no claim) → read from DB
     async with async_session_factory() as session:
         result = await session.execute(
             select(AppUserBranchAccess.branch_id).where(AppUserBranchAccess.user_id == user.id)
         )
         branch_ids = list(result.scalars().all())
-    # Viewer with no branch entries = access to all branches
     return None if not branch_ids else branch_ids
 
 
@@ -158,7 +189,13 @@ async def login(body: LoginRequest, response: Response):
     if not user.active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Обліковий запис деактивовано")
 
-    token = _create_token(user.id, remember_me=body.remember_me)
+    user_read = await _build_user_read(user)
+    token = _create_token(
+        user.id,
+        remember_me=body.remember_me,
+        role=user.role,
+        branch_ids=user_read.allowed_branch_ids,
+    )
     max_age = JWT_REMEMBER_ME_DAYS * 86400 if body.remember_me else JWT_EXPIRE_HOURS * 3600
     response.set_cookie(
         key=COOKIE_NAME,
@@ -168,7 +205,7 @@ async def login(body: LoginRequest, response: Response):
         max_age=max_age,
         samesite="lax",
     )
-    return await _build_user_read(user)
+    return user_read
 
 
 @router.post("/logout")
@@ -203,7 +240,12 @@ async def get_me(request: Request, response: Response):
                     select(AppUser).where(AppUser.username == default_username)
                 )).scalar_one_or_none()
             if default_user and default_user.active:
-                new_token = _create_token(default_user.id)
+                user_read = await _build_user_read(default_user)
+                new_token = _create_token(
+                    default_user.id,
+                    role=default_user.role,
+                    branch_ids=user_read.allowed_branch_ids,
+                )
                 response.set_cookie(
                     key=COOKIE_NAME,
                     value=new_token,
@@ -212,7 +254,7 @@ async def get_me(request: Request, response: Response):
                     max_age=JWT_EXPIRE_HOURS * 3600,
                     samesite="lax",
                 )
-                return await _build_user_read(default_user)
+                return user_read
 
     raise HTTPException(status_code=401, detail="Not authenticated")
 
