@@ -63,9 +63,19 @@ AUTO_LOGIN=true
 # ── CORS ─────────────────────────────────────────────────────────────────────
 # Додати IP сервера до списку
 CORS_ORIGINS=http://localhost:3001,http://127.0.0.1:3001,http://<IP-СЕРВЕРА>:3001
+
+# ── Звіти ────────────────────────────────────────────────────────────────────
+# Контрактна година — початок комерційної доби (07:00 → 07:00). Глобальне
+# налаштування для звітів (нічні витрати, годинні тренди). Фронтенд читає
+# її через GET /config. За замовчуванням 7.
+CONTRACT_HOUR=7
 ```
 
 > **JWT_SECRET** — згенерувати: `openssl rand -hex 32`
+>
+> Креди БД та `CONTRACT_HOUR` читаються лише з `.env.v2` — у `docker-compose.yml`
+> секретів немає. Після зміни `.env.v2` застосовуйте через **`docker compose up -d`**
+> (перестворення контейнера) — `docker restart` НЕ перечитує `env_file`.
 
 ---
 
@@ -98,7 +108,8 @@ docker compose logs -f
 
 ```bash
 docker compose ps
-curl http://localhost:8001/health
+# Бекенд живий + показує контрактну годину: {"contract_hour":7}
+curl http://localhost:8001/config
 curl -I http://localhost:3001
 ```
 
@@ -187,6 +198,10 @@ docker exec fastapi_app_v2 curl -k https://rest-direct.BRANCH.iot.grmu.com.ua/ap
 ---
 
 ## 8. Резервне копіювання БД
+
+> Дані БД лежать на **зовнішньому named volume `hlviewer_pgdata_v2`** (див. п.4).
+> Він не видаляється навіть при `docker compose down -v`, тому перестворення
+> контейнерів (`up -d`) безпечне. Перед великими операціями однаково робіть дамп.
 
 ```bash
 # Дамп
