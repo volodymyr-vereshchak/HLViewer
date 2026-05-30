@@ -72,3 +72,6 @@ integration_test_output.log
 
 # Preload JSON backups
 backend/db/preload_db/*_old.json
+
+# Local probe/debug scripts
+/scripts/probe_hostlib/
