@@ -19,6 +19,7 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from jose import JWTError, jwt
 from pydantic import BaseModel
 from sqlmodel import select
+from sqlalchemy import func
 
 from backend.db.engine import async_session_factory
 from backend.db.models.app_user_model import AppUser, AppUserBranchAccess, AppUserRead
@@ -345,6 +346,27 @@ async def update_user(user_id: int, body: UserUpdate, admin: AppUser = Depends(g
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
 
+        # Guard: never leave the system without an active admin. If this update
+        # would stop the user from being an active admin (deactivation or role
+        # change), make sure at least one other active admin remains.
+        new_role = body.role if body.role is not None else user.role
+        new_active = body.active if body.active is not None else user.active
+        was_active_admin = user.role == "admin" and user.active
+        will_be_active_admin = new_role == "admin" and new_active
+        if was_active_admin and not will_be_active_admin:
+            other_admins = (await session.execute(
+                select(func.count()).select_from(AppUser).where(
+                    AppUser.role == "admin",
+                    AppUser.active == True,  # noqa: E712
+                    AppUser.id != user_id,
+                )
+            )).scalar_one()
+            if other_admins == 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Не можна деактивувати або змінити роль останнього активного адміністратора",
+                )
+
         if body.display_name is not None:
             user.display_name = body.display_name
         if body.role is not None:
@@ -377,6 +399,47 @@ async def reset_password(user_id: int, admin: AppUser = Depends(get_current_user
         await session.commit()
 
     return {"password": plain_pw}
+
+
+@router.delete("/users/{user_id}")
+async def delete_user(user_id: int, admin: AppUser = Depends(get_current_user)):
+    if admin.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only")
+
+    # Guard: an admin may not delete their own account
+    if user_id == admin.id:
+        raise HTTPException(status_code=400, detail="Не можна видалити власний обліковий запис")
+
+    async with async_session_factory() as session:
+        user = (await session.execute(select(AppUser).where(AppUser.id == user_id))).scalar_one_or_none()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # Guard: never leave the system without an active admin
+        if user.role == "admin":
+            other_admins = (await session.execute(
+                select(func.count()).select_from(AppUser).where(
+                    AppUser.role == "admin",
+                    AppUser.active == True,  # noqa: E712
+                    AppUser.id != user_id,
+                )
+            )).scalar_one()
+            if other_admins == 0:
+                raise HTTPException(status_code=400, detail="Не можна видалити останнього активного адміністратора")
+
+        # Remove branch-access rows explicitly (FK is ON DELETE CASCADE, but this
+        # avoids the ORM trying to null out loaded children).
+        existing = await session.execute(
+            select(AppUserBranchAccess).where(AppUserBranchAccess.user_id == user_id)
+        )
+        for row in existing.scalars().all():
+            await session.delete(row)
+        await session.flush()
+
+        await session.delete(user)
+        await session.commit()
+
+    return {"deleted": True, "id": user_id}
 
 
 auth_router = router
