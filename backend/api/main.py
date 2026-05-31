@@ -3,12 +3,13 @@ import logging
 import math
 import os
 from contextlib import asynccontextmanager
-from logging.handlers import RotatingFileHandler
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
+
+from backend.logging_config import setup_logging
 
 from backend.api.endpoints import device_catalog_ep
 from backend.api.endpoints import (
@@ -32,6 +33,7 @@ from backend.api.endpoints import gas_volume_calc_type_ep, day_archive_ep
 from backend.api.endpoints import sys_type_ep
 from backend.api.endpoints import edit_type_ep
 from backend.api.endpoints import config_ep
+from backend.api.endpoints import logs_ep
 from backend.telegram_notifier.telegram_norifier import TelegramBot
 from backend.db.engine import async_session_factory
 from backend.db.models.app_user_model import AppUser
@@ -40,14 +42,10 @@ from backend.hl_engine.main import _cleanup_orphan_temp_dirs
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
+# Configure file logging (rotating, multiprocess-safe) + console. Runs once per
+# worker process at import time. See backend/logging_config.py.
+setup_logging()
 logger = logging.getLogger(__name__)
-
-# File logging: backend.log next to the backend package root, rotates at 10 MB, keeps 3 backups
-_log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend.log")
-_file_handler = RotatingFileHandler(_log_path, maxBytes=10 * 1024 * 1024, backupCount=3, encoding="utf-8")
-_file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-logging.getLogger().addHandler(_file_handler)
-logging.getLogger().setLevel(logging.INFO)
 
 
 def _sanitize_nan(obj):
@@ -188,15 +186,28 @@ async def _seed_default_user():
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
+    logger.info("HLViewer backend starting (log dir: %s)", os.getenv("LOG_DIR", "logs"))
     _cleanup_orphan_temp_dirs()
     await _seed_admin()
     await _seed_default_user()
     yield
+    logger.info("HLViewer backend shutting down")
 
 
 # run FastApi
 app = FastAPI(openapi_tags=tags_metadata, lifespan=lifespan, default_response_class=NaNSafeJSONResponse)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Log every uncaught exception with a full traceback so it reaches the log
+    files, then return a generic 500. FastAPI handles HTTPException and
+    validation errors separately, so this only fires for genuine bugs."""
+    logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+    return NaNSafeJSONResponse(
+        status_code=500, content={"detail": "Internal Server Error"}
+    )
 
 # Add CORS middleware
 _default_cors = ",".join([
@@ -240,3 +251,4 @@ app.include_router(device_catalog_ep.router)
 app.include_router(sys_type_ep.sys_type_router)
 app.include_router(edit_type_ep.edit_type_router)
 app.include_router(config_ep.router)
+app.include_router(logs_ep.router)

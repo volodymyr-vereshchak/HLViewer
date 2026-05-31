@@ -3,6 +3,15 @@
 # recreated. Renaming them to clean names requires a deliberate DB data migration.
 # Tests run in CI against their own Postgres; for local runs point TEST_DATABASE_URL
 # at any Postgres on 5432 (see tests/conftest.py).
+
+# Rotate each container's stdout/stderr (captured by Docker's json-file driver)
+# so logs never fill the disk: 10 MB per file, 5 files kept per container.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   db_v2:
     image: postgres:15
@@ -22,6 +31,7 @@ services:
       - pgdata_v2:/var/lib/postgresql/data
     networks:
       - hostlib_network_v2
+    logging: *default-logging
     restart: always
 
   fastapi_v2:
@@ -57,6 +67,7 @@ services:
                     cd .. &&
                     python -m backend.db.preload_db.preload_db &&
                     uvicorn backend.api.main:app --host 0.0.0.0 --port 8001 --workers 8'"
+    logging: *default-logging
     restart: always
 
   frontend_v2:
@@ -75,6 +86,7 @@ services:
       - fastapi_v2
     networks:
       - hostlib_network_v2
+    logging: *default-logging
     restart: always
 
   scheduler_v2:
@@ -96,6 +108,7 @@ services:
     command: >
       sh -c "./wait_for_it.sh db_v2:5432 --
              python -m backend.hl_engine.scheduler_runner"
+    logging: *default-logging
     restart: always
 
 networks:

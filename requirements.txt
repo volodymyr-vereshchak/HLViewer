@@ -81,6 +81,7 @@ websockets==14.1
 aiogram~=3.18.0
 APScheduler~=3.11.0
 emoji~=2.14.1
+concurrent-log-handler~=0.9.25
 
 # Analysis dependencies
 scipy==1.17.0

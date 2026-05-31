@@ -69,6 +69,15 @@ CORS_ORIGINS=http://localhost:3001,http://127.0.0.1:3001,http://<IP-СЕРВЕР
 # налаштування для звітів (нічні витрати, годинні тренди). Фронтенд читає
 # її через GET /config. За замовчуванням 7.
 CONTRACT_HOUR=7
+
+# ── Логи ─────────────────────────────────────────────────────────────────────
+# LOG_DIR — шлях УСЕРЕДИНІ контейнера. Через bind-mount `.:/app` він
+# відповідає <repo>/logs на хості, тож backend.log / backend.error.log /
+# frontend.log — звичайні файли на сервері (читаються без Docker). Ротація 10 МБ × 5.
+LOG_DIR=/app/logs
+LOG_LEVEL=INFO
+LOG_MAX_BYTES=10485760
+LOG_BACKUP_COUNT=5
 ```
 
 > **JWT_SECRET** — згенерувати: `openssl rand -hex 32`
@@ -212,3 +221,47 @@ docker exec postgres_db_v2 \
 gunzip -c backup_20260101.sql.gz | \
   docker exec -i postgres_db_v2 psql -U YOUR_DB_USER hostlib_db_v2
 ```
+
+---
+
+## 9. Логи
+
+Є два рівні логів.
+
+### 9.1. Файлові логи застосунку (не залежать від Docker)
+
+Завдяки bind-mount `.:/app` бекенд і scheduler пишуть у `LOG_DIR=/app/logs`, що на
+хості відповідає **`<repo>/HLViewer/logs/`**. Це звичайні файли — читаються без Docker:
+
+| Файл | Вміст |
+|------|-------|
+| `backend.log` | усе від рівня `LOG_LEVEL` (INFO) і вище, разом з access-логом uvicorn |
+| `backend.error.log` | лише `ERROR` і вище — швидкий розбір падінь (трейсбеки) |
+| `frontend.log` | помилки з браузера (через `POST /api/client-log`) |
+
+```bash
+cd /opt/hlviewer/HLViewer
+tail -f logs/backend.error.log      # стежити за помилками бекенда в реальному часі
+tail -n 200 logs/frontend.log       # останні помилки фронтенду
+```
+
+- **Ротація:** кожен файл до `LOG_MAX_BYTES` (10 МБ), зберігається `LOG_BACKUP_COUNT`
+  (5) архівів → максимум ~50 МБ на файл. Multiprocess-safe (8 воркерів пишуть в один
+  файл без гонок завдяки `concurrent-log-handler`).
+- Всі необроблені винятки логуються з повним трейсбеком у `backend.error.log`.
+- Помилки JS у браузері (`window.onerror`, `unhandledrejection`, React ErrorBoundary)
+  автоматично летять у `frontend.log`.
+
+### 9.2. stdout-логи контейнерів (через Docker)
+
+Вивід процесів і **access/error-логи nginx фронтенда** (у фронтенда bind-mount коду
+немає) дивляться через Docker; вони ротуються драйвером `json-file` (10 МБ × 5):
+
+```bash
+docker compose logs -f fastapi_v2     # бекенд
+docker compose logs -f frontend_v2    # nginx фронтенда
+docker compose logs --tail 100        # всі сервіси
+```
+
+> ⚠️ `logs/` у `.gitignore` — лог-файли НЕ комітяться. На сервері вони створюються
+> автоматично при першому старті.
