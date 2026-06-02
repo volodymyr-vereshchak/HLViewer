@@ -37,7 +37,12 @@ from backend.api.endpoints import logs_ep
 from backend.telegram_notifier.telegram_norifier import TelegramBot
 from backend.db.engine import async_session_factory
 from backend.db.models.app_user_model import AppUser
-from backend.api.endpoints.auth_ep import hash_password
+from backend.api.endpoints.auth_ep import (
+    hash_password,
+    _maybe_refresh_token,
+    COOKIE_NAME,
+    COOKIE_SECURE,
+)
 from backend.hl_engine.main import _cleanup_orphan_temp_dirs
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
@@ -197,6 +202,28 @@ async def lifespan(application: FastAPI):
 # run FastApi
 app = FastAPI(openapi_tags=tags_metadata, lifespan=lifespan, default_response_class=NaNSafeJSONResponse)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+
+@app.middleware("http")
+async def sliding_session_middleware(request: Request, call_next):
+    """Sliding session: re-issue the auth cookie on any request whose token is
+    past the refresh threshold, so an actively-used tab never expires mid-use.
+    Idle tabs still expire normally (and the frontend re-auths via /auth/me)."""
+    response = await call_next(request)
+    token = request.cookies.get(COOKIE_NAME)
+    if token:
+        refreshed = _maybe_refresh_token(token)
+        if refreshed:
+            new_token, max_age = refreshed
+            response.set_cookie(
+                key=COOKIE_NAME,
+                value=new_token,
+                httponly=True,
+                secure=COOKIE_SECURE,
+                max_age=max_age,
+                samesite="lax",
+            )
+    return response
 
 
 @app.exception_handler(Exception)

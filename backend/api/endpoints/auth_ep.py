@@ -36,6 +36,16 @@ JWT_SECRET = os.getenv("JWT_SECRET", "hlviewer-dev-secret-change-in-prod")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = 12
 JWT_REMEMBER_ME_DAYS = 30
+# Sliding session: any authenticated request whose token has less than this
+# fraction of its lifetime left gets a fresh cookie (same claims, same lifetime).
+# So an actively-used tab keeps working; see _maybe_refresh_token + the
+# sliding-session middleware in api/main.py.
+JWT_REFRESH_BELOW_RATIO = 0.5
+# Absolute cap: sliding refresh is allowed only within this window from the
+# FIRST login (the token's `iat`, which is preserved across refreshes). After
+# it, the token is left to expire naturally and the user must re-authenticate
+# (seamless under AUTO_LOGIN). Prevents an active tab from living forever.
+JWT_ABSOLUTE_MAX_SECONDS = 30 * 86400  # 30 days
 COOKIE_NAME = "hlviewer_token"
 # Set COOKIE_SECURE=true when serving over HTTPS so the auth cookie is not sent
 # over plain HTTP. Defaults to false for internal HTTP deployments.
@@ -57,8 +67,18 @@ def _create_token(
     branch_ids: list[int] | None = None,
 ) -> str:
     delta = timedelta(days=JWT_REMEMBER_ME_DAYS) if remember_me else timedelta(hours=JWT_EXPIRE_HOURS)
-    expire = datetime.now(timezone.utc) + delta
-    payload = {"sub": str(user_id), "exp": expire}
+    now = datetime.now(timezone.utc)
+    expire = now + delta
+    # ttl = the token's full lifetime in seconds. Embedded so the sliding-session
+    # middleware can re-mint with the same lifetime (and cookie max_age) without
+    # having to know whether this was a remember_me login. iat = first-login time,
+    # preserved across refreshes to enforce the absolute session cap.
+    payload = {
+        "sub": str(user_id),
+        "exp": expire,
+        "ttl": int(delta.total_seconds()),
+        "iat": int(now.timestamp()),
+    }
     # Embed role + allowed branches so per-request auth can skip the
     # AppUserBranchAccess lookup. Read back in get_branch_filter.
     if role is not None:
@@ -66,6 +86,39 @@ def _create_token(
     if branch_ids is not None:
         payload["branches"] = branch_ids
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def _maybe_refresh_token(token: str) -> Optional[tuple[str, int]]:
+    """For the sliding session: if `token` is valid but past the refresh
+    threshold (less than JWT_REFRESH_BELOW_RATIO of its lifetime remaining),
+    return (new_token, max_age_seconds) carrying the same claims and lifetime.
+    Returns None if the token is invalid, lacks a ttl claim (legacy), or is
+    still fresh enough."""
+    try:
+        claims = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except JWTError:
+        return None
+    exp = claims.get("exp")
+    ttl = claims.get("ttl")
+    iat = claims.get("iat")
+    if not exp or not ttl:
+        return None  # legacy token without ttl → leave it to normal expiry/re-auth
+    now = datetime.now(timezone.utc).timestamp()
+    # Absolute cap: once the session is older than the max, stop sliding and let
+    # the current token expire on its own.
+    if iat and (now - iat) >= JWT_ABSOLUTE_MAX_SECONDS:
+        return None
+    if (exp - now) > ttl * JWT_REFRESH_BELOW_RATIO:
+        return None  # still fresh enough, don't churn the cookie
+    expire = datetime.now(timezone.utc) + timedelta(seconds=ttl)
+    payload = {"sub": claims["sub"], "exp": expire, "ttl": ttl}
+    if iat:
+        payload["iat"] = iat  # preserve original login time across refreshes
+    if "role" in claims:
+        payload["role"] = claims["role"]
+    if "branches" in claims:
+        payload["branches"] = claims["branches"]
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM), ttl
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
