@@ -150,6 +150,10 @@ async def update_hostlibs(session: AsyncSession, lumg_id: int | None = None, pro
                     # Mode 1: EIS routing — discover dirs ONCE for the whole path group,
                     # then process each dir exactly once. Previously each LUMG called
                     # _find_eis_dirs independently, causing N×M redundant writes.
+                    # When a single LUMG was requested, process ONLY its own EIS-coded
+                    # devices: other LUMGs may share this folder and must not be touched.
+                    if lumg_id is not None:
+                        eis_dirs = [(p, lid) for p, lid in eis_dirs if lid == lumg_id]
                     targeted_ids = {lid for _, lid in eis_dirs}
                     # Path-owner LUMGs with no EIS codes in this path: nothing to do.
                     if progress is not None:

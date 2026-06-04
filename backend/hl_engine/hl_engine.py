@@ -38,9 +38,12 @@ def _read_file_records_sync(file: str, struct, date_flag: bool, line_id: int, mo
             file_dict["period"] = period
             file_dict["line_id"] = line_id
             row = {k: v for k, v in file_dict.items() if k in model_fields}
-            # Skip records with inf/NaN (uninitialized device registers, not real measurements)
-            if any(isinstance(v, float) and not math.isfinite(v) for v in row.values()):
-                continue
+            # Some device models leave derived registers (e.g. density) as NaN
+            # while the rest of the record is a valid measurement. Replace any
+            # non-finite float with 0.0 instead of dropping the whole record.
+            for k, v in row.items():
+                if isinstance(v, float) and not math.isfinite(v):
+                    row[k] = 0.0
             records.append(row)
         except (ValueError, KeyError):
             continue
