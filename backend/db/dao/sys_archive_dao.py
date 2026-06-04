@@ -49,6 +49,63 @@ class SysArchiveDao(BasicDao):
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self._build_range_result, rows)
 
+    # Columns the table is allowed to sort on, server-side (maps API name → ORM column).
+    _ORDER_COLUMNS = {
+        "period": SysArchive.period,
+        "sys_name": SysType.sys_name,
+        "volume": SysArchive.volume,
+    }
+
+    async def get_range_paged(
+        self,
+        from_date: datetime = None,
+        to_date: datetime = None,
+        line_id: list[int] = None,
+        skip: int = 0,
+        limit: int = 50,
+        order_by: str = "period",
+        order_dir: str = "asc",
+    ) -> dict:
+        """Paginated variant of get_range: returns {"total": int, "items": [...]}.
+        Used by the sys-archive table view; the full get_range is kept for the
+        accidents report which must load every row."""
+        filters = []
+        if from_date:
+            filters.append(self.model.period >= from_date)
+        if to_date:
+            filters.append(self.model.period <= to_date)
+        if line_id:
+            filters.append(self.model.line_id.in_(line_id))
+
+        count_stmt = select(func.count()).select_from(self.model)
+        for f in filters:
+            count_stmt = count_stmt.where(f)
+        total = (await self.session.execute(count_stmt)).scalar_one()
+
+        statement = (
+            select(self.model, SysType)
+            .outerjoin(Line, self.model.line_id == Line.id)
+            .outerjoin(GasVolumeCalc, Line.gas_volume_calc_id == GasVolumeCalc.id)
+            .outerjoin(GasVolumeCalcType, GasVolumeCalc.type_id == GasVolumeCalcType.id)
+            .outerjoin(
+                SysType,
+                (GasVolumeCalcType.type_id == SysType.gas_volume_calc_type_id)
+                & (self.model.sys_type_id == SysType.sys_type_id),
+            )
+        )
+        for f in filters:
+            statement = statement.where(f)
+
+        order_col = self._ORDER_COLUMNS.get(order_by, self.model.period)
+        statement = statement.order_by(
+            order_col.desc() if order_dir == "desc" else order_col.asc()
+        )
+        statement = statement.offset(max(skip, 0)).limit(max(min(limit, 500), 1))
+
+        rows = (await self.session.execute(statement)).all()
+        items = self._build_range_result(rows)
+        return {"total": total, "items": items}
+
     @staticmethod
     def _build_range_result(rows):
         result = []

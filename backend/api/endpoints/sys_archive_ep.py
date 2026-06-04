@@ -26,6 +26,32 @@ class SysArchiveRouter(BaseArchiveRouter):
             tags=["sys"],
             methods=["GET"],
         )
+        self.router.add_api_route(
+            path="/sys/paged/",
+            endpoint=self._get_paged,
+            tags=["sys"],
+            methods=["GET"],
+        )
+
+    async def _get_paged(
+        self,
+        from_date: datetime = Query(None),
+        to_date: datetime = Query(None),
+        line_id: list[int] = Query(None),
+        skip: int = Query(0),
+        limit: int = Query(50),
+        order_by: str = Query("period"),
+        order_dir: str = Query("asc"),
+        allowed_line_ids: list[int] | None = Depends(get_allowed_line_ids),
+    ):
+        self._check_dates(from_date, to_date)
+        line_id = self._scope_line_ids(line_id, allowed_line_ids)
+        async with async_session_factory() as session:
+            dao = SysArchiveDao(session=session)
+            return await dao.get_range_paged(
+                from_date, to_date, line_id,
+                skip=skip, limit=limit, order_by=order_by, order_dir=order_dir,
+            )
 
     async def _get_grouped(
         self,

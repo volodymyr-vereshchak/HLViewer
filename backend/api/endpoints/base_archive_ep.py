@@ -33,6 +33,20 @@ class BaseArchiveRouter:
             status_code=status.HTTP_200_OK,
         )
 
+    def _check_dates(self, from_date, to_date):
+        if not from_date or not to_date:
+            raise HTTPException(status_code=400, detail="from_date and to_date are required")
+        if (to_date - from_date).days > self.max_days:
+            raise HTTPException(status_code=400, detail=f"Date range exceeds {self.max_days} days")
+
+    @staticmethod
+    def _scope_line_ids(line_id, allowed_line_ids):
+        """Restrict the requested line_ids to the ones this user may see."""
+        if allowed_line_ids is not None:
+            allowed_set = set(allowed_line_ids)
+            return [lid for lid in line_id if lid in allowed_set] if line_id else allowed_line_ids
+        return line_id
+
     async def get_archive(
         self,
         from_date: datetime = Query(None),
@@ -40,13 +54,8 @@ class BaseArchiveRouter:
         line_id: list[int] = Query(None),
         allowed_line_ids: list[int] | None = Depends(get_allowed_line_ids),
     ):
-        if not from_date or not to_date:
-            raise HTTPException(status_code=400, detail="from_date and to_date are required")
-        if (to_date - from_date).days > self.max_days:
-            raise HTTPException(status_code=400, detail=f"Date range exceeds {self.max_days} days")
-        if allowed_line_ids is not None:
-            allowed_set = set(allowed_line_ids)
-            line_id = [lid for lid in line_id if lid in allowed_set] if line_id else allowed_line_ids
+        self._check_dates(from_date, to_date)
+        line_id = self._scope_line_ids(line_id, allowed_line_ids)
         async with async_session_factory() as session:
             archive_dao = self.archive_dao(session=session)
             archives = await archive_dao.get_range(from_date, to_date, line_id)
