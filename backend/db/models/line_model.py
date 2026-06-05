@@ -20,6 +20,8 @@ class LineBase(HlBaseModel):
     include_in_report: bool = Field(default=False)
     include_in_trends: bool = Field(default=False)
     is_high_pressure: bool = Field(default=False)
+    pressure_unit: str = Field(default="кгс/см²", max_length=16)
+    dp_unit: str = Field(default="кгс/м²", max_length=16)
 
 
 LINE_CONSTRAINT = ["gas_volume_calc_id", "line"]
@@ -79,4 +81,6 @@ class LineUpdate(LineBase):
     include_in_report: bool | None = None
     include_in_trends: bool | None = None
     is_high_pressure: bool | None = None
+    pressure_unit: str | None = None
+    dp_unit: str | None = None
     gas_volume_calc_id: int | None = None
