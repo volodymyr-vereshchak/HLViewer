@@ -1,24 +1,116 @@
+"""File-arrival poller.
+
+The data source (AS4 network share) used to be polled on a fixed hourly cron
+(:30). But new zip snapshots started arriving a few minutes later (:32-:35), so
+a fixed-time run kept picking up the previous hour's file. Instead of a clock,
+we now react to the *file*: every couple of minutes we check whether the newest
+zip on each configured path changed, and if so we run the update.
+
+Detection is mtime/size polling (not an OS watcher) because the source is an
+SMB/UNC share, where inotify/watchdog events don't propagate reliably.
+
+The "last processed" signature is kept in process memory: no DB migration, and
+since the archive upsert is idempotent a restart costs at most one redundant run.
+"""
 import asyncio
 import logging
+import time
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
-from pytz import timezone
+from sqlmodel import select
 
-from backend.hl_engine.hostlib_updater import HostlibUpdater
+from backend.db.engine import async_session_factory
+from backend.db.models.lumg_model import LumgDataPath
+from backend.hl_engine.main import update_hostlibs
+from backend.hl_engine.update_job_lock import run_guarded_update
 from backend.logging_config import setup_logging
+from backend.utils.path_utils import resolve_stored_path
+from utils.files_utils import newest_zip_signature
 
 setup_logging()
 logger = logging.getLogger(__name__)
 
+# How often we scan the configured paths for a new file.
+POLL_INTERVAL_SEC = 120
+# A file is only considered "ready" once its newest zip stopped changing for this
+# long — guards against reading a half-uploaded archive.
+SETTLE_SECONDS = 60
+
+# resolved_path -> signature of the last batch we processed. In-memory by design.
+_last_sig: dict[str, frozenset] = {}
+
+
+async def _active_paths() -> list[str]:
+    """Unique resolved paths of all active LumgDataPath rows."""
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(LumgDataPath).where(LumgDataPath.active == True)  # noqa: E712
+        )
+        rows = result.scalars().all()
+    # Multiple LUMGs can share one path; dedupe to scan each path once.
+    return sorted({str(resolve_stored_path(r.path)) for r in rows})
+
+
+async def _scan() -> dict[str, tuple[frozenset, float]]:
+    """Compute (signature, max_mtime) per unique active path. The filesystem
+    walk/stat is blocking, so it runs in a thread."""
+    paths = await _active_paths()
+    sigs: dict[str, tuple[frozenset, float]] = {}
+    for path in paths:
+        sigs[path] = await asyncio.to_thread(newest_zip_signature, path)
+    return sigs
+
+
+async def poll_once() -> None:
+    sigs = await _scan()
+    now = time.time()
+
+    changed = False
+    for path, (sig, max_mtime) in sigs.items():
+        if sig == _last_sig.get(path):
+            continue  # nothing new on this path
+        if max_mtime and (now - max_mtime) < SETTLE_SECONDS:
+            # Newest file is still fresh — may be mid-upload. Leave _last_sig
+            # untouched so we re-check (and catch it) on the next tick.
+            logger.info(
+                "New file on %r still settling (%.0fs old) — waiting",
+                path, now - max_mtime,
+            )
+            continue
+        changed = True
+
+    if not changed:
+        return
+
+    logger.info("New data detected — triggering update")
+
+    async def work(session, progress):
+        await update_hostlibs(session=session, progress=progress)
+
+    ran = await run_guarded_update(work)
+    if ran:
+        # Commit the signatures we actually processed (settled ones only); leave
+        # any still-settling path unrecorded so it triggers again once ready.
+        for path, (sig, max_mtime) in sigs.items():
+            if max_mtime == 0 or (now - max_mtime) >= SETTLE_SECONDS:
+                _last_sig[path] = sig
+        logger.info("Update finished")
+    else:
+        # A manual update is in progress; retry on the next tick (signatures
+        # deliberately not committed).
+        logger.info("Update already running (manual) — skipping this tick")
+
 
 async def main():
-    scheduler = AsyncIOScheduler()
-    trigger = CronTrigger(minute=30, timezone=timezone("Europe/Kyiv"))
-    scheduler.add_job(HostlibUpdater().update_and_send_notification, trigger)
-    scheduler.start()
-    logger.info("Scheduler started. Waiting for jobs...")
-    await asyncio.Event().wait()  # run forever
+    logger.info(
+        "File-arrival poller started (interval=%ss, settle=%ss). Waiting for new files...",
+        POLL_INTERVAL_SEC, SETTLE_SECONDS,
+    )
+    while True:
+        try:
+            await poll_once()
+        except Exception:
+            logger.exception("poll_once failed")
+        await asyncio.sleep(POLL_INTERVAL_SEC)
 
 
 if __name__ == "__main__":

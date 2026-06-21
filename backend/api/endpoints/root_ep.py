@@ -1,7 +1,3 @@
-import asyncio
-import json
-from typing import Awaitable, Callable
-
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, BackgroundTasks, status, HTTPException
 from pydantic import BaseModel
@@ -11,20 +7,13 @@ from backend.db.engine import async_session_factory
 from backend.db.preload_db.preload_db import preload_db
 from backend.hl_engine.main import update_hostlibs, update_direct
 from backend.hl_engine.hostlib_updater import HostlibUpdater
+from backend.hl_engine import update_job_lock
 from utils.logger import logger_setup
 
 
 class DirectUpdateBody(BaseModel):
     lumg_id: int
     path: str
-
-
-# How often the running worker writes a heartbeat (and flushes per-LUMG progress).
-HEARTBEAT_SEC = 1.5
-# If the heartbeat is older than this, the job is treated as crashed: a new update
-# may take it over, and /status reports it as an error instead of a stuck "running".
-# Generous so that a legitimately long update is never mistaken for a dead one.
-STALE_SECONDS = 300
 
 
 class RootRouter:
@@ -90,146 +79,19 @@ class RootRouter:
         )
 
     # ── Shared job-state helpers (DB-backed) ──────────────────────────────────
+    # The actual implementation lives in `backend.hl_engine.update_job_lock` so
+    # that the standalone scheduler/poller process shares the exact same lock,
+    # heartbeat and progress logic. These are thin delegators kept for the
+    # endpoints below.
 
     async def _acquire(self, lumg_id: int | None = None) -> bool:
-        """Atomically claim the job. Returns True if claimed, False if one is
-        already running (and not stale). Atomic at the DB level, so two workers
-        can never both win."""
-        async with async_session_factory() as session:
-            result = await session.execute(
-                sa.text(
-                    """
-                    UPDATE update_job
-                    SET status = 'running',
-                        started_at = now(),
-                        updated_at = now(),
-                        finished_at = NULL,
-                        error = NULL,
-                        lumg_id = :lumg_id,
-                        progress = '{}'::jsonb
-                    WHERE id = 1
-                      AND (status <> 'running'
-                           OR updated_at < now() - make_interval(secs => :stale))
-                    RETURNING id
-                    """
-                ),
-                {"lumg_id": lumg_id, "stale": STALE_SECONDS},
-            )
-            acquired = result.scalar() is not None
-            await session.commit()
-            return acquired
-
-    async def _heartbeat(self, progress: dict) -> None:
-        """Flush progress + bump the heartbeat. No-op if the job is no longer
-        running (e.g. it was reset), so it can't resurrect a finished job."""
-        async with async_session_factory() as session:
-            await session.execute(
-                sa.text(
-                    """
-                    UPDATE update_job
-                    SET progress = CAST(:progress AS jsonb), updated_at = now()
-                    WHERE id = 1 AND status = 'running'
-                    """
-                ),
-                {"progress": json.dumps(progress)},
-            )
-            await session.commit()
-
-    async def _finalize(self, status_: str, error: str | None, progress: dict) -> None:
-        async with async_session_factory() as session:
-            await session.execute(
-                sa.text(
-                    """
-                    UPDATE update_job
-                    SET status = :status,
-                        error = :error,
-                        progress = CAST(:progress AS jsonb),
-                        finished_at = now(),
-                        updated_at = now()
-                    WHERE id = 1
-                    """
-                ),
-                {"status": status_, "error": error, "progress": json.dumps(progress)},
-            )
-            await session.commit()
+        return await update_job_lock.acquire(lumg_id)
 
     async def _read(self) -> dict:
-        """Read job state for the API. Maps the DB row to the shape the frontend
-        expects (`lumgs` = per-LUMG progress) and downgrades a stale 'running'
-        to an error so the UI never gets stuck."""
-        async with async_session_factory() as session:
-            row = (
-                await session.execute(
-                    sa.text(
-                        """
-                        SELECT status, started_at, finished_at, error, lumg_id, progress,
-                               (status = 'running'
-                                AND updated_at < now() - make_interval(secs => :stale)) AS is_stale
-                        FROM update_job WHERE id = 1
-                        """
-                    ),
-                    {"stale": STALE_SECONDS},
-                )
-            ).mappings().first()
+        return await update_job_lock.read()
 
-        if row is None:
-            return {"status": "idle", "started_at": None, "finished_at": None,
-                    "error": None, "lumg_id": None, "lumgs": {}}
-
-        if row["is_stale"]:
-            return {
-                "status": "error",
-                "started_at": row["started_at"],
-                "finished_at": row["finished_at"],
-                "error": "Оновлення перервано (процес зупинився)",
-                "lumg_id": row["lumg_id"],
-                "lumgs": row["progress"] or {},
-            }
-
-        return {
-            "status": row["status"],
-            "started_at": row["started_at"],
-            "finished_at": row["finished_at"],
-            "error": row["error"],
-            "lumg_id": row["lumg_id"],
-            "lumgs": row["progress"] or {},
-        }
-
-    async def _run_job(self, work: Callable[[object, dict], Awaitable[None]]) -> None:
-        """Run `work(session, progress)` with a heartbeat that flushes progress
-        to the DB and records the terminal state. Lock is already acquired."""
-        progress: dict = {}
-        stop = asyncio.Event()
-
-        async def heartbeat():
-            while not stop.is_set():
-                try:
-                    await self._heartbeat(dict(progress))
-                except Exception:
-                    self.logger.warning("Heartbeat persist failed", exc_info=True)
-                try:
-                    await asyncio.wait_for(stop.wait(), timeout=HEARTBEAT_SEC)
-                except asyncio.TimeoutError:
-                    pass
-
-        hb = asyncio.create_task(heartbeat())
-        result_status, error = "done", None
-        try:
-            async with async_session_factory() as session:
-                await work(session, progress)
-        except Exception as e:
-            result_status, error = "error", str(e) or e.__class__.__name__
-            self.logger.error(f"Update job failed: {e}", exc_info=True)
-        finally:
-            stop.set()
-            try:
-                await hb
-            except Exception:
-                pass
-            try:
-                await self._finalize(result_status, error, dict(progress))
-            except Exception:
-                self.logger.error("Failed to persist final job state", exc_info=True)
+    async def _run_job(self, work) -> None:
+        await update_job_lock.run_job(work)
 
     # ── Endpoints ─────────────────────────────────────────────────────────────
 

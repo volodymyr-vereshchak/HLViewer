@@ -75,8 +75,47 @@ class UnzipUtils:
                         zip_file.extract(file_info.filename, self.temp_path)
 
     def delete_unzip_folder(self):
+        # Tolerate races during teardown: on overlayfs (Docker) rmtree can hit a
+        # transient FileNotFoundError when an entry it just enumerated is already
+        # gone. Cleanup is best-effort — any leftover temp dir is swept by
+        # _cleanup_orphan_temp_dirs() on the next run, so a cleanup hiccup must
+        # never fail an update whose data was already written.
         if os.path.exists(self.temp_path):
-            shutil.rmtree(self.temp_path)
+            shutil.rmtree(self.temp_path, ignore_errors=True)
+
+
+def newest_zip_signature(path: str) -> tuple[frozenset, float]:
+    """Build a change-detection signature for the zips under `path`.
+
+    Mirrors UnzipUtils._latest_zip_per_dir: for each directory we only care about
+    the single newest zip (data sources upload full hourly snapshots, so only the
+    latest matters). The signature is a frozenset of (relpath, mtime, size) for
+    those newest-per-dir zips, plus the maximum mtime across them.
+
+    The poller compares signatures between ticks: a changed signature means a new
+    file arrived. `max_mtime` feeds the settle-guard (don't act on a file that may
+    still be mid-upload). Missing/empty path → (frozenset(), 0.0).
+    """
+    entries: list[tuple[str, float, int]] = []
+    max_mtime = 0.0
+    if not os.path.isdir(path):
+        return frozenset(), 0.0
+    for root, dirs, files in os.walk(path):
+        zips = [os.path.join(root, f) for f in files if f.endswith(".zip")]
+        if not zips:
+            continue
+        try:
+            latest = max(zips, key=os.path.getmtime)
+            mtime = os.path.getmtime(latest)
+            size = os.path.getsize(latest)
+        except OSError:
+            # File vanished between listing and stat (e.g. mid-upload churn).
+            continue
+        rel = os.path.relpath(latest, path)
+        entries.append((rel, mtime, size))
+        if mtime > max_mtime:
+            max_mtime = mtime
+    return frozenset(entries), max_mtime
 
 
 def find_files_by_mask(path: str, mask: str) -> list[str]:
