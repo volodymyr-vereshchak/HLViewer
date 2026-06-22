@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 from pydantic import field_validator
 from typing import TYPE_CHECKING, ClassVar
-from sqlalchemy import Index
+from sqlalchemy import Index, BigInteger
 
 from .base_model import HlBaseModel
 
@@ -35,9 +35,10 @@ class HourlyArchive(HourlyArchiveBase, table=True):
         # Индекс для агрегации по часам
         Index("idx_hourly_period_hour", "period"),
     )
-    id: int | None = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True, sa_type=BigInteger)
     line_id: int | None = Field(
-        default=None, foreign_key="gas_volume_line.id", ondelete="CASCADE", index=True
+        default=None, foreign_key="gas_volume_line.id", ondelete="CASCADE",
+        index=True, sa_type=BigInteger,
     )
     line: "Line" = Relationship(back_populates="hourly_archives")
 

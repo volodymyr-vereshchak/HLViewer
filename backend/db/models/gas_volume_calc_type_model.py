@@ -1,6 +1,6 @@
 from sqlmodel import Field, Relationship
 from typing import TYPE_CHECKING
-from sqlalchemy import Index
+from sqlalchemy import Index, BigInteger
 
 from .base_model import HlBaseModel
 
@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 
 class GasVolumeCalcTypeBase(HlBaseModel):
-    type_id: int = Field(unique=True)
+    type_id: int = Field(unique=True, sa_type=BigInteger)
     type_name: str = Field(max_length=255)
 
 
@@ -27,7 +27,7 @@ class GasVolumeCalcType(GasVolumeCalcTypeBase, table=True):
         Index("idx_gvct_type_name", "type_name"),
     )
 
-    id: int | None = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True, sa_type=BigInteger)
     gas_volume_calcs: list["GasVolumeCalc"] = Relationship(
         back_populates="type", cascade_delete=True
     )

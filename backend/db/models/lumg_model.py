@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import Index
+from sqlalchemy import Index, BigInteger
 from sqlmodel import Field, Relationship, SQLModel, UniqueConstraint
 
 from .base_model import HlBaseModel
@@ -23,11 +23,12 @@ class Lumg(LumgBase, table=True):
         Index("idx_lumg_branch", "branch_id"),
     )
 
-    id: int | None = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True, sa_type=BigInteger)
     branch_id: int | None = Field(
         default=None,
         foreign_key="grmu_branch.id",
         ondelete="CASCADE",
+        sa_type=BigInteger,
     )
 
     branch: Optional["GrmuBranch"] = Relationship(back_populates="lumgs")
@@ -55,8 +56,10 @@ class LumgUpdate(LumgBase):
 class LumgDataPath(HlBaseModel, table=True):
     __tablename__ = "lumg_data_path"
 
-    id: int | None = Field(default=None, primary_key=True)
-    lumg_id: int = Field(foreign_key="lumg.id", ondelete="CASCADE", unique=True)
+    id: int | None = Field(default=None, primary_key=True, sa_type=BigInteger)
+    lumg_id: int = Field(
+        foreign_key="lumg.id", ondelete="CASCADE", unique=True, sa_type=BigInteger,
+    )
     path: str = Field(max_length=1024)
     active: bool = Field(default=True)
 
@@ -82,8 +85,10 @@ class LumgEisCode(HlBaseModel, table=True):
         Index("idx_lumg_eis_code_lumg_id", "lumg_id"),
     )
 
-    id: int | None = Field(default=None, primary_key=True)
-    lumg_id: int = Field(foreign_key="lumg.id", ondelete="CASCADE")
+    id: int | None = Field(default=None, primary_key=True, sa_type=BigInteger)
+    lumg_id: int = Field(
+        foreign_key="lumg.id", ondelete="CASCADE", sa_type=BigInteger,
+    )
     eis_code: str = Field(max_length=100)
 
 

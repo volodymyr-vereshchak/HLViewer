@@ -1,6 +1,6 @@
 from sqlmodel import Field, Relationship, UniqueConstraint
 from typing import TYPE_CHECKING
-from sqlalchemy import Index
+from sqlalchemy import Index, BigInteger
 
 from .base_model import HlBaseModel
 
@@ -9,8 +9,8 @@ if TYPE_CHECKING:
 
 
 class SysTypeBase(HlBaseModel):
-    sys_type_id: int
-    gas_volume_calc_type_id: int
+    sys_type_id: int = Field(sa_type=BigInteger)
+    gas_volume_calc_type_id: int = Field(sa_type=BigInteger)
     sys_name: str
 
 
@@ -28,7 +28,7 @@ class SysType(SysTypeBase, table=True):
         # Индекс для поиска по sys_name
         Index("idx_sys_name", "sys_name"),
     )
-    id: int | None = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True, sa_type=BigInteger)
 
 
 class SysTypeList(SysTypeBase):

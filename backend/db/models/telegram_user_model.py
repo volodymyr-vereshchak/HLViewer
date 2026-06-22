@@ -1,11 +1,11 @@
 from sqlmodel import Field
-from sqlalchemy import Index
+from sqlalchemy import Index, BigInteger
 
 from .base_model import HlBaseModel
 
 
 class TelegramUserBase(HlBaseModel):
-    user_id: int = Field(default=None, unique=True)
+    user_id: int = Field(default=None, unique=True, sa_type=BigInteger)
     active: bool
 
 
@@ -20,7 +20,7 @@ class TelegramUser(TelegramUserBase, table=True):
         Index("idx_telegram_active_user", "active", "user_id"),
     )
 
-    id: int | None = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True, sa_type=BigInteger)
 
 
 class TelegramUserList(TelegramUserBase):

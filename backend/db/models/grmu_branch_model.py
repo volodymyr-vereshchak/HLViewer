@@ -13,7 +13,7 @@ New hierarchy:
 from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
 
-from sqlalchemy import Index
+from sqlalchemy import Index, BigInteger
 from sqlmodel import Field, Relationship, SQLModel, UniqueConstraint
 
 from .base_model import HlBaseModel
@@ -40,7 +40,7 @@ class GrmuBranch(GrmuBranchBase, table=True):
         Index("idx_grmu_branch_active", "active"),
     )
 
-    id: int | None = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True, sa_type=BigInteger)
 
     lumgs: List["Lumg"] = Relationship(
         back_populates="branch", cascade_delete=True
@@ -86,11 +86,12 @@ class GrmuBranchDpdCredentialBase(HlBaseModel):
 class GrmuBranchDpdCredential(GrmuBranchDpdCredentialBase, table=True):
     __tablename__ = "grmu_branch_dpd_credential"
 
-    id: int | None = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True, sa_type=BigInteger)
     branch_id: int = Field(
         foreign_key="grmu_branch.id",
         unique=True,
         ondelete="CASCADE",
+        sa_type=BigInteger,
     )
 
     branch: "GrmuBranch" = Relationship(back_populates="dpd_credential")
@@ -137,13 +138,16 @@ class GrmuBranchDeviceMapping(GrmuBranchDeviceMappingBase, table=True):
         ),
     )
 
-    id: int | None = Field(default=None, primary_key=True)
-    branch_id: int = Field(foreign_key="grmu_branch.id", ondelete="CASCADE")
+    id: int | None = Field(default=None, primary_key=True, sa_type=BigInteger)
+    branch_id: int = Field(
+        foreign_key="grmu_branch.id", ondelete="CASCADE", sa_type=BigInteger,
+    )
     # SET NULL so orphaned mappings remain visible when a line is deleted
     line_id: int | None = Field(
         default=None,
         foreign_key="gas_volume_line.id",
         ondelete="SET NULL",
+        sa_type=BigInteger,
     )
 
     branch: "GrmuBranch" = Relationship(back_populates="device_mappings")
@@ -178,9 +182,13 @@ class VirtualLine(VirtualLineBase, table=True):
         Index("idx_virtual_line_active", "active"),
     )
 
-    id: int | None = Field(default=None, primary_key=True)
-    branch_id: int = Field(foreign_key="grmu_branch.id", ondelete="CASCADE")
-    lumg_id: int | None = Field(default=None, foreign_key="lumg.id", ondelete="SET NULL")
+    id: int | None = Field(default=None, primary_key=True, sa_type=BigInteger)
+    branch_id: int = Field(
+        foreign_key="grmu_branch.id", ondelete="CASCADE", sa_type=BigInteger,
+    )
+    lumg_id: int | None = Field(
+        default=None, foreign_key="lumg.id", ondelete="SET NULL", sa_type=BigInteger,
+    )
 
     branch: "GrmuBranch" = Relationship(back_populates="virtual_lines")
     lumg: Optional["Lumg"] = Relationship(back_populates="virtual_lines")
@@ -216,12 +224,12 @@ class VirtualLineMember(HlBaseModel, table=True):
         Index("idx_vlm_line", "line_id"),
     )
 
-    id: int | None = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True, sa_type=BigInteger)
     virtual_line_id: int = Field(
-        foreign_key="virtual_line.id", ondelete="CASCADE"
+        foreign_key="virtual_line.id", ondelete="CASCADE", sa_type=BigInteger,
     )
     line_id: int = Field(
-        foreign_key="gas_volume_line.id", ondelete="CASCADE"
+        foreign_key="gas_volume_line.id", ondelete="CASCADE", sa_type=BigInteger,
     )
     sort_order: int = Field(default=0)
 
@@ -245,10 +253,14 @@ class BranchConfigMapping(HlBaseModel, table=True):
         UniqueConstraint("branch_id", "gis_name", name="uq_branch_config_mapping"),
     )
 
-    id: int | None = Field(default=None, primary_key=True)
-    branch_id: int = Field(foreign_key="grmu_branch.id", ondelete="CASCADE")
+    id: int | None = Field(default=None, primary_key=True, sa_type=BigInteger)
+    branch_id: int = Field(
+        foreign_key="grmu_branch.id", ondelete="CASCADE", sa_type=BigInteger,
+    )
     gis_name: str = Field(max_length=255)
-    lumg_id: int | None = Field(default=None, foreign_key="lumg.id", ondelete="SET NULL")
+    lumg_id: int | None = Field(
+        default=None, foreign_key="lumg.id", ondelete="SET NULL", sa_type=BigInteger,
+    )
 
 
 class BranchConfigMappingRead(SQLModel):
@@ -269,8 +281,11 @@ class BranchConfigMappingUpsert(SQLModel):
 class BranchDataPath(HlBaseModel, table=True):
     __tablename__ = "branch_data_path"
 
-    id: int | None = Field(default=None, primary_key=True)
-    branch_id: int = Field(foreign_key="grmu_branch.id", ondelete="CASCADE", unique=True)
+    id: int | None = Field(default=None, primary_key=True, sa_type=BigInteger)
+    branch_id: int = Field(
+        foreign_key="grmu_branch.id", ondelete="CASCADE", unique=True,
+        sa_type=BigInteger,
+    )
     path: str = Field(max_length=1024)
     active: bool = Field(default=True)
 

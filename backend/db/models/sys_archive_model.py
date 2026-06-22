@@ -1,7 +1,7 @@
 from sqlmodel import Field, Relationship, UniqueConstraint
 from datetime import datetime
 from typing import TYPE_CHECKING
-from sqlalchemy import Index
+from sqlalchemy import Index, BigInteger
 from pydantic import BaseModel
 
 from .base_model import HlBaseModel
@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 class SysArchiveBase(HlBaseModel):
     period: datetime = Field(index=True)
-    sys_type_id: int
+    sys_type_id: int = Field(sa_type=BigInteger)
     volume: float
 
 
@@ -32,9 +32,10 @@ class SysArchive(SysArchiveBase, table=True):
         # Индекс для агрегации по часам
         Index("idx_sys_period_hour", "period"),
     )
-    id: int | None = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True, sa_type=BigInteger)
     line_id: int | None = Field(
-        default=None, foreign_key="gas_volume_line.id", ondelete="CASCADE", index=True
+        default=None, foreign_key="gas_volume_line.id", ondelete="CASCADE",
+        index=True, sa_type=BigInteger,
     )
     line: "Line" = Relationship(back_populates="sys_archives")
 

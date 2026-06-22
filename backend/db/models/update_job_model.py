@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Column, DateTime
+from sqlalchemy import BigInteger, Column, DateTime
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
@@ -20,7 +20,7 @@ class UpdateJob(SQLModel, table=True):
     """
     __tablename__ = "update_job"
 
-    id: int = Field(default=1, primary_key=True)
+    id: int = Field(default=1, primary_key=True, sa_type=BigInteger)
     status: str = Field(default="idle", max_length=20)  # idle | running | done | error
     started_at: Optional[datetime] = Field(
         default=None, sa_column=Column(DateTime(timezone=True))
@@ -32,7 +32,7 @@ class UpdateJob(SQLModel, table=True):
         default=None, sa_column=Column(DateTime(timezone=True))
     )
     error: Optional[str] = Field(default=None, max_length=2000)
-    lumg_id: Optional[int] = None
+    lumg_id: Optional[int] = Field(default=None, sa_type=BigInteger)
     progress: dict = Field(
         default_factory=dict,
         sa_column=Column(JSONB, nullable=False, server_default="{}"),

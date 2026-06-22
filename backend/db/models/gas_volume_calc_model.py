@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Index
+from sqlalchemy import Index, BigInteger
 from sqlmodel import Field, Relationship, UniqueConstraint
 
 from .base_model import HlBaseModel
@@ -34,11 +34,14 @@ class GasVolumeCalc(GasVolumeCalcBase, table=True):
         Index("idx_gvc_name", "name"),
     )
 
-    id: int | None = Field(default=None, primary_key=True)
-    lumg_id: int | None = Field(default=None, foreign_key="lumg.id", ondelete="CASCADE")
+    id: int | None = Field(default=None, primary_key=True, sa_type=BigInteger)
+    lumg_id: int | None = Field(
+        default=None, foreign_key="lumg.id", ondelete="CASCADE", sa_type=BigInteger,
+    )
     lumg: "Lumg" = Relationship(back_populates="gas_volume_calcs")
     type_id: int | None = Field(
-        default=None, foreign_key="gas_vol_calc_type.id", ondelete="CASCADE"
+        default=None, foreign_key="gas_vol_calc_type.id", ondelete="CASCADE",
+        sa_type=BigInteger,
     )
     type: "GasVolumeCalcType" = Relationship(back_populates="gas_volume_calcs")
     lines: list["Line"] = Relationship(

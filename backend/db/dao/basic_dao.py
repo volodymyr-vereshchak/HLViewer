@@ -89,7 +89,6 @@ class BasicDao:
                 temp_table, records=records, columns=temp_aliases
             )
 
-            # INSERT ... ON CONFLICT DO NOTHING — atomic, safe under concurrent inserts
             insert_cols = ", ".join(f'"{n}"' for n in data_col_names)
             select_cols = ", ".join(f"t.c{i}" for i in range(len(data_col_names)))
 
@@ -101,9 +100,34 @@ class BasicDao:
 
             conflict_cols = ", ".join(f'"{c}"' for c in list_of_constraints)
 
+            # Pre-filter already-present rows with WHERE NOT EXISTS so the id
+            # DEFAULT nextval() is evaluated ONLY for genuinely-new rows. Plain
+            # INSERT ... ON CONFLICT DO NOTHING still calls nextval() for every
+            # candidate row (incl. duplicates) before the conflict is arbitrated
+            # — that silent sequence burn is what exhausted sys_archive_id_seq
+            # (~450 ids burned per real row). The updater re-imports overlapping
+            # windows every cycle, so in steady state almost all rows are dupes.
+            #
+            # ON CONFLICT DO NOTHING is kept as a concurrency safety net and to
+            # preserve the unique constraint's NULL semantics (NULLS DISTINCT):
+            # rows with a NULL in any constraint column are not matched by `=`
+            # and fall through to ON CONFLICT exactly as before.
+            col_to_alias = {n: f"t.c{i}" for i, n in enumerate(data_col_names)}
+            if all(c in col_to_alias for c in list_of_constraints):
+                not_exists_cond = " AND ".join(
+                    f'm."{c}" = {col_to_alias[c]}' for c in list_of_constraints
+                )
+                where_clause = (
+                    f" WHERE NOT EXISTS (SELECT 1 FROM {main_table} m "
+                    f"WHERE {not_exists_cond})"
+                )
+            else:
+                where_clause = ""
+
             await self.session.execute(text(
                 f"INSERT INTO {main_table} ({insert_cols}{auto_insert}) "
-                f"SELECT {select_cols}{auto_select} FROM {temp_table} t "
+                f"SELECT {select_cols}{auto_select} FROM {temp_table} t"
+                f"{where_clause} "
                 f"ON CONFLICT ({conflict_cols}) DO NOTHING"
             ))
 

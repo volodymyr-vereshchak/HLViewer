@@ -1,5 +1,6 @@
 from typing import List, Optional
 
+from sqlalchemy import BigInteger
 from sqlmodel import Field, Relationship, UniqueConstraint, Index
 
 from .base_model import HlBaseModel
@@ -20,7 +21,7 @@ class AppUser(AppUserBase, table=True):
         Index("idx_app_user_role", "role"),
         Index("idx_app_user_active", "active"),
     )
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: Optional[int] = Field(default=None, primary_key=True, sa_type=BigInteger)
     password_hash: Optional[str] = Field(default=None, max_length=255)
     branch_access: List["AppUserBranchAccess"] = Relationship(back_populates="user")
 
@@ -30,9 +31,13 @@ class AppUserBranchAccess(HlBaseModel, table=True):
     __table_args__ = (
         UniqueConstraint("user_id", "branch_id", name="uq_app_user_branch_access"),
     )
-    id: Optional[int] = Field(default=None, primary_key=True)
-    user_id: int = Field(foreign_key="app_user.id", ondelete="CASCADE")
-    branch_id: int = Field(foreign_key="grmu_branch.id", ondelete="CASCADE")
+    id: Optional[int] = Field(default=None, primary_key=True, sa_type=BigInteger)
+    user_id: int = Field(
+        foreign_key="app_user.id", ondelete="CASCADE", sa_type=BigInteger,
+    )
+    branch_id: int = Field(
+        foreign_key="grmu_branch.id", ondelete="CASCADE", sa_type=BigInteger,
+    )
     user: Optional[AppUser] = Relationship(back_populates="branch_access")
 
 

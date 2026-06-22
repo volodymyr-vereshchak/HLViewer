@@ -4,13 +4,14 @@ Replaces the Excel-based EnterpriseMapping.
 """
 
 from typing import Optional
+from sqlalchemy import BigInteger
 from sqlmodel import SQLModel, Field
 
 
 class EnterpriseBase(SQLModel):
     enterprise_name: str = Field(index=True)
-    branch_id: Optional[int] = Field(default=None, foreign_key="grmu_branch.id", ondelete="CASCADE")
-    line_id: Optional[int] = Field(default=None, foreign_key="gas_volume_line.id", ondelete="SET NULL")
+    branch_id: Optional[int] = Field(default=None, foreign_key="grmu_branch.id", ondelete="CASCADE", sa_type=BigInteger)
+    line_id: Optional[int] = Field(default=None, foreign_key="gas_volume_line.id", ondelete="SET NULL", sa_type=BigInteger)
     ser_num: int
     mf_dev: int    # 1=РадмирТех, 3=ГРЕМПІС, 4=Тандем, 5=Укргазтех
     type_dev: int
@@ -22,7 +23,7 @@ class EnterpriseBase(SQLModel):
 class Enterprise(EnterpriseBase, table=True):
     __tablename__ = "enterprise"
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: Optional[int] = Field(default=None, primary_key=True, sa_type=BigInteger)
 
 
 class EnterpriseRead(EnterpriseBase):
