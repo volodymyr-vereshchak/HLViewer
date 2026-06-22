@@ -32,7 +32,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 # ── crypto ────────────────────────────────────────────────────────────────────
-JWT_SECRET = os.getenv("JWT_SECRET", "hlviewer-dev-secret-change-in-prod")
+# Fail-closed: never silently fall back to a hardcoded secret. The old default
+# ("hlviewer-dev-secret-change-in-prod") is committed to the public repo, so any
+# deployment that started without JWT_SECRET would sign tokens with a publicly
+# known key — trivially forgeable admin tokens. Refuse to start unless a real
+# secret is provided. DEBUG=true allows a throwaway dev secret for local runs.
+_DEV_JWT_SECRET = "hlviewer-dev-secret-change-in-prod"
+JWT_SECRET = os.getenv("JWT_SECRET")
+if not JWT_SECRET or JWT_SECRET == _DEV_JWT_SECRET:
+    if os.getenv("DEBUG", "false").lower() == "true":
+        JWT_SECRET = _DEV_JWT_SECRET  # local/dev only — never reached in prod
+    else:
+        raise RuntimeError(
+            "JWT_SECRET is not set (or is the insecure default). Set a strong, "
+            "unique JWT_SECRET in the environment before starting in production."
+        )
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = 12
 JWT_REMEMBER_ME_DAYS = 30
@@ -138,6 +152,18 @@ async def _build_user_read(user: AppUser) -> AppUserRead:
         updated_at=user.updated_at,
         allowed_branch_ids=branch_ids,
     )
+
+
+def decode_jwt(token: Optional[str]) -> Optional[dict]:
+    """Decode a JWT cookie value outside of a request dependency (used by the
+    central auth middleware). Returns the claims dict, or None if the token is
+    missing or invalid."""
+    if not token:
+        return None
+    try:
+        return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except JWTError:
+        return None
 
 
 async def get_token_claims(hlviewer_token: Optional[str] = Cookie(default=None)) -> dict:

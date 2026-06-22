@@ -16,6 +16,10 @@ from sqlmodel import SQLModel
 # Load environment variables from .env file
 load_dotenv()
 
+# auth_ep now fails closed if JWT_SECRET is unset (security fix); tests don't
+# need a real secret, so provide a throwaway one before importing the app.
+os.environ.setdefault("JWT_SECRET", "test-only-secret-not-for-production")
+
 from backend.api.main import app
 from backend.db.engine import async_session_factory
 from backend.settings import backend_settings

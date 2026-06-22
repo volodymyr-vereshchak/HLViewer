@@ -40,6 +40,7 @@ from backend.db.models.app_user_model import AppUser
 from backend.api.endpoints.auth_ep import (
     hash_password,
     _maybe_refresh_token,
+    decode_jwt,
     COOKIE_NAME,
     COOKIE_SECURE,
 )
@@ -224,6 +225,55 @@ async def sliding_session_middleware(request: Request, call_next):
                 samesite="lax",
             )
     return response
+
+
+# ── Central authorization guard (default-deny) ────────────────────────────────
+# Every endpoint requires a valid session EXCEPT the public allowlist below.
+# Mutations (POST/PUT/PATCH/DELETE) and sensitive config/credential endpoints
+# require the "admin" role; authenticated viewers keep read access (data reads
+# are still branch-filtered by the existing dependencies). This closes the
+# systemic missing-authorization gap centrally and fails closed: any new route
+# is protected by default unless explicitly added to the public allowlist.
+
+# Reachable without authentication: login flow, frontend bootstrap, client logs.
+_PUBLIC_PATHS = frozenset({
+    "/auth/login",
+    "/auth/logout",
+    "/auth/me",
+    "/config",
+    "/client-log",
+})
+# Path markers for admin-only endpoints that are GET (credentials, data paths,
+# branch config tooling) and would otherwise pass the read-only check.
+_ADMIN_PATH_MARKERS = (
+    "dpd-credential",
+    "data-path",
+    "config-debug",
+    "config-preview",
+    "config-mappings",
+    "scan-eis",
+)
+_WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+@app.middleware("http")
+async def auth_guard(request: Request, call_next):
+    path = request.url.path
+    method = request.method
+    # CORS preflight and public endpoints bypass the guard.
+    if method == "OPTIONS" or path in _PUBLIC_PATHS:
+        return await call_next(request)
+
+    claims = decode_jwt(request.cookies.get(COOKIE_NAME))
+    if claims is None:
+        return NaNSafeJSONResponse(status_code=401, content={"detail": "Not authenticated"})
+
+    needs_admin = method in _WRITE_METHODS or any(m in path for m in _ADMIN_PATH_MARKERS)
+    if needs_admin and claims.get("role") != "admin":
+        return NaNSafeJSONResponse(status_code=403, content={"detail": "Admin privileges required"})
+
+    request.state.claims = claims
+    return await call_next(request)
 
 
 @app.exception_handler(Exception)
