@@ -30,7 +30,11 @@ class DPDClient:
         password: str,
         timeout: int,
     ):
-        self.base_url = base_url
+        # Endpoints are built by suffixing this (e.g. f"{base_url}indications"),
+        # so guarantee exactly one trailing slash. A credential saved as
+        # ".../api/v1" (no slash) would otherwise produce ".../api/v1indications"
+        # → 403 from DPD. Normalizing here makes the trailing slash irrelevant.
+        self.base_url = base_url.rstrip("/") + "/"
         self.auth_url = auth_url
         self.username = username
         self.password = password
