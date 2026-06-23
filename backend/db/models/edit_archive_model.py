@@ -57,3 +57,6 @@ class EditArchiveCreate(EditArchiveBase):
 
 class EditArchiveEndpointList(EditArchiveList):
     edit_name: str | None = None
+    # Computer (vychislitel) type — lets the frontend scope value decoding to a
+    # verified device type instead of guessing the byte layout globally.
+    gas_volume_calc_type_id: int | None = None

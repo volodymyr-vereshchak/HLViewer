@@ -26,7 +26,7 @@ class EditArchiveDao(BasicDao):
         line_id: list[int] = None,
     ):
         statement = (
-            select(self.model, EditType)
+            select(self.model, EditType, GasVolumeCalcType.type_id)
             .outerjoin(Line, self.model.line_id == Line.id)
             .outerjoin(GasVolumeCalc, Line.gas_volume_calc_id == GasVolumeCalc.id)
             .outerjoin(GasVolumeCalcType, GasVolumeCalc.type_id == GasVolumeCalcType.id)
@@ -45,13 +45,16 @@ class EditArchiveDao(BasicDao):
 
         query = await self.session.execute(statement)
         result = []
-        for edit_archive, edit_type in query.all():
+        for edit_archive, edit_type, calc_type_id in query.all():
             row = edit_archive.model_dump()
             row["edit_name"] = (
                 edit_type.edit_name
                 if edit_type
                 else f"Неизвестный код {row['edit_type_id']}"
             )
+            # Computer (vychislitel) type — lets the frontend scope value
+            # decoding to a verified device type instead of guessing globally.
+            row["gas_volume_calc_type_id"] = calc_type_id
             result.append(row)
         return result
 
@@ -66,13 +69,14 @@ class EditArchiveDao(BasicDao):
     @staticmethod
     def _build_paged_rows(rows):
         result = []
-        for edit_archive, edit_type in rows:
+        for edit_archive, edit_type, calc_type_id in rows:
             row = edit_archive.model_dump()
             row["edit_name"] = (
                 edit_type.edit_name
                 if edit_type
                 else f"Неизвестный код {row['edit_type_id']}"
             )
+            row["gas_volume_calc_type_id"] = calc_type_id
             result.append(row)
         return result
 
@@ -103,7 +107,7 @@ class EditArchiveDao(BasicDao):
         total = (await self.session.execute(count_stmt)).scalar_one()
 
         statement = (
-            select(self.model, EditType)
+            select(self.model, EditType, GasVolumeCalcType.type_id)
             .outerjoin(Line, self.model.line_id == Line.id)
             .outerjoin(GasVolumeCalc, Line.gas_volume_calc_id == GasVolumeCalc.id)
             .outerjoin(GasVolumeCalcType, GasVolumeCalc.type_id == GasVolumeCalcType.id)
