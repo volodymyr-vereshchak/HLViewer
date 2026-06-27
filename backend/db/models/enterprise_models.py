@@ -35,6 +35,7 @@ class DeviceVolume(BaseModel):
     volume: Optional[float] = Field(None, ge=0, description="Daily standard volume (dvstAlwrk), None if no data")
     temperature: Optional[float] = Field(None, description="Temperature reading")
     pressure: Optional[float] = Field(None, description="Pressure reading")
+    pressure_unit: Optional[str] = Field(None, description="Pressure unit as reported by the DPD API (e.g. kPa)")
 
 
 class EnterpriseVolumeResponse(BaseModel):

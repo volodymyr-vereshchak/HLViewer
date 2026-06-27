@@ -239,6 +239,10 @@ class EnterpriseRouter:
             key = (device_info["line_id"], record_period)
             temperature = record.get("temper")
             pressure = record.get("press")
+            # Pressure unit as reported by the DPD API (e.g. "kPa").
+            pressure_unit = record.get("pressUnit")
+            if isinstance(pressure_unit, str):
+                pressure_unit = pressure_unit.strip() or None
 
             if volume is not None:
                 aggregated[key]["total"] += volume
@@ -251,7 +255,8 @@ class EnterpriseRouter:
                     enterprise_name=device_info.get("enterprise_name", ""),
                     volume=volume,
                     temperature=temperature,
-                    pressure=pressure
+                    pressure=pressure,
+                    pressure_unit=pressure_unit
                 )
             )
 
