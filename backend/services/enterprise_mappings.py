@@ -263,24 +263,42 @@ async def get_devices_for_lines_db(line_ids: list[int], session) -> list[dict]:
     """
     DB-backed replacement for get_devices_for_lines().
     Returns the same format: list of dicts with keys serNum, mfDev, typeDev, chNum, enterprise_name, line_id.
+
+    Device codes are read THROUGH the corrector-type catalog when the enterprise
+    is linked (so catalog edits propagate to DPD polling), falling back to the
+    legacy mf_dev/type_dev columns for not-yet-linked rows.
     """
-    from backend.db.dao.enterprise_dao import EnterpriseDao
+    from sqlmodel import select
+    from backend.db.models.enterprise_model import Enterprise
+    from backend.db.models.device_catalog_model import CorectorType, Manufacturer
 
-    dao = EnterpriseDao(session=session)
-    enterprises = await dao.get_active_for_lines(line_ids)
+    stmt = (
+        select(Enterprise, CorectorType.type_dev, Manufacturer.mf_dev)
+        .outerjoin(CorectorType, Enterprise.corector_type_id == CorectorType.id)
+        .outerjoin(Manufacturer, CorectorType.manufacturer_id == Manufacturer.id)
+        .where(Enterprise.active == True)  # noqa: E712
+        .where(Enterprise.line_id.in_(line_ids))
+    )
+    rows = (await session.execute(stmt)).all()
 
-    return [
-        {
+    devices = []
+    for e, ct_type_dev, mfr_mf_dev in rows:
+        linked = e.corector_type_id is not None
+        eff_mf = mfr_mf_dev if linked else e.mf_dev
+        eff_type = ct_type_dev if linked else e.type_dev
+        # No resolvable device identity (unlinked AND no legacy codes) → cannot poll.
+        if eff_mf is None or eff_type is None:
+            continue
+        devices.append({
             "line_id": e.line_id,
             "branch_id": e.branch_id,
             "serNum": e.ser_num,
-            "mfDev": e.mf_dev,
-            "typeDev": e.type_dev,
+            "mfDev": eff_mf,
+            "typeDev": eff_type,
             "chNum": e.ch_num,
             "enterprise_name": e.enterprise_name,
-        }
-        for e in enterprises
-    ]
+        })
+    return devices
 
 
 def validate_mappings() -> Dict[str, any]:

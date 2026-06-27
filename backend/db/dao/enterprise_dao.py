@@ -1,8 +1,10 @@
+from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select, asc
 
 from backend.db.dao.basic_dao import BasicDao
 from backend.db.models.enterprise_model import Enterprise, EnterpriseCreate, EnterpriseUpdate
+from backend.db.models.device_catalog_model import CorectorType, Manufacturer
 
 
 class EnterpriseDao(BasicDao):
@@ -49,12 +51,19 @@ class EnterpriseDao(BasicDao):
         return result.scalars().all()
 
     async def get_by_device(self, ser_num: int, mf_dev: int, type_dev: int, ch_num: int) -> Enterprise | None:
+        # Match against the EFFECTIVE codes: catalog values when the enterprise is
+        # linked to a corrector type, otherwise the legacy mf_dev/type_dev columns.
+        # Callers pass the effective codes (that's what our API surfaces).
+        eff_mf = func.coalesce(Manufacturer.mf_dev, self.model.mf_dev)
+        eff_type = func.coalesce(CorectorType.type_dev, self.model.type_dev)
         stmt = (
             select(self.model)
+            .outerjoin(CorectorType, self.model.corector_type_id == CorectorType.id)
+            .outerjoin(Manufacturer, CorectorType.manufacturer_id == Manufacturer.id)
             .where(self.model.ser_num == ser_num)
-            .where(self.model.mf_dev == mf_dev)
-            .where(self.model.type_dev == type_dev)
             .where(self.model.ch_num == ch_num)
+            .where(eff_mf == mf_dev)
+            .where(eff_type == type_dev)
             .where(self.model.active == True)  # noqa: E712
             .limit(1)
         )

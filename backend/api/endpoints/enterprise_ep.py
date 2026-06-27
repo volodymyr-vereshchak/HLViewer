@@ -339,11 +339,42 @@ _crud_router = APIRouter(tags=["enterprise"])
     summary="List all enterprises (DB)",
 )
 async def list_enterprises(branch_ids: list[int] | None = Depends(get_branch_filter)):
+    from sqlalchemy import asc
+    from backend.db.models.enterprise_model import Enterprise
+    from backend.db.models.device_catalog_model import CorectorType, Manufacturer
+
     async with async_session_factory() as session:
-        dao = EnterpriseDao(session=session)
-        if branch_ids is None:
-            return await dao.get_all()
-        return await dao.get_by_branch_ids(branch_ids)
+        stmt = (
+            select(
+                Enterprise,
+                CorectorType.type_dev,
+                CorectorType.model_name,
+                Manufacturer.mf_dev,
+                Manufacturer.short_name,
+            )
+            .outerjoin(CorectorType, Enterprise.corector_type_id == CorectorType.id)
+            .outerjoin(Manufacturer, CorectorType.manufacturer_id == Manufacturer.id)
+            .order_by(
+                asc(Enterprise.line_id.is_(None)),
+                asc(Enterprise.line_id),
+                asc(Enterprise.enterprise_name),
+            )
+        )
+        if branch_ids is not None:
+            stmt = stmt.where(Enterprise.branch_id.in_(branch_ids))
+
+        rows = (await session.execute(stmt)).all()
+        result = []
+        for ent, ct_type_dev, ct_model, mfr_mf_dev, mfr_short in rows:
+            linked = ent.corector_type_id is not None
+            data = ent.model_dump()
+            # Surface EFFECTIVE device codes (catalog when linked, else legacy).
+            data["mf_dev"] = mfr_mf_dev if linked else ent.mf_dev
+            data["type_dev"] = ct_type_dev if linked else ent.type_dev
+            data["model_name"] = ct_model
+            data["manufacturer_short_name"] = mfr_short
+            result.append(EnterpriseRead(**data))
+        return result
 
 
 @_crud_router.post(
@@ -537,6 +568,8 @@ async def export_enterprises():
 
     mfr_by_mfdev = {m.mf_dev: m.short_name for m in manufacturers}
     mfr_id_by_mfdev = {m.mf_dev: m.id for m in manufacturers}
+    mfr_by_id = {m.id: m for m in manufacturers}
+    ct_by_id = {ct.id: ct for ct in corector_types}
     ct_model: dict[tuple, str] = {}
     for ct in corector_types:
         key = (ct.manufacturer_id, ct.type_dev)
@@ -571,9 +604,17 @@ async def export_enterprises():
     ws.freeze_panes = "A3"
 
     for row_idx, ent in enumerate(enterprises, start=3):
-        mfr_short = mfr_by_mfdev.get(ent.mf_dev, str(ent.mf_dev))
-        mfr_id = mfr_id_by_mfdev.get(ent.mf_dev)
-        model_name = ct_model.get((mfr_id, ent.type_dev), "") if mfr_id else ""
+        # Prefer the corrector-type catalog (source of truth); fall back to the
+        # legacy mf_dev/type_dev codes for rows that aren't linked yet.
+        if ent.corector_type_id is not None and ent.corector_type_id in ct_by_id:
+            ct = ct_by_id[ent.corector_type_id]
+            model_name = ct.model_name
+            mfr = mfr_by_id.get(ct.manufacturer_id)
+            mfr_short = mfr.short_name if mfr else ""
+        else:
+            mfr_short = mfr_by_mfdev.get(ent.mf_dev, str(ent.mf_dev) if ent.mf_dev is not None else "")
+            mfr_id = mfr_id_by_mfdev.get(ent.mf_dev)
+            model_name = ct_model.get((mfr_id, ent.type_dev), "") if mfr_id else ""
         line_name = line_by_id.get(ent.line_id, "") if ent.line_id else ""
         ws.cell(row=row_idx, column=1, value=ent.enterprise_name)
         ws.cell(row=row_idx, column=2, value=ent.ser_num)
@@ -709,8 +750,9 @@ async def upload_enterprises(file: UploadFile = File(...), branch_id: Optional[i
             "enterprise_name": str(enterprise_name).strip(),
             "branch_id": branch_id,
             "ser_num":  ser_num_int,
-            "mf_dev":   mfr.mf_dev,
-            "type_dev": ct.type_dev,
+            # Device identity now lives in the corrector-type catalog; store the FK
+            # (the resolved CorectorType) instead of the raw mf_dev/type_dev codes.
+            "corector_type_id": ct.id,
             "ch_num":   ch_num_int,
             "active":   parse_bool(active_str),
             "enabled":  parse_bool(enabled_str),
@@ -726,7 +768,7 @@ async def upload_enterprises(file: UploadFile = File(...), branch_id: Optional[i
 
         stmt = pg_insert(EnterpriseModel).values(records)
         stmt = stmt.on_conflict_do_update(
-            constraint='uq_enterprise_device',
+            constraint='uq_enterprise_device_ct',
             set_={
                 'enterprise_name': stmt.excluded.enterprise_name,
                 'branch_id':       stmt.excluded.branch_id,
