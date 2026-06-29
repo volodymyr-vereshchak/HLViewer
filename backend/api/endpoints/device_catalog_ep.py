@@ -15,7 +15,9 @@ from backend.db.models.device_catalog_model import (
     CorectorTypeRead, CorectorTypeCreate, CorectorTypeUpdate,
 )
 from backend.api.endpoints.auth_ep import get_current_user
+from backend.db.models.app_user_model import AppUser
 from backend.db.preload_db.preload_device_catalog import preload as _preload_catalog
+from backend.db.preload_db.export_device_catalog import export as _export_catalog
 
 router = APIRouter(prefix="/device-catalog", tags=["device_catalog"], dependencies=[Depends(get_current_user)])
 
@@ -108,6 +110,20 @@ async def delete_corector_type(item_id: int):
         ok = await CorectorTypeDao(session).delete(item_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Corector type not found")
+
+
+@router.post("/export-preload", status_code=status.HTTP_200_OK)
+async def export_preload_json(user: AppUser = Depends(get_current_user)):
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    async with async_session_factory() as session:
+        manufacturers = (await session.execute(select(Manufacturer))).scalars().all()
+        corector_types = (await session.execute(select(CorectorType))).scalars().all()
+        await _export_catalog(session)
+    return {"ok": True, "exported": {
+        "manufacturers": len(manufacturers),
+        "corector_types": len(corector_types),
+    }}
 
 
 @router.post("/preload", status_code=status.HTTP_200_OK)
