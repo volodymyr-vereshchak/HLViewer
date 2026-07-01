@@ -6,11 +6,12 @@ token management, and volume data fetching.
 """
 
 import asyncio
+import inspect
 import httpx
 import logging
 import warnings
 from datetime import datetime
-from typing import List, Dict, Optional
+from typing import Callable, List, Dict, Optional
 
 from backend.settings import backend_settings
 
@@ -260,7 +261,8 @@ class DPDClient:
         date_from: datetime,
         date_to: datetime,
         type_request: str = "daily",
-        max_retries: int = 3
+        max_retries: int = 3,
+        progress_cb: Optional[Callable[[int, int], None]] = None,
     ) -> List[Dict]:
         """
         Fetch volume data for multiple devices from DPD API.
@@ -310,40 +312,42 @@ class DPDClient:
 
             # Create parallel tasks for each device. The shared client's connection
             # pool limits how many actually run at once (the rest await a free slot).
+            total = len(devices)
             tasks = [
-                self._get_device_indications(device, date_from, date_to, type_request, max_retries)
+                asyncio.create_task(
+                    self._get_device_indications(device, date_from, date_to, type_request, max_retries)
+                )
                 for device in devices
             ]
 
-            # Execute all requests in parallel
-            # return_exceptions=True prevents one failure from stopping others
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            # Aggregate results from all devices
+            # Drain as they finish so we can report progress (done/total) after
+            # each device — used by the streaming endpoint for a live % bar.
             all_records = []
-            successful_devices = 0
-            failed_devices = 0
-
-            for device, result in zip(devices, results):
-                if isinstance(result, Exception):
-                    # This shouldn't happen due to error handling in _get_device_indications,
-                    # but handle it just in case
-                    logger.error(
-                        f"Unexpected exception for device {device['serNum']}: {result}"
-                    )
-                    failed_devices += 1
-                    continue
-
+            done = 0
+            empty_devices = 0
+            for coro in asyncio.as_completed(tasks):
+                try:
+                    result = await coro
+                except Exception as e:
+                    # _get_device_indications swallows its own errors, but guard anyway.
+                    logger.error(f"Unexpected device task error: {e}")
+                    result = []
+                done += 1
                 if result:
                     all_records.extend(result)
-                    successful_devices += 1
                 else:
-                    # Empty result - device had no data or request failed
-                    failed_devices += 1
+                    empty_devices += 1
+                if progress_cb is not None:
+                    try:
+                        maybe = progress_cb(done, total)
+                        if inspect.isawaitable(maybe):
+                            await maybe
+                    except Exception as e:
+                        logger.warning(f"progress_cb error: {e}")
 
             logger.info(
                 f"Fetched {len(all_records)} volume records total: "
-                f"{successful_devices} devices succeeded, {failed_devices} failed/empty"
+                f"{total - empty_devices} devices with data, {empty_devices} empty/failed"
             )
 
             return all_records
