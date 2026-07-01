@@ -139,4 +139,4 @@ async def preload_device_catalog(force: bool = False):
                 await session.delete(mfr)
             await session.commit()
         await _preload_catalog(session)
-    return {"message": "Каталог передзавантажено" if force else "Завантаження завершено (якщо дані вже були — пропущено)"}
+    return {"message": "Каталог передзавантажено" if force else "Каталог оновлено (додано відсутні записи, наявні збережено)"}
