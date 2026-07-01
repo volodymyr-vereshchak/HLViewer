@@ -15,6 +15,10 @@ backend_settings = {
     # Commercial-day start hour (07:00 → 07:00). Global project setting; the
     # frontend reads it from GET /config. Override per-deployment in the env file.
     "CONTRACT_HOUR": int(os.getenv("CONTRACT_HOUR", "7")),
+    # Max simultaneous connections to the DPD API. get_volumes fans out one
+    # request per device; the pooled client caps concurrency at this value and
+    # reuses keep-alive connections instead of opening hundreds at once.
+    "DPD_MAX_CONCURRENCY": int(os.getenv("DPD_MAX_CONCURRENCY", "10")),
     "BOT_TOKEN": os.getenv("BOT_TOKEN"),
     "CHAT_ID": os.getenv("CHAT_ID"),
     "SENDER_EMAIL": os.getenv("SENDER_EMAIL", ""),
