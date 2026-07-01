@@ -30,7 +30,7 @@ from backend.db.models.enterprise_models import (
     EnterpriseMapping
 )
 from backend.services.dpd_client import DPDClient
-from backend.services.enterprise_mappings import get_devices_for_lines, get_devices_for_lines_db, load_mappings
+from backend.services.enterprise_mappings import get_devices_for_lines, get_devices_for_lines_db, load_mappings, volume_field_for_device
 
 logger = logging.getLogger(__name__)
 
@@ -200,7 +200,9 @@ class EnterpriseRouter:
                 logger.warning(f"Device not found in mappings: {device_key}")
                 continue
 
-            volume = record.get("dvstAlwrk")
+            # Most devices report volume in dvstAlwrk; a few models (ТКБ, smart104)
+            # report it in dvwrkAlwrk — selected by device identity (mfDev, typeDev).
+            volume = record.get(volume_field_for_device(device_info["mfDev"], device_info["typeDev"]))
 
             record_date_str = record.get("date") or record.get("period")
             if not record_date_str:

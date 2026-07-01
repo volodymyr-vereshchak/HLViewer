@@ -56,6 +56,23 @@ TYPE_DEV_MAPPING = {
     },
 }
 
+# Corrector device types whose commercial volume is reported by DPD in the
+# dvwrkAlwrk field (work volume) instead of the usual dvstAlwrk (standard
+# volume). Keyed by the effective DPD device identity (mf_dev, type_dev):
+#   (1, 24)  → Радміртех «ТКБ»
+#   (11, 1)  → Львівгаз(RGC) «smart104»
+WORK_VOLUME_DEVICES = {(1, 24), (11, 1)}
+
+
+def volume_field_for_device(mf_dev, type_dev) -> str:
+    """DPD volume field to read for a given device identity.
+
+    Most correctors report the commercial volume in dvstAlwrk; a few models
+    (see WORK_VOLUME_DEVICES) report it in dvwrkAlwrk instead.
+    """
+    return "dvwrkAlwrk" if (mf_dev, type_dev) in WORK_VOLUME_DEVICES else "dvstAlwrk"
+
+
 # Cache for loaded mappings
 _mappings_cache = {
     "data": None,

@@ -18,7 +18,7 @@ from backend.db.models.enterprise_models import (
     EnterpriseVolumeError
 )
 from backend.services.dpd_client import DPDClient
-from backend.services.enterprise_mappings import get_devices_for_lines, get_devices_for_lines_db
+from backend.services.enterprise_mappings import get_devices_for_lines, get_devices_for_lines_db, volume_field_for_device
 from backend.db.engine import async_session_factory
 from backend.services.virtual_lines_config import get_active_virtual_lines_db
 
@@ -251,8 +251,10 @@ class EnterpriseVirtualRouter:
                 logger.debug(f"Physical line {physical_line_id} not in requested lines, skipping")
                 continue
 
-            # Extract volume (dvstAlwrk = standard volume)
-            volume = record.get("dvstAlwrk", 0.0)
+            # Extract volume. Most devices use dvstAlwrk (standard volume); a few
+            # models (ТКБ, smart104) report it in dvwrkAlwrk — selected by device
+            # identity (mfDev, typeDev).
+            volume = record.get(volume_field_for_device(device_info["mfDev"], device_info["typeDev"]), 0.0)
             if volume is None:
                 volume = 0.0
 
