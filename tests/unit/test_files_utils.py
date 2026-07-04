@@ -8,6 +8,13 @@ from utils.files_utils import UnzipUtils, find_files_by_mask, read_archive_file
 from backend.hl_engine.data_classes.hour_dataclass import HourStruct
 
 
+@pytest.fixture
+def temp_dir(tmp_path) -> str:
+    """String path to a per-test temporary directory (the code under test
+    works with plain string paths)."""
+    return str(tmp_path)
+
+
 class TestUnzipUtils:
     """Test UnzipUtils functionality."""
     
@@ -15,7 +22,11 @@ class TestUnzipUtils:
         """Test UnzipUtils initialization."""
         unzip_utils = UnzipUtils(temp_dir)
         assert unzip_utils.path == temp_dir
-        assert "__temp_unpacked__" in unzip_utils.temp_path
+        # temp dir is unique per instance: hostlibs/__temp_<uuid>__
+        assert "hostlibs" in unzip_utils.temp_path
+        assert "__temp_" in unzip_utils.temp_path
+        # two instances must not collide
+        assert UnzipUtils(temp_dir).temp_path != unzip_utils.temp_path
     
     def test_context_manager_behavior(self, temp_dir):
         """Test UnzipUtils as context manager."""

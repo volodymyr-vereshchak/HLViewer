@@ -25,9 +25,9 @@ class ParamRouter(BaseArchiveRouter):
         line_id: list[int] = Query(None),
         allowed_line_ids: list[int] | None = Depends(get_allowed_line_ids),
     ):
-        if allowed_line_ids is not None:
-            allowed_set = set(allowed_line_ids)
-            line_id = [lid for lid in line_id if lid in allowed_set] if line_id else allowed_line_ids
+        line_id = self._scope_line_ids(line_id, allowed_line_ids)
+        if self._scope_is_empty(line_id):
+            return []
         async with async_session_factory() as session:
             archive_dao = self.archive_dao(session=session)
             if line_id and len(line_id) > 1:

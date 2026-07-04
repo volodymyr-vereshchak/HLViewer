@@ -206,10 +206,11 @@ class HostlibUpdater:
                 if line and not line.meter:
                     p_out = p_out - df_last.w_volume_dp.sum() / 10_000
 
+            # quantize exists only on Decimal; pandas sums give numpy floats
             p_out = (
                 p_out.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-                if type(p_out) is not int
-                else p_out
+                if type(p_out) is Decimal
+                else round(p_out, 2)
             )
             if df_len != 24:
                 pass

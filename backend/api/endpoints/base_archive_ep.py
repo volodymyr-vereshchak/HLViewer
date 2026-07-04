@@ -47,6 +47,13 @@ class BaseArchiveRouter:
             return [lid for lid in line_id if lid in allowed_set] if line_id else allowed_line_ids
         return line_id
 
+    @staticmethod
+    def _scope_is_empty(line_id) -> bool:
+        """True when scoping left the user with NO permitted lines. Callers must
+        return an empty result then — passing [] into the DAO would be read as
+        "no filter" and leak every branch's data."""
+        return line_id is not None and not line_id
+
     async def get_archive(
         self,
         from_date: datetime = Query(None),
@@ -56,6 +63,8 @@ class BaseArchiveRouter:
     ):
         self._check_dates(from_date, to_date)
         line_id = self._scope_line_ids(line_id, allowed_line_ids)
+        if self._scope_is_empty(line_id):
+            return []
         async with async_session_factory() as session:
             archive_dao = self.archive_dao(session=session)
             archives = await archive_dao.get_range(from_date, to_date, line_id)

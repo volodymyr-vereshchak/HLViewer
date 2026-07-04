@@ -64,6 +64,11 @@ packages/
 *_results.txt
 integration_test_output.log
 
+# Test coverage output
+.coverage
+coverage.xml
+htmlcov/
+
 # Research outputs — research/ code is tracked, generated data is not
 /research/*_output/
 /research/*.xlsx

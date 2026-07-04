@@ -46,6 +46,8 @@ class SysArchiveRouter(BaseArchiveRouter):
     ):
         self._check_dates(from_date, to_date)
         line_id = self._scope_line_ids(line_id, allowed_line_ids)
+        if self._scope_is_empty(line_id):
+            return {"total": 0, "items": []}
         async with async_session_factory() as session:
             dao = SysArchiveDao(session=session)
             return await dao.get_range_paged(
@@ -66,13 +68,9 @@ class SysArchiveRouter(BaseArchiveRouter):
             raise HTTPException(
                 status_code=400, detail=f"Date range exceeds {self.max_days} days"
             )
-        if allowed_line_ids is not None:
-            allowed_set = set(allowed_line_ids)
-            line_id = (
-                [lid for lid in line_id if lid in allowed_set]
-                if line_id
-                else allowed_line_ids
-            )
+        line_id = self._scope_line_ids(line_id, allowed_line_ids)
+        if self._scope_is_empty(line_id):
+            return []
         async with async_session_factory() as session:
             dao = SysArchiveDao(session=session)
             return await dao.get_grouped(from_date, to_date, line_id)

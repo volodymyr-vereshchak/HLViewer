@@ -375,6 +375,10 @@ async def upsert_config_mappings(branch_id: int, mappings: List[BranchConfigMapp
         )
         for row in existing.scalars().all():
             await session.delete(row)
+        # Execute the DELETEs before the INSERTs — otherwise SQLAlchemy's unit
+        # of work flushes inserts first and re-saving an existing gis_name hits
+        # uq_branch_config_mapping.
+        await session.flush()
 
         # Insert new mappings
         new_rows = []

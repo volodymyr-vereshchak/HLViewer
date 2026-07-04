@@ -93,10 +93,7 @@ meteostat==2.0.1
 
 # Testing dependencies
 pytest==8.4.1
-pytest-asyncio==0.23.5
+pytest-asyncio==0.26.0
 pytest-cov==4.1.0
 pytest-mock==3.12.0
-httpx==0.28.1
-factory-boy==3.3.0
 freezegun==1.4.0
-asyncpg==0.30.0

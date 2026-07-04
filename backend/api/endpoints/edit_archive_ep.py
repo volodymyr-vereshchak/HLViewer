@@ -38,6 +38,8 @@ class EditArchiveRouter(BaseArchiveRouter):
     ):
         self._check_dates(from_date, to_date)
         line_id = self._scope_line_ids(line_id, allowed_line_ids)
+        if self._scope_is_empty(line_id):
+            return {"total": 0, "items": []}
         async with async_session_factory() as session:
             dao = EditArchiveDao(session=session)
             return await dao.get_range_paged(

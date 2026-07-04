@@ -5,7 +5,7 @@ Replaces the Excel-based EnterpriseMapping.
 
 from typing import Optional
 from sqlalchemy import BigInteger
-from sqlmodel import SQLModel, Field
+from sqlmodel import SQLModel, Field, UniqueConstraint
 
 
 class EnterpriseBase(SQLModel):
@@ -29,6 +29,14 @@ class EnterpriseBase(SQLModel):
 
 class Enterprise(EnterpriseBase, table=True):
     __tablename__ = "enterprise"
+    __table_args__ = (
+        # Device identity per corrector type. Must match the Alembic migration
+        # e8f9a0b1c2d3 — the Excel upload upserts ON CONFLICT ON CONSTRAINT by
+        # this exact name.
+        UniqueConstraint(
+            "ser_num", "corector_type_id", "ch_num", name="uq_enterprise_device_ct"
+        ),
+    )
 
     id: Optional[int] = Field(default=None, primary_key=True, sa_type=BigInteger)
 

@@ -10,11 +10,9 @@ requires-python = ">=3.8"
 
 [tool.pytest.ini_options]
 markers = [
-    "database: marks tests as database integration tests",
-    "asyncio: marks tests as async tests", 
-    "integration: marks tests as integration tests",
-    "unit: marks tests as unit tests",
-    "slow: marks tests as slow running tests"
+    "unit: fast tests without DB or network",
+    "integration: tests against the real test Postgres + ASGI app",
+    "live: tests that call real external services (DPD API); excluded by default",
 ]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
@@ -23,6 +21,12 @@ python_functions = ["test_*"]
 addopts = [
     "-v",
     "--tb=short",
-    "--strict-markers"
+    "--strict-markers",
+    "-m", "not live",
 ]
-asyncio_mode = "auto" 
+asyncio_mode = "auto"
+# One shared event loop for the whole session: the app engine (module-level
+# singleton in backend/db/engine.py) pools asyncpg connections that must not
+# hop between per-test loops.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
