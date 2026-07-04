@@ -192,9 +192,3 @@ class SysArchiveDao(BasicDao):
             })
 
         return sorted(grouped.values(), key=lambda x: x["sys_type_id"])
-
-
-if __name__ == "__main__":
-    # result = SysArchiveDao().get_data_counts_by_hour(line_id=[5])
-    # print(result)
-    pass

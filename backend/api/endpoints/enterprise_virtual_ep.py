@@ -6,19 +6,20 @@ Aggregates physical line enterprise data into virtual lines.
 """
 
 import logging
-from datetime import datetime, date
 from typing import List
-from collections import defaultdict
 from fastapi import APIRouter, Depends, Query, status, HTTPException
 
 from backend.api.endpoints.auth_ep import get_current_user
 from backend.db.models.enterprise_models import (
     EnterpriseVolumeResponse,
-    DeviceVolume,
     EnterpriseVolumeError
 )
-from backend.services.dpd_client import DPDClient
-from backend.services.enterprise_mappings import get_devices_for_lines, get_devices_for_lines_db, volume_field_for_device
+from backend.services.enterprise_mappings import get_devices_for_lines_db
+from backend.services.enterprise_volume_service import (
+    aggregate_volumes,
+    fetch_dpd_volumes,
+    parse_date_range,
+)
 from backend.db.engine import async_session_factory
 from backend.services.virtual_lines_config import get_active_virtual_lines_db
 
@@ -110,12 +111,7 @@ class EnterpriseVirtualRouter:
 
         # Validate and parse dates
         try:
-            date_from = datetime.strptime(from_date.split(" ")[0].split("T")[0], "%Y-%m-%d")
-            date_to = datetime.strptime(to_date.split(" ")[0].split("T")[0], "%Y-%m-%d")
-
-            if date_from > date_to:
-                raise ValueError("from_date must be <= to_date")
-
+            date_from, date_to = parse_date_range(from_date, to_date)
         except ValueError as e:
             logger.error(f"Invalid date parameters: {e}")
             raise HTTPException(
@@ -191,19 +187,10 @@ class EnterpriseVirtualRouter:
             return []
 
         # Fetch volumes from DPD API
-        branch_id = next((d["branch_id"] for d in devices if d.get("branch_id")), None)
-        if branch_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Could not determine branch for requested lines"
-            )
-
         try:
-            async with async_session_factory() as cred_session:
-                client = await DPDClient.for_branch(branch_id, cred_session)
-            volumes_data = await client.get_volumes(
-                devices, date_from, date_to, type_request=period_type
-            )
+            volumes_data = await fetch_dpd_volumes(devices, date_from, date_to, period_type)
+        except LookupError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
         except ValueError as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
         except Exception as e:
@@ -214,124 +201,19 @@ class EnterpriseVirtualRouter:
             )
 
         if not volumes_data:
-            logger.warning(f"No volume data returned from DPD API")
+            logger.warning("No volume data returned from DPD API")
             return []
 
-        # Create device lookup map for metadata
-        device_map = {
-            (d["serNum"], d["mfDev"], d["typeDev"], d["chNum"]): d
-            for d in devices
-        }
-
-        # Aggregate volumes by (original_line_id, period)
-        # Structure: {(original_line_id, period): {"total": float, "devices": []}}
-        aggregated = defaultdict(lambda: {"total": 0.0, "devices": []})
-
-        for record in volumes_data:
-            # Get device metadata from mappings
-            device_key = (
-                record.get("serNum"),
-                record.get("mfDev"),
-                record.get("typeDev"),
-                record.get("chNum")
-            )
-
-            device_info = device_map.get(device_key)
-            if not device_info:
-                logger.warning(f"Device not found in mappings: {device_key}")
-                continue
-
-            # Get physical line_id from device
-            physical_line_id = device_info["line_id"]
-
-            # Map to original line_id (virtual or physical)
-            original_line_id = physical_to_original.get(physical_line_id)
-            if not original_line_id:
-                # This physical line was not requested
-                logger.debug(f"Physical line {physical_line_id} not in requested lines, skipping")
-                continue
-
-            # Extract volume. Most devices use dvstAlwrk (standard volume); a few
-            # models (ТКБ, smart104) report it in dvwrkAlwrk — selected by device
-            # identity (mfDev, typeDev).
-            volume = record.get(volume_field_for_device(device_info["mfDev"], device_info["typeDev"]), 0.0)
-            if volume is None:
-                volume = 0.0
-
-            # Parse period from record based on type
-            record_date_str = record.get("date") or record.get("period")
-            if not record_date_str:
-                logger.warning(f"No date field in record: {record}")
-                continue
-
-            try:
-                # For hourly data, preserve full datetime; for daily, use date only
-                if period_type == 'hourly':
-                    # Parse as datetime and preserve it
-                    if isinstance(record_date_str, str):
-                        # DPD API returns datetime in format "YYYY-MM-DDTHH:MM" or "YYYY-MM-DDTHH:MM:SS"
-                        # Remove microseconds if present
-                        clean_str = record_date_str.split(".")[0]
-
-                        # Try parsing with seconds first, then without
-                        try:
-                            record_period = datetime.strptime(clean_str, "%Y-%m-%dT%H:%M:%S")
-                        except ValueError:
-                            # Try without seconds (format: "2025-12-01T07:00")
-                            record_period = datetime.strptime(clean_str, "%Y-%m-%dT%H:%M")
-                    elif isinstance(record_date_str, datetime):
-                        record_period = record_date_str
-                    else:
-                        logger.warning(f"Invalid datetime format: {record_date_str}")
-                        continue
-                else:
-                    # Daily data - use date only
-                    if isinstance(record_date_str, str):
-                        record_period = datetime.strptime(
-                            record_date_str.split("T")[0], "%Y-%m-%d"
-                        ).date()
-                    elif isinstance(record_date_str, datetime):
-                        # If DPD returns datetime object, extract date only
-                        record_period = record_date_str.date()
-                    elif isinstance(record_date_str, date):
-                        record_period = record_date_str
-                    else:
-                        logger.warning(f"Invalid date format: {record_date_str}")
-                        continue
-            except Exception as e:
-                logger.warning(f"Error parsing period {record_date_str}: {e}")
-                continue
-
-            # Aggregate by (original_line_id, period)
-            key = (original_line_id, record_period)
-
-            aggregated[key]["total"] += volume
-            aggregated[key]["devices"].append(
-                DeviceVolume(
-                    serNum=device_info["serNum"],
-                    mfDev=device_info["mfDev"],
-                    typeDev=device_info["typeDev"],
-                    chNum=device_info["chNum"],
-                    enterprise_name=device_info.get("enterprise_name", ""),
-                    volume=volume
-                )
-            )
-
-        # Convert aggregated data to response format
-        result = []
-        for (line_id_val, period_val), data in aggregated.items():
-            result.append(
-                EnterpriseVolumeResponse(
-                    line_id=line_id_val,  # Virtual or physical
-                    period=period_val,
-                    total_volume=round(data["total"], 2),
-                    device_count=len(data["devices"]),
-                    devices=data["devices"]
-                )
-            )
-
-        # Sort by line_id and period
-        result.sort(key=lambda x: (x.line_id, x.period))
+        # Aggregate by the ORIGINAL (virtual or physical) line id; devices whose
+        # physical line was not requested are skipped by the remap. This endpoint
+        # has always reported missing volumes as 0.0.
+        result = aggregate_volumes(
+            volumes_data,
+            devices,
+            period_type,
+            line_remap=physical_to_original,
+            none_volume_as_zero=True,
+        )
 
         logger.info(
             f"Returning {len(result)} aggregated enterprise volume records "

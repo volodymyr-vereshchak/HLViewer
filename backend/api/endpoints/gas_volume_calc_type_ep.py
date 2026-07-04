@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, status, HTTPException
 from sqlalchemy import text
 from sqlmodel import select
 
-from backend.api.endpoints.auth_ep import get_current_user
+from backend.api.endpoints.auth_ep import get_current_user, require_admin
 from backend.db.dao.custom_exceptions import DatabaseIntegrityError
 from backend.db.dao.gas_volume_calc_type_dao import GasVolumeCalcTypeDao
 from backend.db.engine import DbEngine, async_session_factory
@@ -99,10 +99,7 @@ class GasVolumeCalcTypeRouter:
         return {"ok": True}
 
 
-    async def export_preload_json(self, user: AppUser = Depends(get_current_user)):
-        if user.role != "admin":
-            raise HTTPException(status_code=403, detail="Admin only")
-
+    async def export_preload_json(self, user: AppUser = Depends(require_admin)):
         async with async_session_factory() as session:
             calc_types = (await session.execute(
                 select(GasVolumeCalcType).order_by(GasVolumeCalcType.type_id)

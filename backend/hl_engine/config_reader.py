@@ -1,5 +1,3 @@
-import asyncio
-
 from backend.db.dao.gas_volume_calc_dao import GasVolumeCalcDao
 from backend.db.dao.gas_volume_calc_type_dao import GasVolumeCalcTypeDao
 from backend.db.dao.line_dao import LineDao
@@ -159,7 +157,3 @@ class ConfigReader:
                     name=line["name"],
                     meter=line["meter"],
                 )
-
-
-if __name__ == "__main__":
-    asyncio.run(ConfigReader(file="backend/db/preload_db/ask.CFG").update_db())

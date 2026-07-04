@@ -39,9 +39,3 @@ class ParamRouter(BaseArchiveRouter):
 
 
 param_router = ParamRouter().router
-
-if __name__ == "__main__":
-    import asyncio
-
-    start, end = datetime(2023, 1, 1), datetime(2025, 4, 1)
-    asyncio.run(ParamRouter().get_archive(start, end, [1]))

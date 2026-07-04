@@ -193,6 +193,27 @@ async def get_current_user(claims: dict = Depends(get_token_claims)) -> AppUser:
     return user
 
 
+async def require_admin(user: AppUser = Depends(get_current_user)) -> AppUser:
+    """Dependency: the current user must have the admin role (403 otherwise)."""
+    if user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only")
+    return user
+
+
+async def _other_active_admins(session, user_id: int) -> int:
+    """Count active admins besides `user_id` — the "never leave the system
+    without an active admin" guard used by update_user and delete_user."""
+    return (
+        await session.execute(
+            select(func.count()).select_from(AppUser).where(
+                AppUser.role == "admin",
+                AppUser.active == True,  # noqa: E712
+                AppUser.id != user_id,
+            )
+        )
+    ).scalar_one()
+
+
 async def get_branch_filter(
     user: AppUser = Depends(get_current_user),
     claims: dict = Depends(get_token_claims),
@@ -340,9 +361,7 @@ async def get_me(request: Request, response: Response):
 
 
 @router.get("/users", response_model=List[AppUserRead])
-async def list_users(user: AppUser = Depends(get_current_user)):
-    if user.role != "admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only")
+async def list_users(admin: AppUser = Depends(require_admin)):
     async with async_session_factory() as session:
         result = await session.execute(select(AppUser).order_by(AppUser.username))
         users = result.scalars().all()
@@ -386,10 +405,7 @@ async def _set_branch_access(session, user_id: int, branch_ids: list[int]):
 
 
 @router.post("/users", response_model=UserCreateResponse)
-async def create_user(body: UserCreate, admin: AppUser = Depends(get_current_user)):
-    if admin.role != "admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only")
-
+async def create_user(body: UserCreate, admin: AppUser = Depends(require_admin)):
     plain_pw = body.password if body.password else _generate_password()
 
     async with async_session_factory() as session:
@@ -416,10 +432,7 @@ async def create_user(body: UserCreate, admin: AppUser = Depends(get_current_use
 
 
 @router.patch("/users/{user_id}", response_model=AppUserRead)
-async def update_user(user_id: int, body: UserUpdate, admin: AppUser = Depends(get_current_user)):
-    if admin.role != "admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only")
-
+async def update_user(user_id: int, body: UserUpdate, admin: AppUser = Depends(require_admin)):
     async with async_session_factory() as session:
         user = (await session.execute(select(AppUser).where(AppUser.id == user_id))).scalar_one_or_none()
         if not user:
@@ -433,14 +446,7 @@ async def update_user(user_id: int, body: UserUpdate, admin: AppUser = Depends(g
         was_active_admin = user.role == "admin" and user.active
         will_be_active_admin = new_role == "admin" and new_active
         if was_active_admin and not will_be_active_admin:
-            other_admins = (await session.execute(
-                select(func.count()).select_from(AppUser).where(
-                    AppUser.role == "admin",
-                    AppUser.active == True,  # noqa: E712
-                    AppUser.id != user_id,
-                )
-            )).scalar_one()
-            if other_admins == 0:
+            if await _other_active_admins(session, user_id) == 0:
                 raise HTTPException(
                     status_code=400,
                     detail="Не можна деактивувати або змінити роль останнього активного адміністратора",
@@ -463,10 +469,7 @@ async def update_user(user_id: int, body: UserUpdate, admin: AppUser = Depends(g
 
 
 @router.post("/users/{user_id}/reset-password")
-async def reset_password(user_id: int, admin: AppUser = Depends(get_current_user)):
-    if admin.role != "admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only")
-
+async def reset_password(user_id: int, admin: AppUser = Depends(require_admin)):
     plain_pw = _generate_password()
 
     async with async_session_factory() as session:
@@ -481,10 +484,7 @@ async def reset_password(user_id: int, admin: AppUser = Depends(get_current_user
 
 
 @router.delete("/users/{user_id}")
-async def delete_user(user_id: int, admin: AppUser = Depends(get_current_user)):
-    if admin.role != "admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only")
-
+async def delete_user(user_id: int, admin: AppUser = Depends(require_admin)):
     # Guard: an admin may not delete their own account
     if user_id == admin.id:
         raise HTTPException(status_code=400, detail="Не можна видалити власний обліковий запис")
@@ -496,14 +496,7 @@ async def delete_user(user_id: int, admin: AppUser = Depends(get_current_user)):
 
         # Guard: never leave the system without an active admin
         if user.role == "admin":
-            other_admins = (await session.execute(
-                select(func.count()).select_from(AppUser).where(
-                    AppUser.role == "admin",
-                    AppUser.active == True,  # noqa: E712
-                    AppUser.id != user_id,
-                )
-            )).scalar_one()
-            if other_admins == 0:
+            if await _other_active_admins(session, user_id) == 0:
                 raise HTTPException(status_code=400, detail="Не можна видалити останнього активного адміністратора")
 
         # Remove branch-access rows explicitly (FK is ON DELETE CASCADE, but this

@@ -134,7 +134,3 @@ class Hostlib:
         address = int(filename[1:4])
         line = int(filename[5:6])
         return {"address": address, "line": line}
-
-
-if __name__ == "__main__":
-    path_dir = "D:/Projects/HLViewer/HLViewer/develop_data/11Листопад/Zaporizgaz_2024_11_29_8/Zaporizgaz/56ZOPZAP4003301T"

@@ -226,7 +226,7 @@ class TestEnterpriseVolumes:
              "date": "2024-12-25", "dvstAlwrk": 49.5},
         ]
         mocker.patch(
-            "backend.api.endpoints.enterprise_ep.DPDClient.for_branch",
+            "backend.services.enterprise_volume_service.DPDClient.for_branch",
             mocker.AsyncMock(return_value=mock_client),
         )
 
@@ -252,7 +252,7 @@ class TestEnterpriseVolumes:
         self, admin_client, seed_topology, mocker
     ):
         mocker.patch(
-            "backend.api.endpoints.enterprise_ep.DPDClient.for_branch",
+            "backend.services.enterprise_volume_service.DPDClient.for_branch",
             mocker.AsyncMock(),
         )
         resp = await admin_client.get(
@@ -284,7 +284,7 @@ class TestEnterpriseVolumes:
         mock_client = mocker.AsyncMock()
         mock_client.get_volumes.side_effect = ConnectionError("DPD is down")
         mocker.patch(
-            "backend.api.endpoints.enterprise_ep.DPDClient.for_branch",
+            "backend.services.enterprise_volume_service.DPDClient.for_branch",
             mocker.AsyncMock(return_value=mock_client),
         )
         resp = await admin_client.get(

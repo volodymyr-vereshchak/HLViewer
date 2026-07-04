@@ -55,16 +55,3 @@ class DailyArchiveList(DailyArchiveBase):
 
 class DailyArchiveCreate(DailyArchiveBase):
     line_id: int
-
-
-if __name__ == "__main__":
-    d_a = DailyArchiveCreate(
-        line_id=1,
-        period=date(2024, 1, 1),
-        volume=0,
-        w_volume_dp=0,
-        pressure=0,
-        temperature=0,
-        density=2,
-    )
-    pass
