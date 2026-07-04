@@ -162,11 +162,27 @@ class RootRouter:
             async with async_session_factory() as session:
                 from backend.db.dao.hourly_archive_dao import HourlyArchiveDao
                 from backend.db.models import HourlyArchiveList
+                from backend.db.models.line_model import Line
                 from datetime import timedelta
+                from sqlmodel import select
                 import pandas as pd
+
+                # Report covers the lines flagged include_in_report; the flag
+                # is_high_pressure switches the Pвх/Pвых label per line.
+                report_lines = (await session.execute(
+                    select(Line).where(Line.include_in_report == True)  # noqa: E712
+                )).scalars().all()
+                line_flags = {ln.id: ln.is_high_pressure for ln in report_lines}
+                if not line_flags:
+                    return {
+                        "message": "Немає ліній з увімкненим прапорцем «у звіт» (include_in_report)",
+                        "success": False,
+                    }
 
                 # Получаем данные за последние 24 часа
                 end = await HourlyArchiveDao(session=session).get_last_period()
+                if end is None:
+                    return {"message": "Немає годинних даних для звіту", "success": False}
                 start = end - timedelta(hours=23)
                 result = await HourlyArchiveDao(session=session).get_range(
                     from_date=start, to_date=end
@@ -179,7 +195,7 @@ class RootRouter:
                 df = pd.DataFrame(extracted_data).sort_values("period")
 
                 # Создаем сообщение
-                message = await updater.create_message(df)
+                message = await updater.create_message(df, line_flags)
 
                 return {"message": message, "success": True}
 

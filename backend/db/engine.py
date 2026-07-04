@@ -73,3 +73,13 @@ class DbEngine:
 _db = DbEngine()
 async_session_factory = _db.async_session_factory
 update_session_factory = _db.update_session_factory
+
+
+async def get_session():
+    """FastAPI dependency: one API-pool session per request.
+
+    Prefer `session: AsyncSession = Depends(get_session)` in endpoints over
+    opening `async with async_session_factory()` inline — the dependency keeps
+    endpoints testable and gives one obvious place to change session policy."""
+    async with async_session_factory() as session:
+        yield session

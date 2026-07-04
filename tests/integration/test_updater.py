@@ -134,6 +134,55 @@ class TestUpdateEndpoints:
         assert resp.json()["status"] == "idle"
 
 
+class TestGetReport:
+    async def test_report_for_flagged_lines(self, admin_client, seed_topology):
+        from backend.db.models import HourlyArchive, Line
+
+        async with async_session_factory() as session:
+            line = await session.get(Line, seed_topology["line1"])
+            line.include_in_report = True
+            session.add(line)
+            for hour in range(24):
+                session.add(
+                    HourlyArchive(
+                        period=datetime(2024, 12, 25, hour),
+                        volume=10.0,
+                        w_volume_dp=100.0,
+                        pressure=5.0,
+                        temperature=20.0,
+                        density=0.7,
+                        line_id=seed_topology["line1"],
+                    )
+                )
+            await session.commit()
+
+        resp = await admin_client.get("/get_report/")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is True, body["message"]
+        assert "<b>l1</b>" in body["message"]
+        assert "240.0" in body["message"]  # 24 × 10 m³
+
+    async def test_report_without_flagged_lines(self, admin_client, seed_topology):
+        resp = await admin_client.get("/get_report/")
+        body = resp.json()
+        assert body["success"] is False
+        assert "include_in_report" in body["message"]
+
+    async def test_report_without_data(self, admin_client, seed_topology):
+        from backend.db.models import Line
+
+        async with async_session_factory() as session:
+            line = await session.get(Line, seed_topology["line1"])
+            line.include_in_report = True
+            session.add(line)
+            await session.commit()
+
+        resp = await admin_client.get("/get_report/")
+        body = resp.json()
+        assert body["success"] is False
+
+
 class TestNotificationMessages:
     def _df(self, line_id: int, hours: int = 24, volume: float = 10.0) -> pd.DataFrame:
         start = datetime(2024, 12, 25, 0)
