@@ -2,6 +2,7 @@
 filename → address/line extraction and binary record reading (no DB)."""
 
 import math
+import os
 import struct
 
 from backend.db.models import DailyArchiveCreate, HourlyArchiveCreate
@@ -29,7 +30,9 @@ class TestGetParamsFromFileName:
         assert params == {"address": 12, "line": 3}
 
     def test_full_path_uses_basename(self):
-        params = Hostlib.get_params_from_file_name(r"D:\archives\deep\S250R1D.24C")
+        # os.path.join → native separators, so this passes on Windows AND Linux CI
+        path = os.path.join("archives", "deep", "S250R1D.24C")
+        params = Hostlib.get_params_from_file_name(path)
         assert params == {"address": 250, "line": 1}
 
 
