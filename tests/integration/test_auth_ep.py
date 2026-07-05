@@ -583,7 +583,7 @@ class TestLdapLogin:
         assert resp.json()["role"] == "admin"
         bind.assert_not_called()  # local password matched → no LDAP round-trip
 
-    async def test_kiosk_auto_login_disabled_when_ldap_on(
+    async def test_auto_login_disabled_when_ldap_on(
         self, anon_client, seed_users, monkeypatch
     ):
         monkeypatch.setenv("AUTO_LOGIN", "true")
@@ -592,7 +592,7 @@ class TestLdapLogin:
         resp = await anon_client.get("/auth/me")
         assert resp.status_code == 401  # form login required
 
-    async def test_kiosk_auto_login_works_when_ldap_off(
+    async def test_auto_login_works_when_ldap_off(
         self, anon_client, seed_users, monkeypatch
     ):
         monkeypatch.setenv("AUTO_LOGIN", "true")

@@ -372,8 +372,8 @@ async def get_me(
         except Exception:
             pass
 
-    # 2. AUTO_LOGIN — issue real JWT for default user. With LDAP enabled the
-    #    kiosk auto-login is OFF (everyone must present credentials); AUTO_LOGIN
+    # 2. AUTO_LOGIN — issue real JWT for default user. With LDAP enabled this
+    #    automatic sign-in is OFF (everyone must present credentials); AUTO_LOGIN
     #    then only controls whether domain users are provisioned as active
     #    viewers (see login above).
     if os.getenv("AUTO_LOGIN", "false").lower() == "true" and not ldap_enabled():
