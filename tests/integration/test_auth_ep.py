@@ -389,9 +389,10 @@ class TestUserManagement:
 #   LDAP on + AUTO_LOGIN off → unknown domain user is created INACTIVE (pending)
 #   existing DB record always wins over auto-viewer (incl. active=False = ban)
 class TestLdapLogin:
-    def _bind(self, mocker, ok: bool):
+    def _bind(self, mocker, ok: bool, display_name: str | None = None):
         return mocker.patch(
-            "backend.api.endpoints.auth_ep.ldap_authenticate", return_value=ok
+            "backend.api.endpoints.auth_ep.ldap_authenticate",
+            return_value=(ok, display_name),
         )
 
     async def _find_user(self, username: str) -> AppUser | None:
@@ -423,6 +424,55 @@ class TestLdapLogin:
         user = await self._find_user("domain.user")
         assert user is not None
         assert user.password_hash is None  # domain-only account
+
+    async def test_display_name_taken_from_ldap(
+        self, anon_client, seed_users, monkeypatch, mocker
+    ):
+        monkeypatch.setenv("LDAP_ENABLED", "true")
+        monkeypatch.setenv("AUTO_LOGIN", "true")
+        self._bind(mocker, True, display_name="Верещак Володимир")
+
+        resp = await anon_client.post(
+            "/auth/login", json={"username": "named.user", "password": "dompass"}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["display_name"] == "Верещак Володимир"
+
+    async def test_display_name_backfilled_on_existing_account(
+        self, anon_client, seed_users, monkeypatch, mocker
+    ):
+        # Account provisioned before the AD-name lookup existed: display_name
+        # equals the login. Next successful domain login backfills it.
+        monkeypatch.setenv("LDAP_ENABLED", "true")
+        monkeypatch.setenv("AUTO_LOGIN", "true")
+        self._bind(mocker, True, display_name="Справжнє Ім'я")
+
+        await _insert_user(
+            username="old.user", display_name="old.user",
+            role="viewer", active=True, password_hash=None,
+        )
+        resp = await anon_client.post(
+            "/auth/login", json={"username": "old.user", "password": "dompass"}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["display_name"] == "Справжнє Ім'я"
+
+    async def test_admin_set_display_name_not_overwritten(
+        self, anon_client, seed_users, monkeypatch, mocker
+    ):
+        monkeypatch.setenv("LDAP_ENABLED", "true")
+        monkeypatch.setenv("AUTO_LOGIN", "true")
+        self._bind(mocker, True, display_name="Ім'я з AD")
+
+        await _insert_user(
+            username="custom.user", display_name="Ім'я від адміна",
+            role="viewer", active=True, password_hash=None,
+        )
+        resp = await anon_client.post(
+            "/auth/login", json={"username": "custom.user", "password": "dompass"}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["display_name"] == "Ім'я від адміна"
 
     async def test_without_auto_login_creates_pending_inactive(
         self, anon_client, seed_users, monkeypatch, mocker

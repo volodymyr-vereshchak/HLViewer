@@ -302,34 +302,44 @@ async def login(
     #    users are auto-provisioned: with AUTO_LOGIN they enter immediately
     #    as an unrestricted viewer; without it the record is created inactive
     #    and waits for an admin to activate it and assign role/branches.
-    if ldap_enabled() and ldap_authenticate(uname, body.password):
-        if user:
-            if not user.active:
+    if ldap_enabled():
+        ldap_ok, ldap_name = ldap_authenticate(uname, body.password)
+        if ldap_ok:
+            if user:
+                if not user.active:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Доступ не надано. Зверніться до адміністратора",
+                    )
+                # Backfill the AD display name for accounts that never got one
+                # (auto-provisioned before the lookup existed, or created by an
+                # admin with the bare login). Admin-set names are kept.
+                if ldap_name and (not user.display_name or user.display_name == user.username):
+                    user.display_name = ldap_name
+                    session.add(user)
+                    await session.commit()
+                    await session.refresh(user)  # re-load onupdate columns (updated_at)
+                return await _issue_session(session, user, response, body.remember_me)
+
+            auto_viewer = os.getenv("AUTO_LOGIN", "false").lower() == "true"
+            user = AppUser(
+                username=uname,
+                display_name=ldap_name or body.username.strip(),
+                password_hash=None,
+                role="viewer",
+                active=auto_viewer,
+            )
+            session.add(user)
+            await session.commit()
+            await session.refresh(user)
+            logger.info(f"LDAP auto-provisioned user '{uname}' (active={auto_viewer})")
+
+            if not auto_viewer:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Доступ не надано. Зверніться до адміністратора",
+                    detail="Обліковий запис створено. Зверніться до адміністратора для надання прав",
                 )
             return await _issue_session(session, user, response, body.remember_me)
-
-        auto_viewer = os.getenv("AUTO_LOGIN", "false").lower() == "true"
-        user = AppUser(
-            username=uname,
-            display_name=body.username.strip(),
-            password_hash=None,
-            role="viewer",
-            active=auto_viewer,
-        )
-        session.add(user)
-        await session.commit()
-        await session.refresh(user)
-        logger.info(f"LDAP auto-provisioned user '{uname}' (active={auto_viewer})")
-
-        if not auto_viewer:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Обліковий запис створено. Зверніться до адміністратора для надання прав",
-            )
-        return await _issue_session(session, user, response, body.remember_me)
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
