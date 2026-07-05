@@ -96,8 +96,10 @@ AUTO_LOGIN=true
 # Існуючий запис у БД завжди має пріоритет: деактивований користувач НЕ ввійде
 # навіть із вірним доменним паролем.
 #
-# Значення LDAP_SERVER/LDAP_DOMAIN можна отримати скриптом scripts/get-ldap-info.bat,
-# запущеним на будь-якій доменній Windows-машині.
+# Значення LDAP_SERVER/LDAP_DOMAIN можна дізнатися на будь-якій доменній
+# Windows-машині: nltest /dsgetdc:%USERDNSDOMAIN% покаже контролер домену,
+# а `whoami /upn` — UPN-суфікс (частина після @; саме він іде в LDAP_DOMAIN
+# і може ВІДРІЗНЯТИСЯ від DNS-імені домену).
 LDAP_ENABLED=false
 # Адреса контролера домену: ldap://dc.example.local або ldaps://dc.example.local:636
 LDAP_SERVER=
