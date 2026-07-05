@@ -1,10 +1,11 @@
 from fastapi import APIRouter, Depends, status, HTTPException
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.api.endpoints.auth_ep import get_branch_filter, get_current_user
+from backend.api.endpoints.auth_ep import get_branch_filter
 from backend.db.dao.custom_exceptions import DatabaseIntegrityError
 from backend.db.dao.gas_volume_calc_dao import GasVolumeCalcDao
-from backend.db.engine import async_session_factory
+from backend.db.engine import get_session
 from backend.db.models import GasVolumeCalcList, GasVolumeCalcCreate
 from backend.db.models.gas_volume_calc_model import GasVolumeCalc, GasVolumeCalcUpdate
 
@@ -49,47 +50,49 @@ class GasVolumeCalcRouter:
         self,
         lumg_id: int = None,
         branch_ids: list[int] | None = Depends(get_branch_filter),
+        session: AsyncSession = Depends(get_session),
     ):
-        async with async_session_factory() as session:
-            dao = GasVolumeCalcDao(session=session)
-            calcs = await dao.get_flow_by_lumg_id(lumg_id)
-            if branch_ids is not None:
-                from sqlmodel import select
-                from backend.db.models.lumg_model import Lumg
-                allowed_lumg_ids = set((await session.execute(
-                    select(Lumg.id).where(Lumg.branch_id.in_(branch_ids))
-                )).scalars())
-                calcs = [c for c in calcs if c.lumg_id in allowed_lumg_ids]
-            return calcs
+        dao = GasVolumeCalcDao(session=session)
+        calcs = await dao.get_flow_by_lumg_id(lumg_id)
+        if branch_ids is not None:
+            from sqlmodel import select
+            from backend.db.models.lumg_model import Lumg
+            allowed_lumg_ids = set((await session.execute(
+                select(Lumg.id).where(Lumg.branch_id.in_(branch_ids))
+            )).scalars())
+            calcs = [c for c in calcs if c.lumg_id in allowed_lumg_ids]
+        return calcs
 
-    async def create_gas_volume_calc(self, gvc: GasVolumeCalcCreate):
+    async def create_gas_volume_calc(
+        self, gvc: GasVolumeCalcCreate, session: AsyncSession = Depends(get_session)
+    ):
         try:
-            async with async_session_factory() as session:
-                gas_volume_calc = await GasVolumeCalcDao(session=session).create_item(
-                    gvc
-                )
+            gas_volume_calc = await GasVolumeCalcDao(session=session).create_item(gvc)
         except DatabaseIntegrityError as e:
             raise HTTPException(status_code=409, detail=str(e))
         return gas_volume_calc
 
     async def update_gas_volume_calc(
-        self, gas_volume_calc_id: int, gas_volume_calc: GasVolumeCalcUpdate
+        self,
+        gas_volume_calc_id: int,
+        gas_volume_calc: GasVolumeCalcUpdate,
+        session: AsyncSession = Depends(get_session),
     ):
-        async with async_session_factory() as session:
-            gas_volume_calc_db = await GasVolumeCalcDao(session=session).update_by_id(
-                gas_volume_calc_id, gas_volume_calc
-            )
+        gas_volume_calc_db = await GasVolumeCalcDao(session=session).update_by_id(
+            gas_volume_calc_id, gas_volume_calc
+        )
         if not gas_volume_calc_db:
             raise HTTPException(status_code=404, detail="Gas volume calc not found")
         return gas_volume_calc_db
 
-    async def delete_gas_volume_calc(self, gas_volume_calc_id: int):
-        async with async_session_factory() as session:
-            exists = await session.get(GasVolumeCalc, gas_volume_calc_id)
-            if not exists:
-                raise HTTPException(status_code=404, detail="Gas volume calc not found")
-            await session.execute(text("DELETE FROM gas_volume_calc WHERE id = :id"), {"id": gas_volume_calc_id})
-            await session.commit()
+    async def delete_gas_volume_calc(
+        self, gas_volume_calc_id: int, session: AsyncSession = Depends(get_session)
+    ):
+        exists = await session.get(GasVolumeCalc, gas_volume_calc_id)
+        if not exists:
+            raise HTTPException(status_code=404, detail="Gas volume calc not found")
+        await session.execute(text("DELETE FROM gas_volume_calc WHERE id = :id"), {"id": gas_volume_calc_id})
+        await session.commit()
 
 
 gas_volume_calc_router = GasVolumeCalcRouter().router

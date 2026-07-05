@@ -11,9 +11,10 @@ from datetime import datetime
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.endpoints.auth_ep import get_current_user
-from backend.db.engine import async_session_factory
+from backend.db.engine import get_session
 from backend.services.virtual_lines_aggregator import aggregate_to_virtual_lines
 from backend.services.virtual_lines_config import (
     get_active_virtual_lines_db,
@@ -46,6 +47,7 @@ class BaseVirtualArchiveRouter:
         from_date: datetime = Query(None, description="Start date/time"),
         to_date: datetime = Query(None, description="End date/time"),
         line_id: List[int] = Query(None, description="List of line IDs (virtual IDs supported)"),
+        session: AsyncSession = Depends(get_session),
     ):
         if not from_date or not to_date:
             raise HTTPException(status_code=400, detail="from_date and to_date are required")
@@ -55,11 +57,10 @@ class BaseVirtualArchiveRouter:
         if not line_id:
             line_id = []
 
-        async with async_session_factory() as session:
-            virtual_lines = await get_active_virtual_lines_db(session)
-            physical_line_ids = await resolve_virtual_to_physical_db(line_id, session)
-            archive_dao = self.archive_dao(session=session)
-            archives = await archive_dao.get_range(from_date, to_date, physical_line_ids)
+        virtual_lines = await get_active_virtual_lines_db(session)
+        physical_line_ids = await resolve_virtual_to_physical_db(line_id, session)
+        archive_dao = self.archive_dao(session=session)
+        archives = await archive_dao.get_range(from_date, to_date, physical_line_ids)
 
         has_virtual = any(str(lid) in virtual_lines for lid in line_id)
         if has_virtual:

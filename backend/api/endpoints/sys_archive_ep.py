@@ -1,11 +1,12 @@
 from datetime import datetime
 
 from fastapi import Depends, HTTPException, Query
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.endpoints.auth_ep import get_allowed_line_ids
 from backend.api.endpoints.base_archive_ep import BaseArchiveRouter
 from backend.db.dao.sys_archive_dao import SysArchiveDao
-from backend.db.engine import async_session_factory
+from backend.db.engine import get_session
 from backend.db.models import SysArchiveEndpointList
 from backend.db.models.sys_archive_model import SysGroupedItem
 
@@ -43,17 +44,17 @@ class SysArchiveRouter(BaseArchiveRouter):
         order_by: str = Query("period"),
         order_dir: str = Query("asc"),
         allowed_line_ids: list[int] | None = Depends(get_allowed_line_ids),
+        session: AsyncSession = Depends(get_session),
     ):
         self._check_dates(from_date, to_date)
         line_id = self._scope_line_ids(line_id, allowed_line_ids)
         if self._scope_is_empty(line_id):
             return {"total": 0, "items": []}
-        async with async_session_factory() as session:
-            dao = SysArchiveDao(session=session)
-            return await dao.get_range_paged(
-                from_date, to_date, line_id,
-                skip=skip, limit=limit, order_by=order_by, order_dir=order_dir,
-            )
+        dao = SysArchiveDao(session=session)
+        return await dao.get_range_paged(
+            from_date, to_date, line_id,
+            skip=skip, limit=limit, order_by=order_by, order_dir=order_dir,
+        )
 
     async def _get_grouped(
         self,
@@ -61,6 +62,7 @@ class SysArchiveRouter(BaseArchiveRouter):
         to_date: datetime = Query(None),
         line_id: list[int] = Query(None),
         allowed_line_ids: list[int] | None = Depends(get_allowed_line_ids),
+        session: AsyncSession = Depends(get_session),
     ):
         if not from_date or not to_date:
             raise HTTPException(status_code=400, detail="from_date and to_date are required")
@@ -71,9 +73,8 @@ class SysArchiveRouter(BaseArchiveRouter):
         line_id = self._scope_line_ids(line_id, allowed_line_ids)
         if self._scope_is_empty(line_id):
             return []
-        async with async_session_factory() as session:
-            dao = SysArchiveDao(session=session)
-            return await dao.get_grouped(from_date, to_date, line_id)
+        dao = SysArchiveDao(session=session)
+        return await dao.get_grouped(from_date, to_date, line_id)
 
 
 sys_router = SysArchiveRouter().router

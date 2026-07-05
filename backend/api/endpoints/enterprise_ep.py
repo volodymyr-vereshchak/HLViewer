@@ -12,9 +12,10 @@ from fastapi import APIRouter, Depends, Query, status, HTTPException, UploadFile
 from backend.api.endpoints.auth_ep import get_branch_filter
 from fastapi.responses import StreamingResponse
 
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from backend.db.engine import async_session_factory
+from backend.db.engine import get_session
 from backend.db.dao.enterprise_dao import EnterpriseDao
 from backend.db.models.enterprise_model import EnterpriseRead, EnterpriseCreate, EnterpriseUpdate
 from backend.db.models.enterprise_models import (
@@ -99,6 +100,7 @@ class EnterpriseRouter:
         mfDev: Optional[int] = Query(None, description="Optional: Manufacturer code"),
         typeDev: Optional[int] = Query(None, description="Optional: Device type code"),
         chNum: Optional[int] = Query(None, description="Optional: Filter by device channel number"),
+        session: AsyncSession = Depends(get_session),
     ) -> List[EnterpriseVolumeResponse]:
         logger.info(
             f"Fetching enterprise volumes for lines {line_id}, "
@@ -121,26 +123,25 @@ class EnterpriseRouter:
             )
 
         try:
-            async with async_session_factory() as session:
-                if line_id:
-                    devices = await get_devices_for_lines_db(line_id, session)
-                    if serNum is not None and chNum is not None:
-                        devices = [d for d in devices if d["serNum"] == serNum and d["chNum"] == chNum]
-                else:
-                    # No line_id — lookup by full device identity
-                    ent = await EnterpriseDao(session).get_by_device(serNum, mfDev, typeDev, chNum)
-                    if not ent:
-                        logger.warning(f"No enterprise found: serNum={serNum} mfDev={mfDev} typeDev={typeDev} chNum={chNum}")
-                        return []
-                    devices = [{
-                        "line_id": ent.line_id,
-                        "branch_id": ent.branch_id,
-                        "serNum": ent.ser_num,
-                        "mfDev": ent.mf_dev,
-                        "typeDev": ent.type_dev,
-                        "chNum": ent.ch_num,
-                        "enterprise_name": ent.enterprise_name,
-                    }]
+            if line_id:
+                devices = await get_devices_for_lines_db(line_id, session)
+                if serNum is not None and chNum is not None:
+                    devices = [d for d in devices if d["serNum"] == serNum and d["chNum"] == chNum]
+            else:
+                # No line_id — lookup by full device identity
+                ent = await EnterpriseDao(session).get_by_device(serNum, mfDev, typeDev, chNum)
+                if not ent:
+                    logger.warning(f"No enterprise found: serNum={serNum} mfDev={mfDev} typeDev={typeDev} chNum={chNum}")
+                    return []
+                devices = [{
+                    "line_id": ent.line_id,
+                    "branch_id": ent.branch_id,
+                    "serNum": ent.ser_num,
+                    "mfDev": ent.mf_dev,
+                    "typeDev": ent.type_dev,
+                    "chNum": ent.ch_num,
+                    "enterprise_name": ent.enterprise_name,
+                }]
         except Exception as e:
             logger.error(f"Error loading enterprise mappings from DB: {e}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
@@ -230,43 +231,45 @@ _crud_router = APIRouter(tags=["enterprise"])
     response_model=List[EnterpriseRead],
     summary="List all enterprises (DB)",
 )
-async def list_enterprises(branch_ids: list[int] | None = Depends(get_branch_filter)):
+async def list_enterprises(
+    branch_ids: list[int] | None = Depends(get_branch_filter),
+    session: AsyncSession = Depends(get_session),
+):
     from sqlalchemy import asc
     from backend.db.models.enterprise_model import Enterprise
     from backend.db.models.device_catalog_model import CorectorType, Manufacturer
 
-    async with async_session_factory() as session:
-        stmt = (
-            select(
-                Enterprise,
-                CorectorType.type_dev,
-                CorectorType.model_name,
-                Manufacturer.mf_dev,
-                Manufacturer.short_name,
-            )
-            .outerjoin(CorectorType, Enterprise.corector_type_id == CorectorType.id)
-            .outerjoin(Manufacturer, CorectorType.manufacturer_id == Manufacturer.id)
-            .order_by(
-                asc(Enterprise.line_id.is_(None)),
-                asc(Enterprise.line_id),
-                asc(Enterprise.enterprise_name),
-            )
+    stmt = (
+        select(
+            Enterprise,
+            CorectorType.type_dev,
+            CorectorType.model_name,
+            Manufacturer.mf_dev,
+            Manufacturer.short_name,
         )
-        if branch_ids is not None:
-            stmt = stmt.where(Enterprise.branch_id.in_(branch_ids))
+        .outerjoin(CorectorType, Enterprise.corector_type_id == CorectorType.id)
+        .outerjoin(Manufacturer, CorectorType.manufacturer_id == Manufacturer.id)
+        .order_by(
+            asc(Enterprise.line_id.is_(None)),
+            asc(Enterprise.line_id),
+            asc(Enterprise.enterprise_name),
+        )
+    )
+    if branch_ids is not None:
+        stmt = stmt.where(Enterprise.branch_id.in_(branch_ids))
 
-        rows = (await session.execute(stmt)).all()
-        result = []
-        for ent, ct_type_dev, ct_model, mfr_mf_dev, mfr_short in rows:
-            linked = ent.corector_type_id is not None
-            data = ent.model_dump()
-            # Surface EFFECTIVE device codes (catalog when linked, else legacy).
-            data["mf_dev"] = mfr_mf_dev if linked else ent.mf_dev
-            data["type_dev"] = ct_type_dev if linked else ent.type_dev
-            data["model_name"] = ct_model
-            data["manufacturer_short_name"] = mfr_short
-            result.append(EnterpriseRead(**data))
-        return result
+    rows = (await session.execute(stmt)).all()
+    result = []
+    for ent, ct_type_dev, ct_model, mfr_mf_dev, mfr_short in rows:
+        linked = ent.corector_type_id is not None
+        data = ent.model_dump()
+        # Surface EFFECTIVE device codes (catalog when linked, else legacy).
+        data["mf_dev"] = mfr_mf_dev if linked else ent.mf_dev
+        data["type_dev"] = ct_type_dev if linked else ent.type_dev
+        data["model_name"] = ct_model
+        data["manufacturer_short_name"] = mfr_short
+        result.append(EnterpriseRead(**data))
+    return result
 
 
 @_crud_router.post(
@@ -275,10 +278,9 @@ async def list_enterprises(branch_ids: list[int] | None = Depends(get_branch_fil
     status_code=status.HTTP_201_CREATED,
     summary="Create enterprise (DB)",
 )
-async def create_enterprise(data: EnterpriseCreate):
-    async with async_session_factory() as session:
-        dao = EnterpriseDao(session=session)
-        return await dao.create(data)
+async def create_enterprise(data: EnterpriseCreate, session: AsyncSession = Depends(get_session)):
+    dao = EnterpriseDao(session=session)
+    return await dao.create(data)
 
 
 @_crud_router.patch(
@@ -286,10 +288,11 @@ async def create_enterprise(data: EnterpriseCreate):
     response_model=EnterpriseRead,
     summary="Update enterprise (DB)",
 )
-async def update_enterprise(enterprise_id: int, data: EnterpriseUpdate):
-    async with async_session_factory() as session:
-        dao = EnterpriseDao(session=session)
-        item = await dao.update(enterprise_id, data)
+async def update_enterprise(
+    enterprise_id: int, data: EnterpriseUpdate, session: AsyncSession = Depends(get_session)
+):
+    dao = EnterpriseDao(session=session)
+    item = await dao.update(enterprise_id, data)
     if not item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Enterprise not found")
     return item
@@ -300,10 +303,9 @@ async def update_enterprise(enterprise_id: int, data: EnterpriseUpdate):
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete enterprise (DB)",
 )
-async def delete_enterprise(enterprise_id: int):
-    async with async_session_factory() as session:
-        dao = EnterpriseDao(session=session)
-        deleted = await dao.delete(enterprise_id)
+async def delete_enterprise(enterprise_id: int, session: AsyncSession = Depends(get_session)):
+    dao = EnterpriseDao(session=session)
+    deleted = await dao.delete(enterprise_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Enterprise not found")
 

@@ -3,12 +3,13 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, status, HTTPException
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from backend.api.endpoints.auth_ep import get_current_user, require_admin
 from backend.db.dao.custom_exceptions import DatabaseIntegrityError
 from backend.db.dao.gas_volume_calc_type_dao import GasVolumeCalcTypeDao
-from backend.db.engine import DbEngine, async_session_factory
+from backend.db.engine import get_session
 from backend.db.models import GasVolumeCalcTypeCreate, GasVolumeCalcTypeList
 from backend.db.models.gas_volume_calc_type_model import GasVolumeCalcType, GasVolumeCalcTypeUpdate
 from backend.db.models.sys_type_model import SysType
@@ -59,57 +60,63 @@ class GasVolumeCalcTypeRouter:
             status_code=status.HTTP_200_OK,
         )
 
-    async def get_gvct(self):
-        async with async_session_factory() as session:
-            gvct = await GasVolumeCalcTypeDao(session=session).get_all()
+    async def get_gvct(self, session: AsyncSession = Depends(get_session)):
+        gvct = await GasVolumeCalcTypeDao(session=session).get_all()
         return gvct
 
-    async def create_gvct(self, gvct: GasVolumeCalcTypeCreate):
+    async def create_gvct(
+        self, gvct: GasVolumeCalcTypeCreate, session: AsyncSession = Depends(get_session)
+    ):
         try:
-            async with async_session_factory() as session:
-                gvct = await GasVolumeCalcTypeDao(session=session).create_item(gvct)
+            gvct = await GasVolumeCalcTypeDao(session=session).create_item(gvct)
         except DatabaseIntegrityError as e:
             raise HTTPException(status_code=409, detail=str(e))
         return gvct
 
-    async def update_gvct(self, gvct_id: int, gvct: GasVolumeCalcTypeUpdate):
-        async with async_session_factory() as session:
-            gvct_db = await GasVolumeCalcTypeDao(session=session).update_by_id(
-                gvct_id, gvct
-            )
+    async def update_gvct(
+        self,
+        gvct_id: int,
+        gvct: GasVolumeCalcTypeUpdate,
+        session: AsyncSession = Depends(get_session),
+    ):
+        gvct_db = await GasVolumeCalcTypeDao(session=session).update_by_id(
+            gvct_id, gvct
+        )
         if not gvct_db:
             raise HTTPException(
                 status_code=404, detail="Type of gas volume calc not found"
             )
         return gvct_db
 
-    async def delete_gvct(self, gvct_id: int):
-        async with async_session_factory() as session:
-            exists = await session.get(GasVolumeCalcType, gvct_id)
-            if not exists:
-                raise HTTPException(
-                    status_code=404, detail="Type of gas volume calc not found"
-                )
-            # Raw SQL so PostgreSQL handles CASCADE at DB level (not ORM which
-            # would load all related GasVolumeCalc → Line → archive rows into memory)
-            await session.execute(
-                text("DELETE FROM gas_vol_calc_type WHERE id = :id"), {"id": gvct_id}
+    async def delete_gvct(self, gvct_id: int, session: AsyncSession = Depends(get_session)):
+        exists = await session.get(GasVolumeCalcType, gvct_id)
+        if not exists:
+            raise HTTPException(
+                status_code=404, detail="Type of gas volume calc not found"
             )
-            await session.commit()
+        # Raw SQL so PostgreSQL handles CASCADE at DB level (not ORM which
+        # would load all related GasVolumeCalc → Line → archive rows into memory)
+        await session.execute(
+            text("DELETE FROM gas_vol_calc_type WHERE id = :id"), {"id": gvct_id}
+        )
+        await session.commit()
         return {"ok": True}
 
 
-    async def export_preload_json(self, user: AppUser = Depends(require_admin)):
-        async with async_session_factory() as session:
-            calc_types = (await session.execute(
-                select(GasVolumeCalcType).order_by(GasVolumeCalcType.type_id)
-            )).scalars().all()
-            sys_types = (await session.execute(
-                select(SysType).order_by(SysType.gas_volume_calc_type_id, SysType.sys_type_id)
-            )).scalars().all()
-            edit_types = (await session.execute(
-                select(EditType).order_by(EditType.gas_volume_calc_type_id, EditType.edit_type_id)
-            )).scalars().all()
+    async def export_preload_json(
+        self,
+        user: AppUser = Depends(require_admin),
+        session: AsyncSession = Depends(get_session),
+    ):
+        calc_types = (await session.execute(
+            select(GasVolumeCalcType).order_by(GasVolumeCalcType.type_id)
+        )).scalars().all()
+        sys_types = (await session.execute(
+            select(SysType).order_by(SysType.gas_volume_calc_type_id, SysType.sys_type_id)
+        )).scalars().all()
+        edit_types = (await session.execute(
+            select(EditType).order_by(EditType.gas_volume_calc_type_id, EditType.edit_type_id)
+        )).scalars().all()
 
         base = Path("backend/db/preload_db")
         flowtype = {"FLOWTYPE": [{"ID_TYPE": c.type_id, "TYPENAME": c.type_name} for c in calc_types]}

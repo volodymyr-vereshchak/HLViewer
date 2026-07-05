@@ -12,11 +12,12 @@ from typing import Optional, Type
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import create_model
 from sqlalchemy import String, cast, func, or_
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from backend.api.endpoints.auth_ep import get_current_user
 from backend.db.dao.custom_exceptions import DatabaseIntegrityError
-from backend.db.engine import async_session_factory
+from backend.db.engine import get_session
 
 
 def make_type_router(
@@ -48,49 +49,48 @@ def make_type_router(
         search: Optional[str] = None,
         skip: int = 0,
         limit: int = 50,
+        session: AsyncSession = Depends(get_session),
     ):
-        async with async_session_factory() as session:
-            base_q = select(model)
-            if calc_type_id is not None:
-                base_q = base_q.where(model.gas_volume_calc_type_id == calc_type_id)
-            if search:
-                base_q = base_q.where(or_(
-                    name_col.ilike(f"%{search}%"),
-                    cast(type_id_col, String).ilike(f"%{search}%"),
-                ))
+        base_q = select(model)
+        if calc_type_id is not None:
+            base_q = base_q.where(model.gas_volume_calc_type_id == calc_type_id)
+        if search:
+            base_q = base_q.where(or_(
+                name_col.ilike(f"%{search}%"),
+                cast(type_id_col, String).ilike(f"%{search}%"),
+            ))
 
-            total = (
-                await session.execute(select(func.count()).select_from(base_q.subquery()))
-            ).scalar_one()
-            result = await session.execute(
-                base_q.order_by(model.gas_volume_calc_type_id, type_id_col)
-                .offset(skip).limit(limit)
-            )
-            items = result.scalars().all()
+        total = (
+            await session.execute(select(func.count()).select_from(base_q.subquery()))
+        ).scalar_one()
+        result = await session.execute(
+            base_q.order_by(model.gas_volume_calc_type_id, type_id_col)
+            .offset(skip).limit(limit)
+        )
+        items = result.scalars().all()
 
         return {"total": total, "items": items}
 
     @router.post("/", response_model=list_model_cls, status_code=status.HTTP_201_CREATED)
-    async def create_type(body: create_model_cls):
+    async def create_type(body: create_model_cls, session: AsyncSession = Depends(get_session)):
         try:
-            async with async_session_factory() as session:
-                entry = await dao_cls(session=session).create_item(body)
+            entry = await dao_cls(session=session).create_item(body)
         except DatabaseIntegrityError as e:
             raise HTTPException(status_code=409, detail=str(e))
         return entry
 
     @router.patch("/{type_db_id}", response_model=list_model_cls)
-    async def update_type(type_db_id: int, body: update_model_cls):
-        async with async_session_factory() as session:
-            entry = await dao_cls(session=session).update_by_id(type_db_id, body)
+    async def update_type(
+        type_db_id: int, body: update_model_cls, session: AsyncSession = Depends(get_session)
+    ):
+        entry = await dao_cls(session=session).update_by_id(type_db_id, body)
         if not entry:
             raise HTTPException(status_code=404, detail=not_found)
         return entry
 
     @router.delete("/{type_db_id}", status_code=status.HTTP_204_NO_CONTENT)
-    async def delete_type(type_db_id: int):
-        async with async_session_factory() as session:
-            deleted = await dao_cls(session=session).delete_item(type_db_id)
+    async def delete_type(type_db_id: int, session: AsyncSession = Depends(get_session)):
+        deleted = await dao_cls(session=session).delete_item(type_db_id)
         if not deleted:
             raise HTTPException(status_code=404, detail=not_found)
 

@@ -7,11 +7,12 @@ Uses DB-backed virtual line data; falls back to JSON config when DB is empty.
 
 from fastapi import APIRouter, Depends, status, HTTPException
 from typing import List
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 from sqlalchemy import delete as sa_delete
 
 from backend.api.endpoints.auth_ep import get_current_user
-from backend.db.engine import async_session_factory
+from backend.db.engine import get_session
 from backend.db.dao.line_dao import LineDao
 from backend.db.models.grmu_branch_model import (
     VirtualLine,
@@ -106,24 +107,25 @@ class VirtualLinesRouter:
             summary="Delete virtual line",
         )
 
-    async def get_visible_lines(self) -> List[VisibleLineResponse]:
+    async def get_visible_lines(
+        self, session: AsyncSession = Depends(get_session)
+    ) -> List[VisibleLineResponse]:
         """
         Get list of lines visible in frontend.
 
         Tries DB virtual lines first; falls back to JSON file if none exist.
         """
-        async with async_session_factory() as session:
-            # Try DB-backed virtual lines
-            db_virtual_lines = await get_active_virtual_lines_db(session)
+        # Try DB-backed virtual lines
+        db_virtual_lines = await get_active_virtual_lines_db(session)
 
-            if db_virtual_lines:
-                physical_in_rings = await get_physical_lines_in_rings_db(session)
-            else:
-                # Fallback: JSON file
-                db_virtual_lines = get_active_virtual_lines()
-                physical_in_rings = get_physical_lines_in_rings()
+        if db_virtual_lines:
+            physical_in_rings = await get_physical_lines_in_rings_db(session)
+        else:
+            # Fallback: JSON file
+            db_virtual_lines = get_active_virtual_lines()
+            physical_in_rings = get_physical_lines_in_rings()
 
-            all_physical_lines = await LineDao(session=session).get_all()
+        all_physical_lines = await LineDao(session=session).get_all()
 
         result = []
 
@@ -159,15 +161,15 @@ class VirtualLinesRouter:
         result.sort(key=lambda x: x.id)
         return result
 
-    async def validate_configuration(self) -> VirtualLinesValidationResponse:
+    async def validate_configuration(
+        self, session: AsyncSession = Depends(get_session)
+    ) -> VirtualLinesValidationResponse:
         """Validate virtual lines configuration (DB-backed with JSON fallback)."""
         try:
-            async with async_session_factory() as session:
-                db_virtual_lines = await get_active_virtual_lines_db(session)
+            db_virtual_lines = await get_active_virtual_lines_db(session)
 
             if db_virtual_lines:
-                async with async_session_factory() as session:
-                    validation_result = await validate_config_db(session)
+                validation_result = await validate_config_db(session)
             else:
                 validation_result = validate_config()
 
@@ -182,76 +184,77 @@ class VirtualLinesRouter:
         self,
         include_in_trends: bool = None,
         branch_id: int = None,
+        session: AsyncSession = Depends(get_session),
     ) -> List[VirtualLineList]:
         """List all virtual lines with their physical line members."""
-        async with async_session_factory() as session:
-            stmt = select(VirtualLine)
-            if include_in_trends is not None:
-                stmt = stmt.where(VirtualLine.include_in_trends == include_in_trends)
-            if branch_id is not None:
-                stmt = stmt.where(VirtualLine.branch_id == branch_id)
-            result = await session.execute(stmt)
-            vlines = result.scalars().all()
-            out = []
-            for vl in vlines:
-                members = await session.execute(
-                    select(VirtualLineMember).where(
-                        VirtualLineMember.virtual_line_id == vl.id
-                    ).order_by(VirtualLineMember.sort_order)
-                )
-                physical_ids = [m.line_id for m in members.scalars().all()]
-                item = VirtualLineList(
-                    **vl.model_dump(exclude={"members", "branch", "lumg"}),
-                    physical_line_ids=physical_ids,
-                )
-                out.append(item)
-            return out
+        stmt = select(VirtualLine)
+        if include_in_trends is not None:
+            stmt = stmt.where(VirtualLine.include_in_trends == include_in_trends)
+        if branch_id is not None:
+            stmt = stmt.where(VirtualLine.branch_id == branch_id)
+        result = await session.execute(stmt)
+        vlines = result.scalars().all()
+        out = []
+        for vl in vlines:
+            members = await session.execute(
+                select(VirtualLineMember).where(
+                    VirtualLineMember.virtual_line_id == vl.id
+                ).order_by(VirtualLineMember.sort_order)
+            )
+            physical_ids = [m.line_id for m in members.scalars().all()]
+            item = VirtualLineList(
+                **vl.model_dump(exclude={"members", "branch", "lumg"}),
+                physical_line_ids=physical_ids,
+            )
+            out.append(item)
+        return out
 
-    async def create(self, data: VirtualLineCreate) -> VirtualLineList:
+    async def create(
+        self, data: VirtualLineCreate, session: AsyncSession = Depends(get_session)
+    ) -> VirtualLineList:
         """Create a new virtual line with physical line members."""
-        async with async_session_factory() as session:
-            vl = VirtualLine(**data.model_dump(exclude={"physical_line_ids"}))
-            session.add(vl)
-            await session.flush()
-            for lid in data.physical_line_ids:
-                session.add(VirtualLineMember(virtual_line_id=vl.id, line_id=lid))
-            await session.commit()
-            await session.refresh(vl)
-            return VirtualLineList(
-                **vl.model_dump(exclude={"members", "branch", "lumg"}),
-                physical_line_ids=data.physical_line_ids,
-            )
+        vl = VirtualLine(**data.model_dump(exclude={"physical_line_ids"}))
+        session.add(vl)
+        await session.flush()
+        for lid in data.physical_line_ids:
+            session.add(VirtualLineMember(virtual_line_id=vl.id, line_id=lid))
+        await session.commit()
+        await session.refresh(vl)
+        return VirtualLineList(
+            **vl.model_dump(exclude={"members", "branch", "lumg"}),
+            physical_line_ids=data.physical_line_ids,
+        )
 
-    async def update(self, vl_id: int, data: VirtualLineCreate) -> VirtualLineList:
+    async def update(
+        self, vl_id: int, data: VirtualLineCreate, session: AsyncSession = Depends(get_session)
+    ) -> VirtualLineList:
         """Update a virtual line and replace its physical line members."""
-        async with async_session_factory() as session:
-            vl = await session.get(VirtualLine, vl_id)
-            if not vl:
-                raise HTTPException(status_code=404, detail="Virtual line not found")
-            for k, v in data.model_dump(exclude={"physical_line_ids"}).items():
-                setattr(vl, k, v)
-            await session.execute(
-                sa_delete(VirtualLineMember).where(
-                    VirtualLineMember.virtual_line_id == vl_id
-                )
+        vl = await session.get(VirtualLine, vl_id)
+        if not vl:
+            raise HTTPException(status_code=404, detail="Virtual line not found")
+        for k, v in data.model_dump(exclude={"physical_line_ids"}).items():
+            setattr(vl, k, v)
+        await session.execute(
+            sa_delete(VirtualLineMember).where(
+                VirtualLineMember.virtual_line_id == vl_id
             )
-            for lid in data.physical_line_ids:
-                session.add(VirtualLineMember(virtual_line_id=vl_id, line_id=lid))
-            await session.commit()
-            await session.refresh(vl)
-            return VirtualLineList(
-                **vl.model_dump(exclude={"members", "branch", "lumg"}),
-                physical_line_ids=data.physical_line_ids,
-            )
+        )
+        for lid in data.physical_line_ids:
+            session.add(VirtualLineMember(virtual_line_id=vl_id, line_id=lid))
+        await session.commit()
+        await session.refresh(vl)
+        return VirtualLineList(
+            **vl.model_dump(exclude={"members", "branch", "lumg"}),
+            physical_line_ids=data.physical_line_ids,
+        )
 
-    async def delete_vl(self, vl_id: int):
+    async def delete_vl(self, vl_id: int, session: AsyncSession = Depends(get_session)):
         """Delete a virtual line and its members."""
-        async with async_session_factory() as session:
-            vl = await session.get(VirtualLine, vl_id)
-            if not vl:
-                raise HTTPException(status_code=404, detail="Virtual line not found")
-            await session.delete(vl)
-            await session.commit()
+        vl = await session.get(VirtualLine, vl_id)
+        if not vl:
+            raise HTTPException(status_code=404, detail="Virtual line not found")
+        await session.delete(vl)
+        await session.commit()
 
 
 virtual_lines_router = VirtualLinesRouter().router

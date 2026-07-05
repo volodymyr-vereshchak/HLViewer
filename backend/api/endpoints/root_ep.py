@@ -1,9 +1,10 @@
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, BackgroundTasks, status, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.endpoints.auth_ep import get_current_user
-from backend.db.engine import async_session_factory
+from backend.db.engine import get_session
 from backend.db.preload_db.preload_db import preload_db
 from backend.hl_engine.main import update_hostlibs, update_direct
 from backend.hl_engine.hostlib_updater import HostlibUpdater
@@ -137,67 +138,65 @@ class RootRouter:
     async def update_status(self):
         return await self._read()
 
-    async def reset_update_status(self):
+    async def reset_update_status(self, session: AsyncSession = Depends(get_session)):
         """Force the job back to idle — instant manual recovery if it ever hangs."""
-        async with async_session_factory() as session:
-            await session.execute(
-                sa.text(
-                    """
-                    UPDATE update_job
-                    SET status = 'idle',
-                        error = 'Скинуто адміністратором',
-                        finished_at = now(),
-                        updated_at = now()
-                    WHERE id = 1
-                    """
-                )
+        await session.execute(
+            sa.text(
+                """
+                UPDATE update_job
+                SET status = 'idle',
+                    error = 'Скинуто адміністратором',
+                    finished_at = now(),
+                    updated_at = now()
+                WHERE id = 1
+                """
             )
-            await session.commit()
+        )
+        await session.commit()
         return await self._read()
 
-    async def get_report(self):
+    async def get_report(self, session: AsyncSession = Depends(get_session)):
         """Get gas volume report for the last 24 hours without updating hostlibs"""
         try:
             updater = HostlibUpdater()
-            async with async_session_factory() as session:
-                from backend.db.dao.hourly_archive_dao import HourlyArchiveDao
-                from backend.db.models import HourlyArchiveList
-                from backend.db.models.line_model import Line
-                from datetime import timedelta
-                from sqlmodel import select
-                import pandas as pd
+            from backend.db.dao.hourly_archive_dao import HourlyArchiveDao
+            from backend.db.models import HourlyArchiveList
+            from backend.db.models.line_model import Line
+            from datetime import timedelta
+            from sqlmodel import select
+            import pandas as pd
 
-                # Report covers the lines flagged include_in_report; the flag
-                # is_high_pressure switches the Pвх/Pвых label per line.
-                report_lines = (await session.execute(
-                    select(Line).where(Line.include_in_report == True)  # noqa: E712
-                )).scalars().all()
-                line_flags = {ln.id: ln.is_high_pressure for ln in report_lines}
-                if not line_flags:
-                    return {
-                        "message": "Немає ліній з увімкненим прапорцем «у звіт» (include_in_report)",
-                        "success": False,
-                    }
+            # Report covers the lines flagged include_in_report; the flag
+            # is_high_pressure switches the Pвх/Pвых label per line.
+            report_lines = (await session.execute(
+                select(Line).where(Line.include_in_report == True)  # noqa: E712
+            )).scalars().all()
+            line_flags = {ln.id: ln.is_high_pressure for ln in report_lines}
+            if not line_flags:
+                return {
+                    "message": "Немає ліній з увімкненим прапорцем «у звіт» (include_in_report)",
+                    "success": False,
+                }
 
-                # Получаем данные за последние 24 часа
-                end = await HourlyArchiveDao(session=session).get_last_period()
-                if end is None:
-                    return {"message": "Немає годинних даних для звіту", "success": False}
-                start = end - timedelta(hours=23)
-                result = await HourlyArchiveDao(session=session).get_range(
-                    from_date=start, to_date=end
-                )
+            # Получаем данные за последние 24 часа
+            end = await HourlyArchiveDao(session=session).get_last_period()
+            if end is None:
+                return {"message": "Немає годинних даних для звіту", "success": False}
+            start = end - timedelta(hours=23)
+            result = await HourlyArchiveDao(session=session).get_range(
+                from_date=start, to_date=end
+            )
 
-                # Конвертируем в DataFrame
-                extracted_data = [
-                    HourlyArchiveList(**vars(item)).model_dump() for item in result
-                ]
-                df = pd.DataFrame(extracted_data).sort_values("period")
+            # Конвертируем в DataFrame
+            extracted_data = [
+                HourlyArchiveList(**vars(item)).model_dump() for item in result
+            ]
+            df = pd.DataFrame(extracted_data).sort_values("period")
 
-                # Создаем сообщение
-                message = await updater.create_message(df, line_flags)
+            # Создаем сообщение
+            message = await updater.create_message(df, line_flags)
 
-                return {"message": message, "success": True}
+            return {"message": message, "success": True}
 
         except Exception as e:
             self.logger.error(f"Error generating report: {e}", exc_info=True)

@@ -1,8 +1,10 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from backend.api.endpoints.auth_ep import get_allowed_line_ids
-from backend.db.engine import DbEngine, async_session_factory
+from backend.db.engine import get_session
 
 
 class BaseArchiveRouter:
@@ -60,26 +62,29 @@ class BaseArchiveRouter:
         to_date: datetime = Query(None),
         line_id: list[int] = Query(None),
         allowed_line_ids: list[int] | None = Depends(get_allowed_line_ids),
+        session: AsyncSession = Depends(get_session),
     ):
         self._check_dates(from_date, to_date)
         line_id = self._scope_line_ids(line_id, allowed_line_ids)
         if self._scope_is_empty(line_id):
             return []
-        async with async_session_factory() as session:
-            archive_dao = self.archive_dao(session=session)
-            archives = await archive_dao.get_range(from_date, to_date, line_id)
-            return archives
+        archive_dao = self.archive_dao(session=session)
+        archives = await archive_dao.get_range(from_date, to_date, line_id)
+        return archives
 
-    async def get_last_period(self, line_id: list[int] = Query(None)):
+    async def get_last_period(
+        self,
+        line_id: list[int] = Query(None),
+        session: AsyncSession = Depends(get_session),
+    ):
         from sqlalchemy import func
         from sqlmodel import select
-        async with async_session_factory() as session:
-            dao = self.archive_dao(session=session)
-            stmt = select(func.max(dao.model.period))
-            if line_id:
-                stmt = stmt.where(dao.model.line_id.in_(line_id))
-            result = await session.execute(stmt)
-            period = result.scalar()
+        dao = self.archive_dao(session=session)
+        stmt = select(func.max(dao.model.period))
+        if line_id:
+            stmt = stmt.where(dao.model.line_id.in_(line_id))
+        result = await session.execute(stmt)
+        period = result.scalar()
         return {"last_period": period.isoformat() if period else None}
 
     async def get_archive_counts(
@@ -87,8 +92,8 @@ class BaseArchiveRouter:
         from_date: datetime = Query(None),
         to_date: datetime = Query(None),
         line_id: list[int] = Query(None),
+        session: AsyncSession = Depends(get_session),
     ):
-        async with async_session_factory() as session:
-            return await self.archive_dao(session=session).get_data_counts_by_hour(
-                from_date=from_date, to_date=to_date, line_id=line_id
-            )
+        return await self.archive_dao(session=session).get_data_counts_by_hour(
+            from_date=from_date, to_date=to_date, line_id=line_id
+        )

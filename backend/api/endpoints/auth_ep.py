@@ -18,11 +18,12 @@ import bcrypt
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from jose import JWTError, jwt
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
-from sqlalchemy import func
 
-from backend.db.engine import async_session_factory
-from backend.db.models.app_user_model import AppUser, AppUserBranchAccess, AppUserRead
+from backend.db.dao.app_user_dao import AppUserDao
+from backend.db.engine import get_session
+from backend.db.models.app_user_model import AppUser, AppUserRead
 from backend.db.models.lumg_model import Lumg
 from backend.db.models.gas_volume_calc_model import GasVolumeCalc
 from backend.db.models.line_model import Line
@@ -136,12 +137,8 @@ def _maybe_refresh_token(token: str) -> Optional[tuple[str, int]]:
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
-async def _build_user_read(user: AppUser) -> AppUserRead:
-    async with async_session_factory() as session:
-        result = await session.execute(
-            select(AppUserBranchAccess.branch_id).where(AppUserBranchAccess.user_id == user.id)
-        )
-        branch_ids = list(result.scalars().all())
+async def _build_user_read(session: AsyncSession, user: AppUser) -> AppUserRead:
+    branch_ids = await AppUserDao(session=session).branch_ids(user.id)
     return AppUserRead(
         id=user.id,
         username=user.username,
@@ -177,17 +174,17 @@ async def get_token_claims(hlviewer_token: Optional[str] = Cookie(default=None))
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
 
-async def get_current_user(claims: dict = Depends(get_token_claims)) -> AppUser:
+async def get_current_user(
+    claims: dict = Depends(get_token_claims),
+    session: AsyncSession = Depends(get_session),
+) -> AppUser:
     """Dependency: validates the user from the token still exists and is active."""
     try:
         user_id = int(claims["sub"])
     except (KeyError, ValueError):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
-    async with async_session_factory() as session:
-        result = await session.execute(select(AppUser).where(AppUser.id == user_id))
-        user = result.scalar_one_or_none()
-
+    user = await AppUserDao(session=session).get_by_id(user_id)
     if not user or not user.active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
     return user
@@ -200,23 +197,10 @@ async def require_admin(user: AppUser = Depends(get_current_user)) -> AppUser:
     return user
 
 
-async def _other_active_admins(session, user_id: int) -> int:
-    """Count active admins besides `user_id` — the "never leave the system
-    without an active admin" guard used by update_user and delete_user."""
-    return (
-        await session.execute(
-            select(func.count()).select_from(AppUser).where(
-                AppUser.role == "admin",
-                AppUser.active == True,  # noqa: E712
-                AppUser.id != user_id,
-            )
-        )
-    ).scalar_one()
-
-
 async def get_branch_filter(
     user: AppUser = Depends(get_current_user),
     claims: dict = Depends(get_token_claims),
+    session: AsyncSession = Depends(get_session),
 ) -> list[int] | None:
     """None = no restrictions (admin, or viewer with no branch entries). list[int] = restricted.
 
@@ -232,37 +216,33 @@ async def get_branch_filter(
         branch_ids = claims["branches"]
         return None if not branch_ids else branch_ids
     # Legacy token (no claim) → read from DB
-    async with async_session_factory() as session:
-        result = await session.execute(
-            select(AppUserBranchAccess.branch_id).where(AppUserBranchAccess.user_id == user.id)
-        )
-        branch_ids = list(result.scalars().all())
+    branch_ids = await AppUserDao(session=session).branch_ids(user.id)
     return None if not branch_ids else branch_ids
 
 
 async def get_allowed_line_ids(
     branch_ids: list[int] | None = Depends(get_branch_filter),
+    session: AsyncSession = Depends(get_session),
 ) -> list[int] | None:
     """None = admin (no restrictions). list[int] = allowed line_ids for viewer."""
     if branch_ids is None:
         return None
     if not branch_ids:
         return []
-    async with async_session_factory() as session:
-        lumg_ids = list((await session.execute(
-            select(Lumg.id).where(Lumg.branch_id.in_(branch_ids))
-        )).scalars())
-        if not lumg_ids:
-            return []
-        calc_ids = list((await session.execute(
-            select(GasVolumeCalc.id).where(GasVolumeCalc.lumg_id.in_(lumg_ids))
-        )).scalars())
-        if not calc_ids:
-            return []
-        line_ids = list((await session.execute(
-            select(Line.id).where(Line.gas_volume_calc_id.in_(calc_ids))
-        )).scalars())
-        return line_ids
+    lumg_ids = list((await session.execute(
+        select(Lumg.id).where(Lumg.branch_id.in_(branch_ids))
+    )).scalars())
+    if not lumg_ids:
+        return []
+    calc_ids = list((await session.execute(
+        select(GasVolumeCalc.id).where(GasVolumeCalc.lumg_id.in_(lumg_ids))
+    )).scalars())
+    if not calc_ids:
+        return []
+    line_ids = list((await session.execute(
+        select(Line.id).where(Line.gas_volume_calc_id.in_(calc_ids))
+    )).scalars())
+    return line_ids
 
 
 # ── schemas ───────────────────────────────────────────────────────────────────
@@ -274,12 +254,12 @@ class LoginRequest(BaseModel):
 
 # ── endpoints ─────────────────────────────────────────────────────────────────
 @router.post("/login", response_model=AppUserRead)
-async def login(body: LoginRequest, response: Response):
-    async with async_session_factory() as session:
-        result = await session.execute(
-            select(AppUser).where(AppUser.username == body.username.strip().lower())
-        )
-        user = result.scalar_one_or_none()
+async def login(
+    body: LoginRequest,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    user = await AppUserDao(session=session).get_by_username(body.username.strip().lower())
 
     if not user or not user.password_hash or not _verify_password(body.password, user.password_hash):
         raise HTTPException(
@@ -290,7 +270,7 @@ async def login(body: LoginRequest, response: Response):
     if not user.active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Обліковий запис деактивовано")
 
-    user_read = await _build_user_read(user)
+    user_read = await _build_user_read(session, user)
     token = _create_token(
         user.id,
         remember_me=body.remember_me,
@@ -316,19 +296,21 @@ async def logout(response: Response):
 
 
 @router.get("/me", response_model=AppUserRead)
-async def get_me(request: Request, response: Response):
+async def get_me(
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    dao = AppUserDao(session=session)
+
     # 1. Try valid cookie
     token = request.cookies.get(COOKIE_NAME)
     if token:
         try:
             payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-            user_id = int(payload["sub"])
-            async with async_session_factory() as session:
-                user = (await session.execute(
-                    select(AppUser).where(AppUser.id == user_id)
-                )).scalar_one_or_none()
+            user = await dao.get_by_id(int(payload["sub"]))
             if user and user.active:
-                return await _build_user_read(user)
+                return await _build_user_read(session, user)
         except Exception:
             pass
 
@@ -336,12 +318,9 @@ async def get_me(request: Request, response: Response):
     if os.getenv("AUTO_LOGIN", "false").lower() == "true":
         default_username = os.getenv("DEFAULT_USERNAME")
         if default_username:
-            async with async_session_factory() as session:
-                default_user = (await session.execute(
-                    select(AppUser).where(AppUser.username == default_username)
-                )).scalar_one_or_none()
+            default_user = await dao.get_by_username(default_username)
             if default_user and default_user.active:
-                user_read = await _build_user_read(default_user)
+                user_read = await _build_user_read(session, default_user)
                 new_token = _create_token(
                     default_user.id,
                     role=default_user.role,
@@ -361,11 +340,12 @@ async def get_me(request: Request, response: Response):
 
 
 @router.get("/users", response_model=List[AppUserRead])
-async def list_users(admin: AppUser = Depends(require_admin)):
-    async with async_session_factory() as session:
-        result = await session.execute(select(AppUser).order_by(AppUser.username))
-        users = result.scalars().all()
-    return [await _build_user_read(u) for u in users]
+async def list_users(
+    admin: AppUser = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    users = await AppUserDao(session=session).get_all_ordered()
+    return [await _build_user_read(session, u) for u in users]
 
 
 class UserCreate(BaseModel):
@@ -393,123 +373,120 @@ def _generate_password(length: int = 10) -> str:
     return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
-async def _set_branch_access(session, user_id: int, branch_ids: list[int]):
-    existing = await session.execute(
-        select(AppUserBranchAccess).where(AppUserBranchAccess.user_id == user_id)
-    )
-    for row in existing.scalars().all():
-        await session.delete(row)
-    await session.flush()  # execute DELETEs before INSERTs to avoid unique constraint violation
-    for bid in branch_ids:
-        session.add(AppUserBranchAccess(user_id=user_id, branch_id=bid))
-
-
 @router.post("/users", response_model=UserCreateResponse)
-async def create_user(body: UserCreate, admin: AppUser = Depends(require_admin)):
+async def create_user(
+    body: UserCreate,
+    admin: AppUser = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
     plain_pw = body.password if body.password else _generate_password()
+    dao = AppUserDao(session=session)
 
-    async with async_session_factory() as session:
-        existing = (await session.execute(
-            select(AppUser).where(AppUser.username == body.username.strip().lower())
-        )).scalar_one_or_none()
-        if existing:
-            raise HTTPException(status_code=409, detail="Користувач вже існує")
+    if await dao.get_by_username(body.username.strip().lower()):
+        raise HTTPException(status_code=409, detail="Користувач вже існує")
 
-        user = AppUser(
-            username=body.username.strip().lower(),
-            display_name=body.display_name,
-            password_hash=hash_password(plain_pw),
-            role=body.role,
-            active=True,
-        )
-        session.add(user)
-        await session.flush()
-        await _set_branch_access(session, user.id, body.branch_ids)
-        await session.commit()
-        await session.refresh(user)
+    user = AppUser(
+        username=body.username.strip().lower(),
+        display_name=body.display_name,
+        password_hash=hash_password(plain_pw),
+        role=body.role,
+        active=True,
+    )
+    session.add(user)
+    await session.flush()
+    await dao.set_branch_access(user.id, body.branch_ids)
+    await session.commit()
+    await session.refresh(user)
 
-    return UserCreateResponse(user=await _build_user_read(user), password=plain_pw)
+    return UserCreateResponse(user=await _build_user_read(session, user), password=plain_pw)
 
 
 @router.patch("/users/{user_id}", response_model=AppUserRead)
-async def update_user(user_id: int, body: UserUpdate, admin: AppUser = Depends(require_admin)):
-    async with async_session_factory() as session:
-        user = (await session.execute(select(AppUser).where(AppUser.id == user_id))).scalar_one_or_none()
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
+async def update_user(
+    user_id: int,
+    body: UserUpdate,
+    admin: AppUser = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    dao = AppUserDao(session=session)
+    user = await dao.get_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
 
-        # Guard: never leave the system without an active admin. If this update
-        # would stop the user from being an active admin (deactivation or role
-        # change), make sure at least one other active admin remains.
-        new_role = body.role if body.role is not None else user.role
-        new_active = body.active if body.active is not None else user.active
-        was_active_admin = user.role == "admin" and user.active
-        will_be_active_admin = new_role == "admin" and new_active
-        if was_active_admin and not will_be_active_admin:
-            if await _other_active_admins(session, user_id) == 0:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Не можна деактивувати або змінити роль останнього активного адміністратора",
-                )
+    # Guard: never leave the system without an active admin. If this update
+    # would stop the user from being an active admin (deactivation or role
+    # change), make sure at least one other active admin remains.
+    new_role = body.role if body.role is not None else user.role
+    new_active = body.active if body.active is not None else user.active
+    was_active_admin = user.role == "admin" and user.active
+    will_be_active_admin = new_role == "admin" and new_active
+    if was_active_admin and not will_be_active_admin:
+        if await dao.other_active_admins(user_id) == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Не можна деактивувати або змінити роль останнього активного адміністратора",
+            )
 
-        if body.display_name is not None:
-            user.display_name = body.display_name
-        if body.role is not None:
-            user.role = body.role
-        if body.active is not None:
-            user.active = body.active
-        if body.branch_ids is not None:
-            await _set_branch_access(session, user.id, body.branch_ids)
+    if body.display_name is not None:
+        user.display_name = body.display_name
+    if body.role is not None:
+        user.role = body.role
+    if body.active is not None:
+        user.active = body.active
+    if body.branch_ids is not None:
+        await dao.set_branch_access(user.id, body.branch_ids)
 
-        session.add(user)
-        await session.commit()
-        await session.refresh(user)
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
 
-    return await _build_user_read(user)
+    return await _build_user_read(session, user)
 
 
 @router.post("/users/{user_id}/reset-password")
-async def reset_password(user_id: int, admin: AppUser = Depends(require_admin)):
+async def reset_password(
+    user_id: int,
+    admin: AppUser = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
     plain_pw = _generate_password()
 
-    async with async_session_factory() as session:
-        user = (await session.execute(select(AppUser).where(AppUser.id == user_id))).scalar_one_or_none()
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
-        user.password_hash = hash_password(plain_pw)
-        session.add(user)
-        await session.commit()
+    user = await AppUserDao(session=session).get_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.password_hash = hash_password(plain_pw)
+    session.add(user)
+    await session.commit()
 
     return {"password": plain_pw}
 
 
 @router.delete("/users/{user_id}")
-async def delete_user(user_id: int, admin: AppUser = Depends(require_admin)):
+async def delete_user(
+    user_id: int,
+    admin: AppUser = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
     # Guard: an admin may not delete their own account
     if user_id == admin.id:
         raise HTTPException(status_code=400, detail="Не можна видалити власний обліковий запис")
 
-    async with async_session_factory() as session:
-        user = (await session.execute(select(AppUser).where(AppUser.id == user_id))).scalar_one_or_none()
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
+    dao = AppUserDao(session=session)
+    user = await dao.get_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
 
-        # Guard: never leave the system without an active admin
-        if user.role == "admin":
-            if await _other_active_admins(session, user_id) == 0:
-                raise HTTPException(status_code=400, detail="Не можна видалити останнього активного адміністратора")
+    # Guard: never leave the system without an active admin
+    if user.role == "admin":
+        if await dao.other_active_admins(user_id) == 0:
+            raise HTTPException(status_code=400, detail="Не можна видалити останнього активного адміністратора")
 
-        # Remove branch-access rows explicitly (FK is ON DELETE CASCADE, but this
-        # avoids the ORM trying to null out loaded children).
-        existing = await session.execute(
-            select(AppUserBranchAccess).where(AppUserBranchAccess.user_id == user_id)
-        )
-        for row in existing.scalars().all():
-            await session.delete(row)
-        await session.flush()
+    # Remove branch-access rows explicitly (FK is ON DELETE CASCADE, but this
+    # avoids the ORM trying to null out loaded children).
+    await dao.delete_branch_access(user_id)
 
-        await session.delete(user)
-        await session.commit()
+    await session.delete(user)
+    await session.commit()
 
     return {"deleted": True, "id": user_id}
 

@@ -20,7 +20,9 @@ from backend.services.enterprise_volume_service import (
     fetch_dpd_volumes,
     parse_date_range,
 )
-from backend.db.engine import async_session_factory
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from backend.db.engine import get_session
 from backend.services.virtual_lines_config import get_active_virtual_lines_db
 
 logger = logging.getLogger(__name__)
@@ -74,7 +76,8 @@ class EnterpriseVirtualRouter:
             default="daily",
             pattern="^(daily|hourly)$",
             description="Data granularity: 'daily' or 'hourly'"
-        )
+        ),
+        session: AsyncSession = Depends(get_session),
     ) -> List[EnterpriseVolumeResponse]:
         """
         Get enterprise volume data with virtual lines support.
@@ -134,8 +137,7 @@ class EnterpriseVirtualRouter:
 
         # Load virtual lines from DB
         try:
-            async with async_session_factory() as session:
-                virtual_lines_config = await get_active_virtual_lines_db(session)
+            virtual_lines_config = await get_active_virtual_lines_db(session)
         except Exception as e:
             logger.error(f"Error loading virtual lines config: {e}")
             raise HTTPException(
@@ -176,8 +178,7 @@ class EnterpriseVirtualRouter:
 
         # Load enterprise mappings for physical lines from DB
         try:
-            async with async_session_factory() as session:
-                devices = await get_devices_for_lines_db(all_physical_ids, session)
+            devices = await get_devices_for_lines_db(all_physical_ids, session)
         except Exception as e:
             logger.error(f"Error loading enterprise mappings from DB: {e}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
