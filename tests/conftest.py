@@ -33,13 +33,14 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parents[1]
 
 # 1) Local dev convenience: reuse the dockerized Postgres credentials/host/port
-#    from .env.v2 (no-op in CI where the file doesn't exist). load_dotenv never
+#    from .env (no-op in CI where the file doesn't exist). load_dotenv never
 #    overrides variables that are already set in the environment.
-load_dotenv(ROOT / ".env.v2")
+load_dotenv(ROOT / ".env")
 
 # 2) Force the TEST database and a safe auth env (override anything loaded above).
 os.environ["POSTGRES_DB"] = os.getenv("TEST_POSTGRES_DB", "hostlib_test_db")
-os.environ["AUTO_LOGIN"] = "false"        # .env.v2 may enable it; tests need the login flow
+os.environ["AUTO_LOGIN"] = "false"        # .env may enable it; tests need the login flow
+os.environ["LDAP_ENABLED"] = "false"      # .env may enable it; LDAP tests opt in explicitly
 os.environ["COOKIE_SECURE"] = "false"
 os.environ.setdefault("JWT_SECRET", "test-only-secret-not-for-production")
 os.environ.setdefault("DB_HOST", "localhost")

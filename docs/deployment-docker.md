@@ -39,13 +39,13 @@ git clone https://github.com/volodymyr-vereshchak/frontend.git   frontend
 
 ---
 
-## 3. Налаштування `.env.v2`
+## 3. Налаштування `.env`
 
-Усі секрети та параметри читаються з `.env.v2` у корені бекенду. У `docker-compose.yml`
+Усі секрети та параметри читаються з `.env` у корені бекенду. У `docker-compose.yml`
 секретів немає — тільки посилання на цей файл.
 
 ```bash
-nano /opt/hlviewer/HLViewer/.env.v2
+nano /opt/hlviewer/HLViewer/.env
 ```
 
 Вставити вміст (замінити значення, позначені `ЗАМІНИТИ` / `YOUR_...`):
@@ -139,7 +139,7 @@ DPD_MAX_CONCURRENCY=10
 COOKIE_SECURE=false
 ```
 
-> **Після зміни `.env.v2`** застосовуйте через **`docker compose up -d`** (перестворення
+> **Після зміни `.env`** застосовуйте через **`docker compose up -d`** (перестворення
 > контейнера) — `docker restart` НЕ перечитує `env_file`.
 
 ---

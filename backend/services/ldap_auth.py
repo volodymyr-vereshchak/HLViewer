@@ -9,7 +9,7 @@ rights always come from the app_user table (see auth_ep.login for the
 provisioning rules).
 
 The flags are re-read from the environment on every call so the mode can be
-flipped in .env.v2 / docker env without code changes, and so tests can toggle
+flipped in .env / docker env without code changes, and so tests can toggle
 them with monkeypatch.setenv.
 """
 

@@ -18,10 +18,10 @@ services:
     container_name: postgres_db_v2
     # Raise connection cap: 8 uvicorn workers + scheduler each open pools.
     command: -c max_connections=200
-    # Credentials (POSTGRES_DB/USER/PASSWORD) come from .env.v2 (gitignored),
+    # Credentials (POSTGRES_DB/USER/PASSWORD) come from .env (gitignored),
     # not hardcoded here.
     env_file:
-      - .env.v2
+      - .env
     ports:
       - "5434:5432"
     # Named, external volume so prod data survives container recreation AND
@@ -43,8 +43,8 @@ services:
       - .:/app
     working_dir: /app
     env_file:
-      - .env.v2
-    # POSTGRES_* (incl. password) come from .env.v2; only non-secret networking
+      - .env
+    # POSTGRES_* (incl. password) come from .env; only non-secret networking
     # overrides are set here. DATABASE_URL is unused (URL is built from POSTGRES_*).
     environment:
       - DB_HOST=db_v2
@@ -96,7 +96,7 @@ services:
       - .:/app
     working_dir: /app
     env_file:
-      - .env.v2
+      - .env
     environment:
       - DB_HOST=db_v2
       - DB_PORT=5432

@@ -3,7 +3,9 @@
 /backend/db/ask.db
 /develop_data/
 /.env
+# legacy names kept ignored so stale copies on old checkouts never get committed
 /.env.v2
+/.env.v1.bak
 /back_repo/
 /hostlibs/
 /logs/
