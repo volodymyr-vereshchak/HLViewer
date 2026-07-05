@@ -28,4 +28,12 @@ backend_settings = {
         "ENTERPRISE_MAPPINGS_PATH",
         "backend/data/enterprise_mappings.xlsx"
     ),
+    # ── LDAP (domain) authentication ──────────────────────────────────────────
+    # LDAP_ENABLED/AUTO_LOGIN are re-read from the environment on every login
+    # (see backend/services/ldap_auth.py) so the mode can be flipped per
+    # deployment without code changes; the values here are for reference/docs.
+    "LDAP_ENABLED": os.getenv("LDAP_ENABLED", "false"),
+    "LDAP_SERVER": os.getenv("LDAP_SERVER"),          # e.g. ldap://dc.example.local
+    "LDAP_DOMAIN": os.getenv("LDAP_DOMAIN"),          # UPN suffix: example.local
+    "LDAP_USE_SSL": os.getenv("LDAP_USE_SSL", "false"),
 }

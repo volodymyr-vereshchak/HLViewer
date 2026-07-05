@@ -23,6 +23,7 @@ from sqlmodel import select
 
 from backend.db.dao.app_user_dao import AppUserDao
 from backend.db.engine import get_session
+from backend.services.ldap_auth import ldap_authenticate, ldap_enabled
 from backend.db.models.app_user_model import AppUser, AppUserRead
 from backend.db.models.lumg_model import Lumg
 from backend.db.models.gas_volume_calc_model import GasVolumeCalc
@@ -137,6 +138,33 @@ def _maybe_refresh_token(token: str) -> Optional[tuple[str, int]]:
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+async def _issue_session(
+    session: AsyncSession,
+    user: AppUser,
+    response: Response,
+    remember_me: bool = False,
+) -> AppUserRead:
+    """Mint the JWT cookie for an authenticated user and return their profile.
+    Shared by the local-password and LDAP login paths and by AUTO_LOGIN."""
+    user_read = await _build_user_read(session, user)
+    token = _create_token(
+        user.id,
+        remember_me=remember_me,
+        role=user.role,
+        branch_ids=user_read.allowed_branch_ids,
+    )
+    max_age = JWT_REMEMBER_ME_DAYS * 86400 if remember_me else JWT_EXPIRE_HOURS * 3600
+    response.set_cookie(
+        key=COOKIE_NAME,
+        value=token,
+        httponly=True,
+        secure=COOKIE_SECURE,
+        max_age=max_age,
+        samesite="lax",
+    )
+    return user_read
+
+
 async def _build_user_read(session: AsyncSession, user: AppUser) -> AppUserRead:
     branch_ids = await AppUserDao(session=session).branch_ids(user.id)
     return AppUserRead(
@@ -259,34 +287,54 @@ async def login(
     response: Response,
     session: AsyncSession = Depends(get_session),
 ):
-    user = await AppUserDao(session=session).get_by_username(body.username.strip().lower())
+    uname = body.username.strip().lower()
+    user = await AppUserDao(session=session).get_by_username(uname)
 
-    if not user or not user.password_hash or not _verify_password(body.password, user.password_hash):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Невірний логін або пароль",
+    # 1. Local password — always available, regardless of the LDAP mode.
+    if user and user.password_hash and _verify_password(body.password, user.password_hash):
+        if not user.active:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Обліковий запис деактивовано")
+        return await _issue_session(session, user, response, body.remember_me)
+
+    # 2. Domain credentials (LDAP bind). Rights always come from app_user:
+    #    an existing record wins (including active=False — deactivation is a
+    #    ban that a valid domain password must NOT bypass). Unknown domain
+    #    users are auto-provisioned: with AUTO_LOGIN they enter immediately
+    #    as an unrestricted viewer; without it the record is created inactive
+    #    and waits for an admin to activate it and assign role/branches.
+    if ldap_enabled() and ldap_authenticate(uname, body.password):
+        if user:
+            if not user.active:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Доступ не надано. Зверніться до адміністратора",
+                )
+            return await _issue_session(session, user, response, body.remember_me)
+
+        auto_viewer = os.getenv("AUTO_LOGIN", "false").lower() == "true"
+        user = AppUser(
+            username=uname,
+            display_name=body.username.strip(),
+            password_hash=None,
+            role="viewer",
+            active=auto_viewer,
         )
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+        logger.info(f"LDAP auto-provisioned user '{uname}' (active={auto_viewer})")
 
-    if not user.active:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Обліковий запис деактивовано")
+        if not auto_viewer:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Обліковий запис створено. Зверніться до адміністратора для надання прав",
+            )
+        return await _issue_session(session, user, response, body.remember_me)
 
-    user_read = await _build_user_read(session, user)
-    token = _create_token(
-        user.id,
-        remember_me=body.remember_me,
-        role=user.role,
-        branch_ids=user_read.allowed_branch_ids,
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Невірний логін або пароль",
     )
-    max_age = JWT_REMEMBER_ME_DAYS * 86400 if body.remember_me else JWT_EXPIRE_HOURS * 3600
-    response.set_cookie(
-        key=COOKIE_NAME,
-        value=token,
-        httponly=True,
-        secure=COOKIE_SECURE,
-        max_age=max_age,
-        samesite="lax",
-    )
-    return user_read
 
 
 @router.post("/logout")
@@ -314,27 +362,16 @@ async def get_me(
         except Exception:
             pass
 
-    # 2. AUTO_LOGIN — issue real JWT for default user
-    if os.getenv("AUTO_LOGIN", "false").lower() == "true":
+    # 2. AUTO_LOGIN — issue real JWT for default user. With LDAP enabled the
+    #    kiosk auto-login is OFF (everyone must present credentials); AUTO_LOGIN
+    #    then only controls whether domain users are provisioned as active
+    #    viewers (see login above).
+    if os.getenv("AUTO_LOGIN", "false").lower() == "true" and not ldap_enabled():
         default_username = os.getenv("DEFAULT_USERNAME")
         if default_username:
             default_user = await dao.get_by_username(default_username)
             if default_user and default_user.active:
-                user_read = await _build_user_read(session, default_user)
-                new_token = _create_token(
-                    default_user.id,
-                    role=default_user.role,
-                    branch_ids=user_read.allowed_branch_ids,
-                )
-                response.set_cookie(
-                    key=COOKIE_NAME,
-                    value=new_token,
-                    httponly=True,
-                    secure=COOKIE_SECURE,
-                    max_age=JWT_EXPIRE_HOURS * 3600,
-                    samesite="lax",
-                )
-                return user_read
+                return await _issue_session(session, default_user, response)
 
     raise HTTPException(status_code=401, detail="Not authenticated")
 

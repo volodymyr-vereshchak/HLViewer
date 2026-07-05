@@ -380,3 +380,174 @@ class TestUserManagement:
     async def test_update_nonexistent_user_404(self, admin_client):
         resp = await admin_client.patch("/auth/users/99999", json={"active": False})
         assert resp.status_code == 404
+
+
+# ── LDAP login (domain bind + auto-provisioning) ─────────────────────────────
+# The bind itself is mocked at the point of use (auth_ep imported the function),
+# so no LDAP server is needed; the provisioning matrix is what's under test:
+#   LDAP on + AUTO_LOGIN on  → unknown domain user becomes an ACTIVE viewer-all
+#   LDAP on + AUTO_LOGIN off → unknown domain user is created INACTIVE (pending)
+#   existing DB record always wins over auto-viewer (incl. active=False = ban)
+class TestLdapLogin:
+    def _bind(self, mocker, ok: bool):
+        return mocker.patch(
+            "backend.api.endpoints.auth_ep.ldap_authenticate", return_value=ok
+        )
+
+    async def _find_user(self, username: str) -> AppUser | None:
+        async with async_session_factory() as session:
+            return (
+                await session.execute(
+                    select(AppUser).where(AppUser.username == username)
+                )
+            ).scalar_one_or_none()
+
+    async def test_auto_login_provisions_active_viewer(
+        self, anon_client, seed_users, monkeypatch, mocker
+    ):
+        monkeypatch.setenv("LDAP_ENABLED", "true")
+        monkeypatch.setenv("AUTO_LOGIN", "true")
+        self._bind(mocker, True)
+
+        resp = await anon_client.post(
+            "/auth/login", json={"username": "Domain.User", "password": "dompass"}
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["username"] == "domain.user"
+        assert body["role"] == "viewer"
+        assert body["active"] is True
+        assert body["allowed_branch_ids"] == []  # no restrictions = all branches
+        assert COOKIE_NAME in anon_client.cookies
+
+        user = await self._find_user("domain.user")
+        assert user is not None
+        assert user.password_hash is None  # domain-only account
+
+    async def test_without_auto_login_creates_pending_inactive(
+        self, anon_client, seed_users, monkeypatch, mocker
+    ):
+        monkeypatch.setenv("LDAP_ENABLED", "true")
+        monkeypatch.setenv("AUTO_LOGIN", "false")
+        self._bind(mocker, True)
+
+        resp = await anon_client.post(
+            "/auth/login", json={"username": "newbie", "password": "dompass"}
+        )
+        assert resp.status_code == 403
+        assert "створено" in resp.json()["detail"]
+        assert COOKIE_NAME not in anon_client.cookies
+
+        user = await self._find_user("newbie")
+        assert user is not None
+        assert user.active is False
+        assert user.role == "viewer"
+
+    async def test_pending_user_second_login_still_denied_no_duplicate(
+        self, anon_client, seed_users, monkeypatch, mocker
+    ):
+        monkeypatch.setenv("LDAP_ENABLED", "true")
+        monkeypatch.setenv("AUTO_LOGIN", "false")
+        self._bind(mocker, True)
+
+        first = await anon_client.post(
+            "/auth/login", json={"username": "pending", "password": "dompass"}
+        )
+        assert first.status_code == 403
+        second = await anon_client.post(
+            "/auth/login", json={"username": "pending", "password": "dompass"}
+        )
+        assert second.status_code == 403
+        assert "Доступ не надано" in second.json()["detail"]
+
+        async with async_session_factory() as session:
+            count = len((await session.execute(
+                select(AppUser).where(AppUser.username == "pending")
+            )).scalars().all())
+        assert count == 1
+
+    async def test_existing_user_keeps_db_rights(
+        self, anon_client, seed_users, monkeypatch, mocker
+    ):
+        # Domain creds for an account that exists in the DB with a configured
+        # role must NOT be demoted to auto-viewer.
+        monkeypatch.setenv("LDAP_ENABLED", "true")
+        monkeypatch.setenv("AUTO_LOGIN", "true")
+        self._bind(mocker, True)
+
+        branch_id = await _insert_branch()
+        user_id = await _insert_user(
+            username="configured", role="viewer", active=True, password_hash=None
+        )
+        async with async_session_factory() as session:
+            from backend.db.models.app_user_model import AppUserBranchAccess
+            session.add(AppUserBranchAccess(user_id=user_id, branch_id=branch_id))
+            await session.commit()
+
+        resp = await anon_client.post(
+            "/auth/login", json={"username": "configured", "password": "dompass"}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["allowed_branch_ids"] == [branch_id]
+
+    async def test_deactivated_user_denied_even_with_valid_domain_password(
+        self, anon_client, seed_users, monkeypatch, mocker
+    ):
+        monkeypatch.setenv("LDAP_ENABLED", "true")
+        monkeypatch.setenv("AUTO_LOGIN", "true")  # auto-viewer mode must not bypass the ban
+        self._bind(mocker, True)
+
+        await _insert_user(
+            username="banned", role="viewer", active=False, password_hash=None
+        )
+        resp = await anon_client.post(
+            "/auth/login", json={"username": "banned", "password": "dompass"}
+        )
+        assert resp.status_code == 403
+        assert COOKIE_NAME not in anon_client.cookies
+
+    async def test_failed_bind_401_and_no_user_created(
+        self, anon_client, seed_users, monkeypatch, mocker
+    ):
+        monkeypatch.setenv("LDAP_ENABLED", "true")
+        monkeypatch.setenv("AUTO_LOGIN", "true")
+        self._bind(mocker, False)
+
+        resp = await anon_client.post(
+            "/auth/login", json={"username": "intruder", "password": "badpass"}
+        )
+        assert resp.status_code == 401
+        assert await self._find_user("intruder") is None
+
+    async def test_local_password_still_works_with_ldap_on(
+        self, anon_client, seed_users, monkeypatch, mocker
+    ):
+        monkeypatch.setenv("LDAP_ENABLED", "true")
+        bind = self._bind(mocker, False)
+
+        resp = await anon_client.post(
+            "/auth/login",
+            json={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["role"] == "admin"
+        bind.assert_not_called()  # local password matched → no LDAP round-trip
+
+    async def test_kiosk_auto_login_disabled_when_ldap_on(
+        self, anon_client, seed_users, monkeypatch
+    ):
+        monkeypatch.setenv("AUTO_LOGIN", "true")
+        monkeypatch.setenv("DEFAULT_USERNAME", VIEWER_USERNAME)
+        monkeypatch.setenv("LDAP_ENABLED", "true")
+        resp = await anon_client.get("/auth/me")
+        assert resp.status_code == 401  # form login required
+
+    async def test_kiosk_auto_login_works_when_ldap_off(
+        self, anon_client, seed_users, monkeypatch
+    ):
+        monkeypatch.setenv("AUTO_LOGIN", "true")
+        monkeypatch.setenv("DEFAULT_USERNAME", VIEWER_USERNAME)
+        monkeypatch.setenv("LDAP_ENABLED", "false")
+        resp = await anon_client.get("/auth/me")
+        assert resp.status_code == 200
+        assert resp.json()["username"] == VIEWER_USERNAME
