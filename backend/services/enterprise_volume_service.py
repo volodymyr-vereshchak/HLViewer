@@ -15,15 +15,26 @@ The only real differences are captured by two parameters:
 
 import logging
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional
 
+from sqlalchemy import text
+
 from backend.db.engine import async_session_factory
+from backend.db.dao.dpd_cache_dao import DpdCacheDao
 from backend.db.models.enterprise_models import DeviceVolume, EnterpriseVolumeResponse
 from backend.services.dpd_client import DPDClient
 from backend.services.enterprise_mappings import volume_field_for_device
+from backend.settings import backend_settings
 
 logger = logging.getLogger(__name__)
+
+# Cache freshness windows (see DpdVolumeCache): a closed gas day is re-polled
+# at most once per 24h (quietly picks up back-dated corrections in DPD); the
+# current gas day only briefly — enough to absorb duplicate clicks and
+# dashboard refreshes without showing stale intraday data.
+CLOSED_DAY_TTL = timedelta(hours=24)
+CURRENT_DAY_TTL = timedelta(minutes=5)
 
 
 def parse_date_range(from_date: str, to_date: str) -> tuple[datetime, datetime]:
@@ -41,13 +52,43 @@ def pick_branch_id(devices: List[Dict]) -> Optional[int]:
     return next((d["branch_id"] for d in devices if d.get("branch_id")), None)
 
 
+def _gas_today(now: datetime) -> date:
+    """Current gas day: day D lasts from D 07:00 to D+1 07:00 (CONTRACT_HOUR)."""
+    contract_hour = backend_settings.get("CONTRACT_HOUR", 7)
+    return (now - timedelta(hours=contract_hour)).date()
+
+
+def _record_day(record: Dict, period_type: str) -> Optional[date]:
+    """Calendar day of a raw DPD record (cache key granularity)."""
+    raw = record.get("date") or record.get("period")
+    if not raw:
+        return None
+    parsed = _parse_record_period(raw, period_type)
+    if parsed is None:
+        return None
+    return parsed.date() if isinstance(parsed, datetime) else parsed
+
+
+def _device_key(device: Dict) -> tuple:
+    return (device["serNum"], device["mfDev"], device["typeDev"], device["chNum"])
+
+
 async def fetch_dpd_volumes(
     devices: List[Dict],
     date_from: datetime,
     date_to: datetime,
     period_type: str,
 ) -> List[Dict]:
-    """Load branch credentials and fetch raw volume records from the DPD API.
+    """Raw volume records for the requested devices/range, DPD polled only for
+    what the Postgres cache cannot serve.
+
+    The whole read-poll-write cycle runs inside one transaction holding a
+    per-branch advisory lock: identical or overlapping requests from any
+    uvicorn worker (browser auto-retries, double-fired frontend fetches,
+    several users) serialize here, and every follower finds the leader's rows
+    already cached instead of launching its own DPD poll. It also means at
+    most one poll per branch hits DPD at a time, capping the load at one
+    connection pool.
 
     Raises LookupError when no device carries a branch_id, ValueError when the
     branch has no/incomplete credentials (DPDClient.for_branch), and whatever
@@ -56,9 +97,96 @@ async def fetch_dpd_volumes(
     if branch_id is None:
         raise LookupError("Could not determine branch for requested lines")
 
-    async with async_session_factory() as cred_session:
-        client = await DPDClient.for_branch(branch_id, cred_session)
-    return await client.get_volumes(devices, date_from, date_to, type_request=period_type)
+    day_from, day_to = date_from.date(), date_to.date()
+    requested_days = [
+        day_from + timedelta(days=i) for i in range((day_to - day_from).days + 1)
+    ]
+
+    async with async_session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+                {"key": f"dpd-branch-{branch_id}"},
+            )
+
+            dao = DpdCacheDao(session)
+            now = datetime.now()
+            gas_today = _gas_today(now)
+
+            # (serNum, mfDev, typeDev, chNum, day) -> cached payload, fresh only
+            cached: Dict[tuple, list] = {}
+            for row in await dao.load_range(devices, period_type, day_from, day_to):
+                ttl = CLOSED_DAY_TTL if row.day < gas_today else CURRENT_DAY_TTL
+                if now - row.fetched_at <= ttl:
+                    cached[(row.ser_num, row.mf_dev, row.type_dev, row.ch_num, row.day)] = row.payload
+
+            # Days without a fresh row are polled. Days DPD returned nothing
+            # for are never cached, so they naturally come up missing again.
+            poll_devices: List[Dict] = []
+            missing_days: set = set()
+            for device in devices:
+                key = _device_key(device)
+                device_missing = [d for d in requested_days if key + (d,) not in cached]
+                if device_missing:
+                    poll_devices.append(device)
+                    missing_days.update(device_missing)
+
+            fresh_records: List[Dict] = []
+            poll_from = poll_to = None
+            if poll_devices:
+                poll_from, poll_to = min(missing_days), max(missing_days)
+                logger.info(
+                    f"DPD cache: {len(cached)} device-days fresh, polling "
+                    f"{len(poll_devices)}/{len(devices)} devices for "
+                    f"{poll_from}..{poll_to} ({period_type})"
+                )
+                client = await DPDClient.for_branch(branch_id, session)
+                fresh_records = await client.get_volumes(
+                    poll_devices,
+                    datetime.combine(poll_from, datetime.min.time()),
+                    datetime.combine(poll_to, datetime.min.time()),
+                    type_request=period_type,
+                )
+
+                grouped: Dict[tuple, list] = defaultdict(list)
+                for record in fresh_records:
+                    record_day = _record_day(record, period_type)
+                    # Drop out-of-range strays so a partial boundary day can
+                    # never be cached as if it were complete.
+                    if record_day is not None and poll_from <= record_day <= poll_to:
+                        grouped[(record["serNum"], record["mfDev"], record["typeDev"],
+                                 record["chNum"], record_day)].append(record)
+                if grouped:
+                    await dao.upsert_days([
+                        {
+                            "ser_num": ser_num,
+                            "mf_dev": mf_dev,
+                            "type_dev": type_dev,
+                            "ch_num": ch_num,
+                            "period_type": period_type,
+                            "day": record_day,
+                            "payload": payload,
+                            "fetched_at": now,
+                        }
+                        for (ser_num, mf_dev, type_dev, ch_num, record_day), payload
+                        in grouped.items()
+                    ])
+                await dao.delete_older_than(now)
+            else:
+                logger.info(
+                    f"DPD cache: full hit, {len(cached)} device-days for "
+                    f"{len(devices)} devices {day_from}..{day_to} ({period_type})"
+                )
+
+    # Merge: fresh poll wins for polled devices inside the polled span (the
+    # poll re-fetched those days, cached copies would duplicate them).
+    polled_keys = {_device_key(d) for d in poll_devices}
+    records = list(fresh_records)
+    for (ser_num, mf_dev, type_dev, ch_num, day), payload in cached.items():
+        if (ser_num, mf_dev, type_dev, ch_num) in polled_keys and poll_from <= day <= poll_to:
+            continue
+        records.extend(payload)
+    return records
 
 
 def _parse_record_period(raw, period_type: str):
