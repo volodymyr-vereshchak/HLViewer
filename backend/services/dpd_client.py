@@ -150,21 +150,29 @@ class DPDClient:
 
     async def _get_device_indications(
         self,
+        client: httpx.AsyncClient,
         device: Dict,
         date_from: datetime,
         date_to: datetime,
         type_request: str = "daily",
-        max_retries: int = 3
+        max_retries: int = 3,
+        not_found: Optional[List] = None,
     ) -> List[Dict]:
         """
         Fetch indications for a single device from DPD API.
 
         Args:
+            client: Pooled httpx client shared by the whole get_volumes call.
+                Passed explicitly (not read from self._client) so a device task
+                that wakes up after the request was cancelled still holds a
+                valid reference instead of crashing on self._client = None.
             device: Device dict with keys: serNum, mfDev, typeDev, chNum
             date_from: Start date for data range
             date_to: End date for data range
             type_request: Request type - "daily" or "hourly"
             max_retries: Maximum number of retry attempts
+            not_found: Shared list collecting serNums the API answered 404 for,
+                summarized once per batch by get_volumes.
 
         Returns:
             List of indication records for this device.
@@ -199,7 +207,7 @@ class DPDClient:
             try:
                 headers = {"Authorization": f"Bearer {self.access_token}"}
 
-                response = await self._client.get(endpoint, headers=headers, params=params)
+                response = await client.get(endpoint, headers=headers, params=params)
 
                 if response.status_code == 200:
                     data = response.json()
@@ -228,6 +236,18 @@ class DPDClient:
                     await self._refresh_tokens()
                     continue
 
+                elif 400 <= response.status_code < 500:
+                    # Deterministic client error (404 = device unknown to DPD,
+                    # e.g. a stale mapping) — retrying cannot change the answer.
+                    if response.status_code == 404 and not_found is not None:
+                        not_found.append(device["serNum"])
+                    else:
+                        logger.warning(
+                            f"DPD API rejected device {device['serNum']}: "
+                            f"{response.status_code} - {response.text}"
+                        )
+                    return []
+
                 else:
                     logger.error(
                         f"DPD API error for device {device['serNum']}: "
@@ -239,11 +259,14 @@ class DPDClient:
                             f"after {max_retries} attempts"
                         )
                         return []
+                    # Back off before retrying: when DPD degrades, immediate
+                    # retries only pile more load on it.
+                    await asyncio.sleep(attempt)
 
             except httpx.RequestError as e:
                 logger.error(
                     f"Request error for device {device['serNum']} "
-                    f"(attempt {attempt}): {e}"
+                    f"(attempt {attempt}): {e!r}"
                 )
                 if attempt == max_retries:
                     logger.warning(
@@ -251,6 +274,7 @@ class DPDClient:
                         f"after {max_retries} attempts due to network error"
                     )
                     return []
+                await asyncio.sleep(attempt)
 
         return []
 
@@ -296,7 +320,9 @@ class DPDClient:
 
         # One pooled client for the whole request; the pool caps how many device
         # requests hit DPD at once. Closed in the finally below.
-        self._client = self._build_client()
+        client = self._build_client()
+        self._client = client
+        not_found: List = []
         try:
             # Lazy authentication on first call (uses the pooled client)
             if not self._authenticated:
@@ -311,13 +337,27 @@ class DPDClient:
             # Create parallel tasks for each device. The shared client's connection
             # pool limits how many actually run at once (the rest await a free slot).
             tasks = [
-                self._get_device_indications(device, date_from, date_to, type_request, max_retries)
+                asyncio.create_task(
+                    self._get_device_indications(
+                        client, device, date_from, date_to, type_request,
+                        max_retries, not_found,
+                    )
+                )
                 for device in devices
             ]
 
-            # Execute all requests in parallel
-            # return_exceptions=True prevents one failure from stopping others
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            try:
+                # Execute all requests in parallel
+                # return_exceptions=True prevents one failure from stopping others
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+            finally:
+                # If this request was cancelled (browser/nginx dropped the
+                # connection) the gather above unwinds early. Reap every device
+                # task before the client is closed, so no task wakes up later
+                # against a closed client and dies unretrieved.
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
 
             # Aggregate results from all devices
             all_records = []
@@ -340,6 +380,12 @@ class DPDClient:
                 else:
                     # Empty result - device had no data or request failed
                     failed_devices += 1
+
+            if not_found:
+                logger.warning(
+                    f"{len(not_found)} devices unknown to DPD (404), check "
+                    f"device mappings: {sorted(not_found)}"
+                )
 
             logger.info(
                 f"Fetched {len(all_records)} volume records total: "
