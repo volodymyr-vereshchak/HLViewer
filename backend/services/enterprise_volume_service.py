@@ -30,14 +30,14 @@ from backend.settings import backend_settings
 
 logger = logging.getLogger(__name__)
 
-# Cache freshness (see DpdVolumeCache). A row fetched AFTER its gas day closed
-# holds final data and lives CACHE_TTL with sliding renewal: every read
-# refreshes fetched_at (at most once per TOUCH_MIN_AGE to avoid write churn),
-# so data viewed at least weekly is never re-polled. A row fetched while its
-# day was still open is incomplete by construction and is trusted only within
-# the clock hour it was fetched in — DPD publishes hourly, so the next hour is
-# a genuinely missing range and the day is re-polled.
-CACHE_TTL = timedelta(days=7)
+# The cache stores only FINAL data: a (device, day) group is written only
+# once its gas day has closed (day < current gas day, CONTRACT_HOUR boundary)
+# — an open day written early would freeze with its missing hours forever.
+# Cached rows are therefore never re-validated on read: a row present is
+# served as-is, and only genuinely missing rows are polled — the still-open
+# day, days DPD had nothing for, 404 devices. Retention is 7 days sliding:
+# every read touches fetched_at (at most once per TOUCH_MIN_AGE to avoid
+# write churn) and delete_older_than prunes rows nobody viewed for a week.
 TOUCH_MIN_AGE = timedelta(hours=1)
 
 # Only the fields the aggregation/UI actually reads are cached; device
@@ -61,20 +61,11 @@ def pick_branch_id(devices: List[Dict]) -> Optional[int]:
     return next((d["branch_id"] for d in devices if d.get("branch_id")), None)
 
 
-def _day_closed_at(day: date) -> datetime:
-    """When gas day D becomes final: D+1 at CONTRACT_HOUR (07:00)."""
+def _gas_today(now: datetime) -> date:
+    """Current gas day: day D lasts from D 07:00 to D+1 07:00 (CONTRACT_HOUR).
+    Days before it are closed (final); it and later days are still open."""
     contract_hour = backend_settings.get("CONTRACT_HOUR", 7)
-    return datetime.combine(day + timedelta(days=1), datetime.min.time()) + timedelta(
-        hours=contract_hour
-    )
-
-
-def _row_freshness(row, now: datetime) -> tuple[bool, bool]:
-    """(fresh, final) for a cache row — see the CACHE_TTL comment above."""
-    if row.fetched_at >= _day_closed_at(row.day):
-        return now - row.fetched_at <= CACHE_TTL, True
-    hour_start = now.replace(minute=0, second=0, microsecond=0)
-    return row.fetched_at >= hour_start, False
+    return (now - timedelta(hours=contract_hour)).date()
 
 
 def _slim_record(record: Dict) -> Dict:
@@ -149,25 +140,24 @@ async def fetch_dpd_volumes(
 
             dao = DpdCacheDao(session)
             now = datetime.now()
+            gas_today = _gas_today(now)
 
-            # (serNum, mfDev, typeDev, chNum, day) -> cached payload, fresh only
+            # (serNum, mfDev, typeDev, chNum, day) -> cached payload. Every
+            # cached row is final by construction — no freshness checks here.
             cached: Dict[tuple, list] = {}
             touch_ids: List[int] = []
             for row in await dao.load_range(devices, period_type, day_from, day_to):
-                fresh, final = _row_freshness(row, now)
-                if not fresh:
-                    continue
                 cached[(row.ser_num, row.mf_dev, row.type_dev, row.ch_num, row.day)] = (
                     _restore_ids(row.payload, row)
                 )
-                if final and now - row.fetched_at >= TOUCH_MIN_AGE:
+                if now - row.fetched_at >= TOUCH_MIN_AGE:
                     touch_ids.append(row.id)
 
-            # Days without a fresh row are polled, each device over its own
-            # missing span — a device with no cached data at all must not
-            # force the whole branch to re-download the full range. Days DPD
-            # returned nothing for are never cached, so they naturally come
-            # up missing again.
+            # Days without a row are polled, each device over its own missing
+            # span — a device with no cached data at all must not force the
+            # whole branch to re-download the full range. The still-open gas
+            # day and days DPD returned nothing for are never cached, so they
+            # naturally come up missing every request.
             poll_devices: List[Dict] = []
             device_spans: Dict[tuple, tuple] = {}
             for device in devices:
@@ -214,9 +204,10 @@ async def fetch_dpd_volumes(
                         fresh_groups[(record["serNum"], record["mfDev"],
                                       record["typeDev"], record["chNum"],
                                       record_day)].append(record)
-                # Cache only days inside the device's own polled span: the
-                # hourly to+1 widening in dpd_client returns records past the
-                # span whose day is incomplete and must never be cached.
+                # Cache only closed (final) days inside the device's own
+                # polled span. Still-open days would freeze with their missing
+                # hours; the hourly to+1 widening in dpd_client returns
+                # records past the span whose day is likewise incomplete.
                 upsert_rows = [
                     {
                         "ser_num": ser_num,
@@ -230,7 +221,8 @@ async def fetch_dpd_volumes(
                     }
                     for (ser_num, mf_dev, type_dev, ch_num, record_day), payload
                     in fresh_groups.items()
-                    if (span := device_spans.get((ser_num, mf_dev, type_dev, ch_num)))
+                    if record_day < gas_today
+                    and (span := device_spans.get((ser_num, mf_dev, type_dev, ch_num)))
                     and span[0] <= record_day <= span[1]
                 ]
                 if upsert_rows:
