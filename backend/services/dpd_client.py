@@ -9,8 +9,8 @@ import asyncio
 import httpx
 import logging
 import warnings
-from datetime import datetime
-from typing import List, Dict, Optional
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Tuple
 
 from backend.settings import backend_settings
 
@@ -190,6 +190,11 @@ class DPDClient:
 
         # Format dates - DPD API accepts only date format (YYYY-MM-DD) for both daily and hourly
         # The typeRequest parameter determines the granularity, not the date format
+        if type_request == "hourly":
+            # DPD treats `to` as an exclusive midnight bound for hourly data:
+            # to=2026-07-08 returns hours only up to 2026-07-08T00:00. Ask one
+            # day further so the requested last day comes back complete.
+            date_to = date_to + timedelta(days=1)
         date_from_str = date_from.strftime("%Y-%m-%d")
         date_to_str = date_to.strftime("%Y-%m-%d")
 
@@ -284,7 +289,8 @@ class DPDClient:
         date_from: datetime,
         date_to: datetime,
         type_request: str = "daily",
-        max_retries: int = 3
+        max_retries: int = 3,
+        device_ranges: Optional[Dict[Tuple, Tuple[datetime, datetime]]] = None,
     ) -> List[Dict]:
         """
         Fetch volume data for multiple devices from DPD API.
@@ -298,6 +304,10 @@ class DPDClient:
             date_to: End date for data range
             type_request: Request type - "daily" (default) or "hourly"
             max_retries: Maximum number of retry attempts per device
+            device_ranges: Optional per-device (date_from, date_to) overrides
+                keyed by (serNum, mfDev, typeDev, chNum). A device missing only
+                one cached day then downloads that day, not the whole range.
+                Devices absent from the dict use the date_from/date_to args.
 
         Returns:
             List of dicts with volume data, each containing:
@@ -336,15 +346,21 @@ class DPDClient:
 
             # Create parallel tasks for each device. The shared client's connection
             # pool limits how many actually run at once (the rest await a free slot).
-            tasks = [
-                asyncio.create_task(
-                    self._get_device_indications(
-                        client, device, date_from, date_to, type_request,
-                        max_retries, not_found,
+            device_ranges = device_ranges or {}
+            tasks = []
+            for device in devices:
+                dev_from, dev_to = device_ranges.get(
+                    (device["serNum"], device["mfDev"], device["typeDev"], device["chNum"]),
+                    (date_from, date_to),
+                )
+                tasks.append(
+                    asyncio.create_task(
+                        self._get_device_indications(
+                            client, device, dev_from, dev_to, type_request,
+                            max_retries, not_found,
+                        )
                     )
                 )
-                for device in devices
-            ]
 
             try:
                 # Execute all requests in parallel

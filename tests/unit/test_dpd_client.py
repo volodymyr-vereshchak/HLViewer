@@ -133,6 +133,57 @@ class TestRetryPolicy:
         assert records[0]["dvstAlwrk"] == 5.0
 
 
+class TestRequestParams:
+    @staticmethod
+    def make_recording_client(seen: dict):
+        """Client whose handler records per-serNum (from, to) query params."""
+        def handler(request):
+            if request.url.path.endswith("/auth/login"):
+                return auth_response()
+            params = dict(request.url.params)
+            seen[int(params["serNUM"])] = (params["from"], params["to"])
+            return httpx.Response(200, json={"table": {"data": []}})
+
+        return make_client(handler)
+
+    async def test_hourly_to_widened_by_one_day(self):
+        """DPD treats `to` as an exclusive midnight bound for hourly data
+        (to=2026-07-03 returns hours only up to 03T00:00), so the client asks
+        one day further to get the requested last day complete."""
+        seen = {}
+        client = self.make_recording_client(seen)
+
+        await client.get_volumes([DEVICE], DATE_FROM, DATE_TO, type_request="hourly")
+
+        assert seen[111] == ("2026-07-01", "2026-07-04")
+
+    async def test_daily_to_not_widened(self):
+        seen = {}
+        client = self.make_recording_client(seen)
+
+        await client.get_volumes([DEVICE], DATE_FROM, DATE_TO, type_request="daily")
+
+        assert seen[111] == ("2026-07-01", "2026-07-03")
+
+    async def test_device_ranges_override_per_device(self):
+        seen = {}
+        client = self.make_recording_client(seen)
+        dev_a = dict(DEVICE, serNum=111)
+        dev_b = dict(DEVICE, serNum=222)
+
+        await client.get_volumes(
+            [dev_a, dev_b],
+            DATE_FROM,
+            DATE_TO,
+            device_ranges={
+                (222, 1, 5, 0): (datetime(2026, 7, 3), datetime(2026, 7, 3)),
+            },
+        )
+
+        assert seen[111] == ("2026-07-01", "2026-07-03")  # default range
+        assert seen[222] == ("2026-07-03", "2026-07-03")  # own span
+
+
 class TestCancellation:
     async def test_cancel_reaps_device_tasks_and_closes_client(self):
         """Cancelling get_volumes mid-poll must leave no orphan device tasks

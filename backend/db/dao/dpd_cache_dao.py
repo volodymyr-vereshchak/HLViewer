@@ -1,17 +1,16 @@
+import json
 from datetime import date, datetime, timedelta
 from typing import Dict, List
 
-from sqlalchemy import delete, tuple_
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import delete, text, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from backend.db.dao.basic_dao import BasicDao
 from backend.db.models.dpd_cache_model import DpdVolumeCache
 
-# Rows per INSERT statement: 8 params each, kept well under asyncpg's 32767
-# bound-parameter limit (a full month for a large branch is ~15k rows).
-_UPSERT_CHUNK = 2000
+_COPY_COLS = ("ser_num", "mf_dev", "type_dev", "ch_num",
+              "period_type", "day", "payload", "fetched_at")
 
 
 def _device_tuples(devices: List[Dict]) -> list[tuple]:
@@ -55,21 +54,52 @@ class DpdCacheDao(BasicDao):
     async def upsert_days(self, rows: List[Dict]) -> None:
         """Insert/replace per-(device, day) payload rows.
 
-        `rows` are dicts with the DpdVolumeCache column names."""
-        for start in range(0, len(rows), _UPSERT_CHUNK):
-            chunk = rows[start:start + _UPSERT_CHUNK]
-            stmt = insert(DpdVolumeCache).values(chunk)
-            stmt = stmt.on_conflict_do_update(
-                constraint="uq_dpd_cache_device_period_day",
-                set_={
-                    "payload": stmt.excluded.payload,
-                    "fetched_at": stmt.excluded.fetched_at,
-                },
-            )
-            await self.session.execute(stmt)
+        `rows` are dicts with the DpdVolumeCache column names, unique per
+        (device, period_type, day) — a key repeated within one call would make
+        ON CONFLICT DO UPDATE fail ("cannot affect row a second time").
+
+        asyncpg COPY into a temp table + one INSERT ... ON CONFLICT is ~20x
+        faster than chunked multi-VALUES for a full-month poll (~9.5k JSONB
+        rows). Everything runs inside the caller's transaction (no commit
+        here — committing would release the branch advisory lock mid-poll);
+        temp tables are per-connection, so concurrent workers cannot clash."""
+        if not rows:
+            return
+        cols = ", ".join(_COPY_COLS)
+        await self.session.execute(text(
+            "CREATE TEMP TABLE _tmp_dpd_volume_cache AS "
+            f"SELECT {cols} FROM dpd_volume_cache WHERE FALSE"
+        ))
+        sa_conn = await self.session.connection()
+        raw = await sa_conn.get_raw_connection()
+        records = [
+            tuple(json.dumps(r[c]) if c == "payload" else r[c] for c in _COPY_COLS)
+            for r in rows
+        ]
+        await raw.driver_connection.copy_records_to_table(
+            "_tmp_dpd_volume_cache", records=records, columns=list(_COPY_COLS)
+        )
+        await self.session.execute(text(
+            f"INSERT INTO dpd_volume_cache ({cols}) "
+            f"SELECT {cols} FROM _tmp_dpd_volume_cache "
+            "ON CONFLICT ON CONSTRAINT uq_dpd_cache_device_period_day "
+            "DO UPDATE SET payload = EXCLUDED.payload, "
+            "fetched_at = EXCLUDED.fetched_at"
+        ))
+        await self.session.execute(text("DROP TABLE _tmp_dpd_volume_cache"))
+
+    async def touch(self, ids: List[int], now: datetime) -> None:
+        """Sliding TTL: reading a final (closed-day) row extends its life."""
+        if not ids:
+            return
+        await self.session.execute(
+            update(DpdVolumeCache)
+            .where(DpdVolumeCache.id.in_(ids))
+            .values(fetched_at=now)
+        )
 
     async def delete_older_than(self, now: datetime, days: int = 7) -> None:
-        """Drop rows no reader will trust again (freshness TTL is ≤ 24h)."""
+        """Drop rows past the sliding TTL (untouched for `days`)."""
         await self.session.execute(
             delete(DpdVolumeCache).where(
                 DpdVolumeCache.fetched_at < now - timedelta(days=days)
