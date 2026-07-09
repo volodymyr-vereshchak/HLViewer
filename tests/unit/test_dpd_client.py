@@ -146,18 +146,37 @@ class TestRequestParams:
 
         return make_client(handler)
 
-    async def test_hourly_to_widened_by_one_day(self):
-        """DPD treats `to` as an exclusive midnight bound for hourly data
-        (to=2026-07-03 returns hours only up to 03T00:00), so the client asks
-        one day further to get the requested last day complete."""
+    async def test_hourly_bounds_mapped_to_commercial_dates(self):
+        """DPD from/to take bare dates; the hourly range is aligned to
+        commercial days on both ends (from=D starts at D 07:00, to=D runs
+        through D+1 06:00), so a datetime bound before 07:00 belongs to the
+        previous commercial date."""
         seen = {}
         client = self.make_recording_client(seen)
 
-        await client.get_volumes([DEVICE], DATE_FROM, DATE_TO, type_request="hourly")
+        await client.get_volumes(
+            [DEVICE],
+            datetime(2026, 7, 1, 3, 0),
+            datetime(2026, 7, 8, 6, 0),
+            type_request="hourly",
+        )
 
-        assert seen[111] == ("2026-07-01", "2026-07-04")
+        assert seen[111] == ("2026-06-30", "2026-07-07")
 
-    async def test_daily_to_not_widened(self):
+    async def test_hourly_bounds_at_contract_hour_keep_their_date(self):
+        seen = {}
+        client = self.make_recording_client(seen)
+
+        await client.get_volumes(
+            [DEVICE],
+            datetime(2026, 7, 1, 7, 0),
+            datetime(2026, 7, 8, 23, 0),
+            type_request="hourly",
+        )
+
+        assert seen[111] == ("2026-07-01", "2026-07-08")
+
+    async def test_daily_dates_passed_verbatim(self):
         seen = {}
         client = self.make_recording_client(seen)
 

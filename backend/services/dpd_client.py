@@ -188,13 +188,19 @@ class DPDClient:
         """
         endpoint = f"{self.base_url}indications"
 
-        # Format dates - DPD API accepts only date format (YYYY-MM-DD) for both daily and hourly
-        # The typeRequest parameter determines the granularity, not the date format
+        # DPD's from/to accept only dates (YYYY-MM-DD); typeRequest sets the
+        # granularity. For hourly data the range is aligned to commercial days
+        # on both ends: from=D returns records starting at D 07:00 and to=D
+        # returns records through D+1 06:00. Map each datetime bound to the
+        # commercial date containing it (stamps before CONTRACT_HOUR belong to
+        # the previous commercial day), so a span 01.07 03:00..08.07 06:00
+        # asks from=30.06&to=07.07.
         if type_request == "hourly":
-            # DPD treats `to` as an exclusive midnight bound for hourly data:
-            # to=2026-07-08 returns hours only up to 2026-07-08T00:00. Ask one
-            # day further so the requested last day comes back complete.
-            date_to = date_to + timedelta(days=1)
+            contract_hour = backend_settings.get("CONTRACT_HOUR", 7)
+            if date_from.hour < contract_hour:
+                date_from = date_from - timedelta(days=1)
+            if date_to.hour < contract_hour:
+                date_to = date_to - timedelta(days=1)
         date_from_str = date_from.strftime("%Y-%m-%d")
         date_to_str = date_to.strftime("%Y-%m-%d")
 

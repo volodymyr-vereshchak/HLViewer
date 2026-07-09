@@ -30,15 +30,17 @@ from backend.settings import backend_settings
 
 logger = logging.getLogger(__name__)
 
-# Everything a poll returns is cached and lives 7 days sliding: every read
-# touches fetched_at (at most once per TOUCH_MIN_AGE to avoid write churn)
-# and delete_older_than prunes rows nobody viewed for a week. A row fetched
-# after its gas day closed (CONTRACT_HOUR boundary) is FINAL and is served
-# as-is, never re-validated. A row fetched while its day was still open is a
-# snapshot of an unfinished day: the day stays a "gap" and is re-polled on
-# every request (each poll overwrites the snapshot; the snapshot itself only
-# serves as a fallback when the poll brings nothing back). Empty days and
-# 404 devices are never cached and are likewise re-asked every request.
+# Cache model: the gap unit is the record timestamp — an hour for hourly
+# data, a day for daily (independent typeRequest endpoints on DPD's side).
+# Every record a poll returns is final the moment it arrives and is cached,
+# even outside the requested window; a request re-polls only the stamps
+# missing from the cache (unpublished/future hours, holes, empty responses)
+# plus 404 devices, each device over its own missing span. fetched_at
+# carries no freshness meaning — it only drives the 7-day sliding
+# retention: reads touch it (at most once per TOUCH_MIN_AGE to avoid write
+# churn) and delete_older_than prunes rows nobody viewed for a week.
+# For hourly data a bare date range means commercial days, mirroring DPD:
+# from=D1&to=D2 denotes the stamp window [D1 07:00 .. D2+1 06:00].
 TOUCH_MIN_AGE = timedelta(hours=1)
 
 # Only the fields the aggregation/UI actually reads are cached; device
@@ -62,13 +64,32 @@ def pick_branch_id(devices: List[Dict]) -> Optional[int]:
     return next((d["branch_id"] for d in devices if d.get("branch_id")), None)
 
 
-def _day_closed_at(day: date) -> datetime:
-    """When gas day D becomes final: D+1 at CONTRACT_HOUR (07:00). A row
-    fetched before that moment is a snapshot of an unfinished day."""
-    contract_hour = backend_settings.get("CONTRACT_HOUR", 7)
-    return datetime.combine(day + timedelta(days=1), datetime.min.time()) + timedelta(
-        hours=contract_hour
-    )
+def _request_window(date_from: datetime, date_to: datetime, period_type: str):
+    """The stamp window a from/to date range denotes. Both our endpoint and
+    DPD take bare dates; for hourly data a date is a commercial day, so
+    from=D1&to=D2 means [D1 CONTRACT_HOUR .. D2+1 CONTRACT_HOUR-1h] — exactly
+    what DPD returns for that range. Daily: calendar days D1..D2."""
+    if period_type == "hourly":
+        contract_hour = backend_settings.get("CONTRACT_HOUR", 7)
+        start = datetime.combine(date_from.date(), datetime.min.time())
+        end = datetime.combine(date_to.date(), datetime.min.time())
+        return (
+            start + timedelta(hours=contract_hour),
+            end + timedelta(days=1, hours=contract_hour - 1),
+        )
+    return date_from.date(), date_to.date()
+
+
+def _expected_stamps(window_from, window_to, period_type: str) -> list:
+    """Every record stamp the window should contain: hourly datetimes or
+    daily dates, both bounds inclusive."""
+    if period_type == "hourly":
+        hours = int((window_to - window_from).total_seconds() // 3600)
+        return [window_from + timedelta(hours=i) for i in range(hours + 1)]
+    return [
+        window_from + timedelta(days=i)
+        for i in range((window_to - window_from).days + 1)
+    ]
 
 
 def _slim_record(record: Dict) -> Dict:
@@ -90,15 +111,24 @@ def _restore_ids(payload: list, row) -> list:
     return restored
 
 
-def _record_day(record: Dict, period_type: str) -> Optional[date]:
-    """Calendar day of a raw DPD record (cache key granularity)."""
+def _record_stamp(record: Dict, period_type: str):
+    """Stamp of a raw DPD record: datetime for hourly, date for daily,
+    None when unparseable (record skipped)."""
     raw = record.get("date") or record.get("period")
     if not raw:
         return None
-    parsed = _parse_record_period(raw, period_type)
-    if parsed is None:
-        return None
-    return parsed.date() if isinstance(parsed, datetime) else parsed
+    return _parse_record_period(raw, period_type)
+
+
+def _stamp_day(stamp) -> date:
+    """Calendar day a stamp is stored under (cache rows bucket by day)."""
+    return stamp.date() if isinstance(stamp, datetime) else stamp
+
+
+def _as_dt(stamp) -> datetime:
+    return stamp if isinstance(stamp, datetime) else datetime.combine(
+        stamp, datetime.min.time()
+    )
 
 
 def _device_key(device: Dict) -> tuple:
@@ -129,10 +159,9 @@ async def fetch_dpd_volumes(
     if branch_id is None:
         raise LookupError("Could not determine branch for requested lines")
 
+    window_from, window_to = _request_window(date_from, date_to, period_type)
+    expected = _expected_stamps(window_from, window_to, period_type)
     day_from, day_to = date_from.date(), date_to.date()
-    requested_days = [
-        day_from + timedelta(days=i) for i in range((day_to - day_from).days + 1)
-    ]
 
     async with async_session_factory() as session:
         async with session.begin():
@@ -144,45 +173,51 @@ async def fetch_dpd_volumes(
             dao = DpdCacheDao(session)
             now = datetime.now()
 
-            # (serNum, mfDev, typeDev, chNum, day) -> cached payload. Rows
-            # fetched after their day closed are final; the rest are
-            # unfinished-day snapshots (kept only as a poll fallback).
-            cached: Dict[tuple, list] = {}
-            final_keys: set = set()
+            # (serNum, mfDev, typeDev, chNum) -> {stamp -> record}. Every
+            # cached record is final. Rows are loaded one day beyond the
+            # window on each side: the poll's commercial-date rounding can
+            # return records on those days and the merge below must not lose
+            # their cached siblings.
+            cached: Dict[tuple, Dict] = defaultdict(dict)
             touch_ids: List[int] = []
-            for row in await dao.load_range(devices, period_type, day_from, day_to):
-                key5 = (row.ser_num, row.mf_dev, row.type_dev, row.ch_num, row.day)
-                cached[key5] = _restore_ids(row.payload, row)
-                if row.fetched_at >= _day_closed_at(row.day):
-                    final_keys.add(key5)
+            for row in await dao.load_range(
+                devices,
+                period_type,
+                day_from - timedelta(days=1),
+                day_to + timedelta(days=1),
+            ):
+                key4 = (row.ser_num, row.mf_dev, row.type_dev, row.ch_num)
+                for rec in _restore_ids(row.payload, row):
+                    stamp = _record_stamp(rec, period_type)
+                    if stamp is not None:
+                        cached[key4][stamp] = rec
                 if now - row.fetched_at >= TOUCH_MIN_AGE:
                     touch_ids.append(row.id)
 
-            # Days without a final row are polled, each device over its own
-            # missing span — a device with no cached data at all must not
-            # force the whole branch to re-download the full range. The
-            # still-open gas day, days DPD returned nothing for and 404
-            # devices come up missing every request by construction.
+            # A device is polled over the span of its own missing stamps —
+            # unpublished/future hours, holes and 404 devices come up missing
+            # every request by construction, while a device with no cached
+            # data at all must not force the whole branch to re-download the
+            # full range.
             poll_devices: List[Dict] = []
             device_spans: Dict[tuple, tuple] = {}
             for device in devices:
-                key = _device_key(device)
-                device_missing = [
-                    d for d in requested_days if key + (d,) not in final_keys
-                ]
-                if device_missing:
+                key4 = _device_key(device)
+                missing = [s for s in expected if s not in cached[key4]]
+                if missing:
                     poll_devices.append(device)
-                    device_spans[key] = (min(device_missing), max(device_missing))
+                    device_spans[key4] = (_as_dt(min(missing)), _as_dt(max(missing)))
 
-            fresh_groups: Dict[tuple, list] = defaultdict(list)
+            fresh: Dict[tuple, Dict] = defaultdict(dict)
             if poll_devices:
                 poll_from = min(span[0] for span in device_spans.values())
                 poll_to = max(span[1] for span in device_spans.values())
                 narrower = sum(
                     1 for span in device_spans.values() if span != (poll_from, poll_to)
                 )
+                cached_stamps = sum(len(v) for v in cached.values())
                 logger.info(
-                    f"DPD cache: {len(final_keys)} device-days final, polling "
+                    f"DPD cache: {cached_stamps} stamps cached, polling "
                     f"{len(poll_devices)}/{len(devices)} devices within "
                     f"{poll_from}..{poll_to} ({period_type}, "
                     f"{narrower} narrower per-device spans)"
@@ -191,46 +226,49 @@ async def fetch_dpd_volumes(
                 t_poll = perf_counter()
                 fresh_records = await client.get_volumes(
                     poll_devices,
-                    datetime.combine(poll_from, datetime.min.time()),
-                    datetime.combine(poll_to, datetime.min.time()),
+                    poll_from,
+                    poll_to,
                     type_request=period_type,
-                    device_ranges={
-                        key: (
-                            datetime.combine(span[0], datetime.min.time()),
-                            datetime.combine(span[1], datetime.min.time()),
-                        )
-                        for key, span in device_spans.items()
-                    },
+                    device_ranges=device_spans,
                 )
                 poll_secs = perf_counter() - t_poll
 
                 t_store = perf_counter()
                 for record in fresh_records:
-                    record_day = _record_day(record, period_type)
-                    if record_day is not None:
-                        fresh_groups[(record["serNum"], record["mfDev"],
-                                      record["typeDev"], record["chNum"],
-                                      record_day)].append(record)
-                # Cache every polled day inside the device's own span (the
-                # hourly to+1 widening in dpd_client returns records past the
-                # span — that partial tail day must not be cached). An
-                # unfinished day's row is simply overwritten by the next poll.
-                upsert_rows = [
-                    {
-                        "ser_num": ser_num,
-                        "mf_dev": mf_dev,
-                        "type_dev": type_dev,
-                        "ch_num": ch_num,
-                        "period_type": period_type,
-                        "day": record_day,
-                        "payload": [_slim_record(r) for r in payload],
-                        "fetched_at": now,
-                    }
-                    for (ser_num, mf_dev, type_dev, ch_num, record_day), payload
-                    in fresh_groups.items()
-                    if (span := device_spans.get((ser_num, mf_dev, type_dev, ch_num)))
-                    and span[0] <= record_day <= span[1]
-                ]
+                    stamp = _record_stamp(record, period_type)
+                    if stamp is not None:
+                        fresh[(record["serNum"], record["mfDev"],
+                               record["typeDev"], record["chNum"])][stamp] = record
+
+                # Everything the poll returned is cached (records outside the
+                # requested window are final data too — they warm the cache).
+                # Fresh stamps are merged into the day rows they belong to,
+                # fresh winning over cached, and only days that actually got
+                # new records are written.
+                upsert_rows = []
+                for key4, stamps in fresh.items():
+                    by_day: Dict[date, Dict] = defaultdict(dict)
+                    for stamp, rec in stamps.items():
+                        by_day[_stamp_day(stamp)][stamp] = rec
+                    for day, day_stamps in by_day.items():
+                        merged = {
+                            s: r
+                            for s, r in cached[key4].items()
+                            if _stamp_day(s) == day
+                        }
+                        merged.update(day_stamps)
+                        upsert_rows.append({
+                            "ser_num": key4[0],
+                            "mf_dev": key4[1],
+                            "type_dev": key4[2],
+                            "ch_num": key4[3],
+                            "period_type": period_type,
+                            "day": day,
+                            "payload": [
+                                _slim_record(merged[s]) for s in sorted(merged)
+                            ],
+                            "fetched_at": now,
+                        })
                 if upsert_rows:
                     await dao.upsert_days(upsert_rows)
                 await dao.delete_older_than(now)
@@ -240,35 +278,31 @@ async def fetch_dpd_volumes(
                 )
             else:
                 logger.info(
-                    f"DPD cache: full hit, {len(final_keys)} device-days for "
-                    f"{len(devices)} devices {day_from}..{day_to} ({period_type})"
+                    f"DPD cache: full hit, "
+                    f"{sum(len(v) for v in cached.values())} stamps for "
+                    f"{len(devices)} devices {window_from}..{window_to} "
+                    f"({period_type})"
                 )
 
             if touch_ids:
-                # Sliding TTL: reading final rows keeps them alive another week.
+                # Sliding retention: reading rows keeps them alive another week.
                 await dao.touch(touch_ids, now)
 
-    # Merge: for a polled device, days inside its span come from the fresh
-    # poll (that day was fully re-fetched, a cached copy would duplicate it);
-    # everything else from cache. A cached day inside the span is still
-    # served when the poll brought nothing for it (unfinished-day snapshot as
-    # fallback). Fresh records past a span (the hourly widening tail) are
-    # used only when the cache has no copy of that day.
+    # Response: cached ∪ fresh per stamp (fresh wins), clipped to the window.
     records: List[Dict] = []
-    for key5, group in fresh_groups.items():
-        span = device_spans.get(key5[:4])
-        in_span = span is not None and span[0] <= key5[4] <= span[1]
-        if in_span or key5 not in cached:
-            records.extend(group)
-    for key5, payload in cached.items():
-        span = device_spans.get(key5[:4])
-        if (
-            span is not None
-            and span[0] <= key5[4] <= span[1]
-            and key5 in fresh_groups
-        ):
-            continue  # replaced by the fresh re-poll of that day
-        records.extend(payload)
+    for key4, stamps in cached.items():
+        dev_fresh = fresh.get(key4, {})
+        records.extend(
+            rec
+            for stamp, rec in stamps.items()
+            if stamp not in dev_fresh and window_from <= stamp <= window_to
+        )
+    for stamps in fresh.values():
+        records.extend(
+            rec
+            for stamp, rec in stamps.items()
+            if window_from <= stamp <= window_to
+        )
     return records
 
 
