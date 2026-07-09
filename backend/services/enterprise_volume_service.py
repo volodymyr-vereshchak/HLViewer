@@ -32,10 +32,12 @@ logger = logging.getLogger(__name__)
 
 # Cache model: the gap unit is the record timestamp — an hour for hourly
 # data, a day for daily (independent typeRequest endpoints on DPD's side).
-# Every record a poll returns is final the moment it arrives and is cached,
-# even outside the requested window; a request re-polls only the stamps
-# missing from the cache (unpublished/future hours, holes, empty responses)
-# plus 404 devices, each device over its own missing span. fetched_at
+# Every record a poll returns WITH DATA is final the moment it arrives and
+# is cached, even outside the requested window; DPD also returns skeleton
+# records with null volumes for stamps it has no data for (yet) — those are
+# gaps, not data (see _has_data). A request re-polls only the stamps missing
+# from the cache (unpublished/future hours, holes, null skeletons, empty
+# responses) plus 404 devices, each device over its own missing span. fetched_at
 # carries no freshness meaning — it only drives the 7-day sliding
 # retention: reads touch it (at most once per TOUCH_MIN_AGE to avoid write
 # churn) and delete_older_than prunes rows nobody viewed for a week.
@@ -94,6 +96,15 @@ def _expected_stamps(window_from, window_to, period_type: str) -> list:
 
 def _slim_record(record: Dict) -> Dict:
     return {k: record[k] for k in _PAYLOAD_FIELDS if k in record}
+
+
+def _has_data(record: Dict) -> bool:
+    """False for DPD's skeleton records: a stamp with both volume fields null
+    carries no data yet. Such records are never cached and never satisfy a
+    stamp on read — the stamp stays a gap re-asked until real values appear.
+    (Observed on prod 2026-07-09: an intraday poll cached a full commercial
+    day of nulls and the holes were never re-polled.)"""
+    return record.get("dvstAlwrk") is not None or record.get("dvwrkAlwrk") is not None
 
 
 def _restore_ids(payload: list, row) -> list:
@@ -189,7 +200,7 @@ async def fetch_dpd_volumes(
                 key4 = (row.ser_num, row.mf_dev, row.type_dev, row.ch_num)
                 for rec in _restore_ids(row.payload, row):
                     stamp = _record_stamp(rec, period_type)
-                    if stamp is not None:
+                    if stamp is not None and _has_data(rec):
                         cached[key4][stamp] = rec
                 if now - row.fetched_at >= TOUCH_MIN_AGE:
                     touch_ids.append(row.id)
@@ -240,16 +251,18 @@ async def fetch_dpd_volumes(
                         fresh[(record["serNum"], record["mfDev"],
                                record["typeDev"], record["chNum"])][stamp] = record
 
-                # Everything the poll returned is cached (records outside the
-                # requested window are final data too — they warm the cache).
-                # Fresh stamps are merged into the day rows they belong to,
-                # fresh winning over cached, and only days that actually got
-                # new records are written.
+                # Everything the poll returned with data is cached (records
+                # outside the requested window are final data too — they warm
+                # the cache; null skeletons are not, see _has_data). Fresh
+                # stamps are merged into the day rows they belong to, fresh
+                # winning over cached, and only days that actually got new
+                # records are written.
                 upsert_rows = []
                 for key4, stamps in fresh.items():
                     by_day: Dict[date, Dict] = defaultdict(dict)
                     for stamp, rec in stamps.items():
-                        by_day[_stamp_day(stamp)][stamp] = rec
+                        if _has_data(rec):
+                            by_day[_stamp_day(stamp)][stamp] = rec
                     for day, day_stamps in by_day.items():
                         merged = {
                             s: r
