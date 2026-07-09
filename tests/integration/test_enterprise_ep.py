@@ -277,6 +277,41 @@ class TestEnterpriseVolumes:
         )
         assert resp.status_code == 400
 
+    async def test_cache_clear_admin_only(
+        self, admin_client, viewer_client, seed_topology, mocker
+    ):
+        """DELETE /enterprise/cache/ wipes the DPD cache; the auth middleware
+        rejects non-admins (any DELETE needs the admin role)."""
+        await admin_client.post(
+            "/enterprise-mappings/", json=_enterprise_payload(seed_topology)
+        )
+        mock_client = mocker.AsyncMock()
+        mock_client.get_volumes.return_value = [{
+            "serNum": 123456, "mfDev": 1, "typeDev": 3, "chNum": 0,
+            "date": "2024-12-25", "dvstAlwrk": 100.5,
+        }]
+        mocker.patch(
+            "backend.services.enterprise_volume_service.DPDClient.for_branch",
+            mocker.AsyncMock(return_value=mock_client),
+        )
+        params = {
+            "line_id": [seed_topology["line1"]],
+            "from_date": "2024-12-25",
+            "to_date": "2024-12-25",
+        }
+        await admin_client.get("/enterprise/volumes/", params=params)
+
+        assert (await viewer_client.delete("/enterprise/cache/")).status_code == 403
+
+        resp = await admin_client.delete("/enterprise/cache/")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["deleted"] == 1
+
+        # The next request finds an empty cache and polls DPD again.
+        mock_client.get_volumes.reset_mock()
+        await admin_client.get("/enterprise/volumes/", params=params)
+        mock_client.get_volumes.assert_awaited_once()
+
     async def test_volumes_dpd_down_503(self, admin_client, seed_topology, mocker):
         await admin_client.post(
             "/enterprise-mappings/", json=_enterprise_payload(seed_topology)

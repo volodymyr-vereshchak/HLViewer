@@ -12,11 +12,13 @@ from fastapi import APIRouter, Depends, Query, status, HTTPException, UploadFile
 from backend.api.endpoints.auth_ep import get_branch_filter
 from fastapi.responses import StreamingResponse
 
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from backend.db.engine import get_session
 from backend.db.dao.enterprise_dao import EnterpriseDao
+from backend.db.models.dpd_cache_model import DpdVolumeCache
 from backend.db.models.enterprise_model import EnterpriseRead, EnterpriseCreate, EnterpriseUpdate
 from backend.db.models.enterprise_models import (
     EnterpriseVolumeResponse,
@@ -84,7 +86,29 @@ class EnterpriseRouter:
                 "information and active status. Legacy endpoint."
             ),
         )
+        self.router.add_api_route(
+            path="/enterprise/cache/",
+            tags=["enterprise"],
+            endpoint=self.clear_dpd_cache,
+            methods=["DELETE"],
+            status_code=status.HTTP_200_OK,
+            summary="Clear the DPD volume cache",
+            description=(
+                "Deletes every cached DPD volume row; subsequent requests "
+                "re-poll DPD from scratch. Admin-only (the auth middleware "
+                "requires the admin role for any DELETE)."
+            ),
+        )
 
+
+    async def clear_dpd_cache(
+        self,
+        session: AsyncSession = Depends(get_session),
+    ) -> dict:
+        result = await session.execute(delete(DpdVolumeCache))
+        await session.commit()
+        logger.info(f"DPD volume cache cleared ({result.rowcount} rows)")
+        return {"deleted": result.rowcount}
 
     async def get_enterprise_volumes(
         self,
