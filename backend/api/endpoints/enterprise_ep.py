@@ -39,6 +39,26 @@ from backend.services.enterprise_volume_service import (
 
 logger = logging.getLogger(__name__)
 
+# Strong refs to detached poll-cleanup tasks (bare create_task results may be
+# garbage-collected before completion).
+_poll_reapers: set = set()
+
+
+async def _reap_poll(task: "asyncio.Task") -> None:
+    """Await a (usually cancelled) poll task until it fully unwinds, so its
+    transaction rolls back and the branch advisory lock is released.
+
+    Runs DETACHED from the stream generator: awaiting the task inside the
+    dying generator's finally can itself be re-cancelled mid-rollback, leaving
+    the lock on a leaked connection (prod incident 2026-07-11: one cancelled
+    stream wedged its branch for ~50 minutes, queueing every later request)."""
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        logger.exception("Enterprise poll cleanup failed")
+
 
 class EnterpriseRouter:
     """Router for enterprise volume endpoints."""
@@ -280,7 +300,9 @@ class EnterpriseRouter:
             result = await task
             yield dump({"type": "result", "data": jsonable_encoder(result)})
         except asyncio.CancelledError:
-            raise  # client went away — unwind (finally cancels the poll)
+            # Client went away; the poll is reaped in the finally below.
+            logger.info("Enterprise volume stream cancelled by client")
+            raise
         except Exception as e:
             # The response is already streaming with status 200, so failures
             # can only be reported in-band.
@@ -288,7 +310,12 @@ class EnterpriseRouter:
             yield dump({"type": "error", "detail": str(e)})
         finally:
             task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+            # Never await the unwind here: this generator may be dying under
+            # cancellation and the await would be interrupted mid-rollback,
+            # leaking the branch advisory lock. A detached reaper waits it out.
+            reaper = asyncio.create_task(_reap_poll(task))
+            _poll_reapers.add(reaper)
+            reaper.add_done_callback(_poll_reapers.discard)
 
     async def clear_dpd_cache(
         self,

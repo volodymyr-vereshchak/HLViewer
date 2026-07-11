@@ -187,6 +187,16 @@ async def fetch_dpd_volumes(
             if events_cb is not None:
                 # Another poll for this branch may hold the lock for a while.
                 events_cb({"type": "status", "phase": "waiting"})
+            # Safety nets against a wedged branch: don't queue on the advisory
+            # lock forever (a stuck poll would otherwise stack every following
+            # request and drain the connection pool — the whole app hangs),
+            # and let Postgres kill a leaked idle-in-transaction connection as
+            # a last resort. The cap is generous because a healthy poll keeps
+            # the transaction idle the whole time it talks to DPD.
+            await session.execute(text("SET LOCAL lock_timeout = '300s'"))
+            await session.execute(
+                text("SET LOCAL idle_in_transaction_session_timeout = '1800s'")
+            )
             await session.execute(
                 text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
                 {"key": f"dpd-branch-{branch_id}"},

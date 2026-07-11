@@ -9,12 +9,14 @@ For hourly a bare date range means commercial days: from=D1&to=D2 is the
 stamp window [D1 07:00 .. D2+1 06:00]."""
 
 import asyncio
+import json
 from datetime import date, datetime, timedelta
 
 import pytest
 from sqlalchemy import func, text
 from sqlmodel import select
 
+from backend.api.endpoints.enterprise_ep import EnterpriseRouter
 from backend.db.engine import async_session_factory
 from backend.db.models.dpd_cache_model import DpdVolumeCache
 from backend.services.enterprise_volume_service import (
@@ -494,6 +496,42 @@ class TestDpdCacheEvents:
             ("status", "aggregating"),
         ]
         assert events[1]["total"] == 0
+
+
+class TestDpdStreamCancellation:
+    async def test_cancelled_stream_releases_branch_lock(self, dpd_mock):
+        """A client aborting the progress stream mid-poll must not leave the
+        branch advisory lock behind (prod incident 2026-07-11: one cancelled
+        stream wedged its branch for ~50 minutes). The detached reaper rolls
+        the poll back, so the next request acquires the lock and completes."""
+        devices = [make_device(101)]
+        poll_started = asyncio.Event()
+        never = asyncio.Event()
+
+        async def hanging_get_volumes(polled, date_from, date_to, **kwargs):
+            poll_started.set()
+            await never.wait()  # hangs until the poll task is cancelled
+            return []
+
+        dpd_mock.get_volumes = hanging_get_volumes
+
+        gen = EnterpriseRouter._volume_events(
+            devices, as_dt(DAY1), as_dt(DAY1), "daily", None, False
+        )
+        first = json.loads(await asyncio.wait_for(gen.__anext__(), 5))
+        assert first == {"type": "status", "phase": "waiting"}
+        await asyncio.wait_for(poll_started.wait(), 5)  # lock is now held
+        await gen.aclose()  # client disconnect
+
+        async def quick_get_volumes(polled, date_from, date_to, **kwargs):
+            return daily_records(polled, [DAY1])
+
+        dpd_mock.get_volumes = quick_get_volumes
+        records = await asyncio.wait_for(
+            fetch_dpd_volumes(devices, as_dt(DAY1), as_dt(DAY1), "daily"),
+            timeout=10,
+        )
+        assert record_keys(records) == {(101, DAY1.isoformat())}
 
 
 class TestDpdDedup:
