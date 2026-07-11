@@ -247,23 +247,28 @@ class EnterpriseRouter:
         silent = 0.0
         try:
             while True:
+                # Status events first (they are emitted before the progress
+                # counter they precede logically), then the coalesced progress.
+                try:
+                    event = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    event = None
+                if event is not None:
+                    silent = 0.0
+                    yield dump(event)
+                    continue
                 if latest["dirty"]:
                     latest["dirty"] = False
                     silent = 0.0
                     yield dump(latest["progress"])
-                try:
-                    event = queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    if task.done():
-                        break
-                    await asyncio.sleep(0.1)
-                    silent += 0.1
-                    if silent >= 15.0:
-                        silent = 0.0
-                        yield dump({"type": "ping"})
                     continue
-                silent = 0.0
-                yield dump(event)
+                if task.done():
+                    break
+                await asyncio.sleep(0.1)
+                silent += 0.1
+                if silent >= 15.0:
+                    silent = 0.0
+                    yield dump({"type": "ping"})
             # Flush whatever arrived between the last drain and task completion.
             while True:
                 try:
