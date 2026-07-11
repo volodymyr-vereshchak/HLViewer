@@ -17,6 +17,7 @@ from sqlalchemy import func, text
 from sqlmodel import select
 
 from backend.api.endpoints.enterprise_ep import EnterpriseRouter
+from backend.db.dao.dpd_cache_dao import DpdCacheDao
 from backend.db.engine import async_session_factory
 from backend.db.models.dpd_cache_model import DpdVolumeCache
 from backend.services.enterprise_volume_service import (
@@ -522,9 +523,10 @@ class TestDpdCacheHourly:
 
 class TestDpdCacheEvents:
     async def test_events_cb_reports_phases_and_progress(self, dpd_mock):
-        """The streaming endpoint's event feed: waiting → initial progress with
-        the poll denominator → aggregating. Per-device increments are covered
-        by the dpd_client unit test (get_volumes is mocked here)."""
+        """The streaming endpoint's event feed: initial progress with the poll
+        denominator → aggregating (a leader never waits — the waiting phase
+        appears only when a containing poll is already running). Per-device
+        increments are covered by the dpd_client unit test."""
         devices = [make_device(101), make_device(102)]
         dpd_mock.get_volumes.return_value = daily_records(devices, [DAY1])
         events = []
@@ -533,7 +535,7 @@ class TestDpdCacheEvents:
                                 events_cb=events.append)
 
         kinds = [(e.get("type"), e.get("phase")) for e in events]
-        assert kinds[0] == ("status", "waiting")
+        assert ("status", "waiting") not in kinds  # this request leads
         progress = [e for e in events if e["type"] == "progress"]
         assert progress[0] == {"type": "progress", "done": 0, "total": 2}
         assert ("status", "aggregating") in kinds
@@ -549,6 +551,39 @@ class TestDpdCacheEvents:
             ("status", "aggregating"),
         ]
         assert events[0]["total"] == 0
+
+
+class TestUpsertMerge:
+    async def test_conflicting_rows_merge_stamp_wise(self, clean_db):
+        """Two writes to the same (device, day) row union by record stamp —
+        the incoming record wins per stamp, nothing is dropped. This is what
+        makes parallel polls sharing a boundary day safe."""
+        def row(payload):
+            return {
+                "ser_num": 101, "mf_dev": 1, "type_dev": 3, "ch_num": 0,
+                "period_type": "hourly", "day": DAY1, "payload": payload,
+                "fetched_at": datetime.now(),
+            }
+
+        early = [{"date": f"{DAY1.isoformat()}T{h:02d}:00:00", "dvstAlwrk": 1.0}
+                 for h in range(0, 7)]
+        late = [{"date": f"{DAY1.isoformat()}T{h:02d}:00:00", "dvstAlwrk": 2.0}
+                for h in range(6, 24)]
+
+        async with async_session_factory() as session:
+            async with session.begin():
+                await DpdCacheDao(session).upsert_days([row(early)])
+            async with session.begin():
+                await DpdCacheDao(session).upsert_days([row(late)])
+
+        rows = await cache_rows()
+        payload = rows[0].payload
+        assert len(payload) == 24  # union of 00-06 and 06-23
+        by_stamp = {r["date"]: r["dvstAlwrk"] for r in payload}
+        assert by_stamp[f"{DAY1.isoformat()}T06:00:00"] == 2.0  # newer wins
+        assert by_stamp[f"{DAY1.isoformat()}T00:00:00"] == 1.0  # older kept
+        stamps = [r["date"] for r in payload]
+        assert stamps == sorted(stamps)
 
 
 class TestDpdStreamCancellation:
@@ -572,7 +607,7 @@ class TestDpdStreamCancellation:
             devices, as_dt(DAY1), as_dt(DAY1), "daily", None, False
         )
         first = json.loads(await asyncio.wait_for(gen.__anext__(), 5))
-        assert first == {"type": "status", "phase": "waiting"}
+        assert first["type"] == "progress"  # the leader starts polling
         await asyncio.wait_for(poll_started.wait(), 5)  # lock is now held
         await gen.aclose()  # client disconnect
 
@@ -686,8 +721,80 @@ class TestDpdDedup:
         release.set()
         await wide_task
 
+    async def test_different_windows_same_devices_run_parallel(self, dpd_mock):
+        """Requests over the same devices but different (non-contained) date
+        ranges run in parallel; the boundary day both of them write is merged
+        stamp-wise in SQL, not overwritten."""
+        dev = make_device(101)
+        leader_started = asyncio.Event()
+        release_leader = asyncio.Event()
+
+        async def get_volumes(polled, date_from, date_to, **kwargs):
+            if date_to.date() <= DAY2:  # the leader's window DAY1..DAY2
+                leader_started.set()
+                await release_leader.wait()
+                return daily_records(polled, [DAY1, DAY2])
+            return daily_records(polled, [DAY2, DAY3])
+
+        dpd_mock.get_volumes = get_volumes
+        leader = asyncio.create_task(
+            fetch_dpd_volumes([dev], as_dt(DAY1), as_dt(DAY2), "daily")
+        )
+        await asyncio.wait_for(leader_started.wait(), 5)
+
+        # DAY2..DAY3 extends past the leader's window → not contained → runs
+        # in parallel while the leader is still polling.
+        follower_records = await asyncio.wait_for(
+            fetch_dpd_volumes([dev], as_dt(DAY2), as_dt(DAY3), "daily"),
+            timeout=5,
+        )
+        assert record_keys(follower_records) == {
+            (101, DAY2.isoformat()), (101, DAY3.isoformat()),
+        }
+
+        release_leader.set()
+        leader_records = await leader
+        assert record_keys(leader_records) == {
+            (101, DAY1.isoformat()), (101, DAY2.isoformat()),
+        }
+        # Both wrote DAY2; the SQL merge kept a single record, nothing lost.
+        assert await cache_row_count() == 3
+
+    async def test_contained_request_waits_and_serves_from_cache(self, dpd_mock):
+        """A request fully inside a running poll (dates and devices) waits for
+        it and is served from cache without its own DPD call."""
+        dev = make_device(101)
+        leader_started = asyncio.Event()
+        release_leader = asyncio.Event()
+        calls = {"count": 0}
+
+        async def get_volumes(polled, date_from, date_to, **kwargs):
+            calls["count"] += 1
+            leader_started.set()
+            await release_leader.wait()
+            return daily_records(polled, [DAY1, DAY2, DAY3])
+
+        dpd_mock.get_volumes = get_volumes
+        leader = asyncio.create_task(
+            fetch_dpd_volumes([dev], as_dt(DAY1), as_dt(DAY3), "daily")
+        )
+        await asyncio.wait_for(leader_started.wait(), 5)
+
+        follower = asyncio.create_task(
+            fetch_dpd_volumes([dev], as_dt(DAY2), as_dt(DAY2), "daily")
+        )
+        await asyncio.sleep(0.3)
+        assert not follower.done()  # contained → waiting for the leader
+
+        release_leader.set()
+        await leader
+        follower_records = await asyncio.wait_for(follower, timeout=5)
+
+        assert calls["count"] == 1  # follower was served from cache
+        assert record_keys(follower_records) == {(101, DAY2.isoformat())}
+
     async def test_hourly_and_daily_polls_do_not_block_each_other(self, dpd_mock):
-        """The lock includes period_type: a long hourly poll must not
+        """The registry is per period_type: a long hourly poll must not
         make a daily request for the same devices queue behind it."""
         devices = [make_device(101)]
         hourly_started = asyncio.Event()

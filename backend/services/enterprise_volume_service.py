@@ -13,11 +13,13 @@ The only real differences are captured by two parameters:
   volumes as 0.0, the plain one preserves None (the frontend shows a gap).
 """
 
+import hashlib
 import logging
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from time import perf_counter
 from typing import Callable, Dict, List, Optional
+from uuid import uuid4
 
 from sqlalchemy import text
 
@@ -152,6 +154,92 @@ def _as_dt(stamp) -> datetime:
     )
 
 
+# ── Active-poll registry ─────────────────────────────────────────────────────
+# Concurrency rule (user decision 2026-07-11): polls run in PARALLEL unless a
+# later request is fully contained (window AND devices) in one already talking
+# to DPD — then it waits on that poll's advisory lock and is served from
+# cache. Small overlaps of parallel polls are made safe by the SQL-side
+# payload merge in DpdCacheDao.upsert_days.
+
+_POLL_REGISTRY_MUTEX = "dpd-poll-registry"
+
+
+def _device_hash(key4: tuple) -> int:
+    """Stable cross-process 64-bit device id (Python's hash() is salted)."""
+    raw = "{}-{}-{}-{}".format(*key4).encode()
+    return int.from_bytes(
+        hashlib.blake2b(raw, digest_size=8).digest(), "big", signed=True
+    )
+
+
+async def _find_or_register_poll(
+    main_session, period_type: str,
+    window_from: datetime, window_to: datetime, device_hashes: List[int],
+):
+    """Containment check + registration, atomically under a registry mutex.
+
+    Returns ("wait", lock_key) when a running poll fully covers this request,
+    else ("lead", own lock_key). For a leader the EXCLUSIVE advisory lock is
+    taken on main_session BEFORE the registry row becomes visible (the aux
+    transaction commits after), so no follower can grab the shared lock while
+    the leader does not hold the exclusive one yet."""
+    async with async_session_factory() as aux:
+        async with aux.begin():
+            await aux.execute(
+                text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"),
+                {"k": _POLL_REGISTRY_MUTEX},
+            )
+            # Lazy cleanup: rows of crashed/forgotten polls. Nobody can hang
+            # on them anyway — the advisory lock died with its transaction.
+            await aux.execute(
+                text("DELETE FROM dpd_active_poll WHERE started_at < :cutoff"),
+                {"cutoff": datetime.now() - timedelta(hours=1)},
+            )
+            row = (await aux.execute(
+                text(
+                    "SELECT lock_key FROM dpd_active_poll "
+                    "WHERE period_type = :pt AND window_from <= :wf "
+                    "AND window_to >= :wt "
+                    "AND device_hashes @> CAST(:hashes AS bigint[]) "
+                    "ORDER BY started_at LIMIT 1"
+                ),
+                {"pt": period_type, "wf": window_from, "wt": window_to,
+                 "hashes": device_hashes},
+            )).first()
+            if row:
+                return "wait", row[0]
+
+            lock_key = f"dpd-poll-{uuid4().hex}"
+            await main_session.execute(
+                text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"),
+                {"k": lock_key},
+            )
+            await aux.execute(
+                text(
+                    "INSERT INTO dpd_active_poll (lock_key, period_type, "
+                    "window_from, window_to, device_hashes, started_at) "
+                    "VALUES (:k, :pt, :wf, :wt, CAST(:hashes AS bigint[]), :now)"
+                ),
+                {"k": lock_key, "pt": period_type, "wf": window_from,
+                 "wt": window_to, "hashes": device_hashes,
+                 "now": datetime.now()},
+            )
+            return "lead", lock_key
+
+
+async def _unregister_poll(lock_key: str) -> None:
+    try:
+        async with async_session_factory() as aux:
+            async with aux.begin():
+                await aux.execute(
+                    text("DELETE FROM dpd_active_poll WHERE lock_key = :k"),
+                    {"k": lock_key},
+                )
+    except Exception:
+        # A leftover row is harmless (lazy cleanup, nobody hangs on it).
+        logger.exception(f"Failed to unregister DPD poll {lock_key}")
+
+
 def _device_key(device: Dict) -> tuple:
     return (device["serNum"], device["mfDev"], device["typeDev"], device["chNum"])
 
@@ -168,23 +256,43 @@ async def fetch_dpd_volumes(
 
     ``events_cb`` (optional, SYNCHRONOUS, must be non-blocking) receives
     progress events for streaming endpoints:
-    {"type":"status","phase":"waiting"} before the device locks,
+    {"type":"status","phase":"waiting"} while a containing poll runs,
     {"type":"progress","done":N,"total":M} as device polls complete,
     {"type":"status","phase":"aggregating"} once polling is over. It runs on
     the polling path — a slow consumer must drop events, never block here.
 
-    Concurrency: the read-poll-write cycle runs inside one transaction
-    holding per-(device, period_type) advisory locks for the devices about to
-    be polled. Requests over disjoint devices run in parallel; fully-cached
-    requests take no locks and never wait; identical/overlapping requests
-    from any uvicorn worker (browser auto-retries, double-fired frontend
-    fetches, several users) serialize per device, and after acquiring the
-    locks the cache is RE-read, so a follower finds the leader's rows cached
-    instead of launching its own DPD poll for the same data.
+    Concurrency: polls run in parallel. A request waits ONLY when its window
+    and device set are fully contained in a poll already talking to DPD (see
+    the active-poll registry above) — it is then served from what that poll
+    stored, instead of re-downloading the same data. Fully-cached requests
+    never touch the registry and never wait. Concurrent writes to shared
+    boundary rows are merged stamp-wise in SQL (DpdCacheDao.upsert_days).
 
     Raises LookupError when no device carries a branch_id, ValueError when the
     branch has no/incomplete credentials (DPDClient.for_branch), and whatever
     the HTTP client raises when the API is unreachable."""
+    poll_key_holder: List[Optional[str]] = [None]
+    try:
+        return await _fetch_dpd_volumes_impl(
+            devices, date_from, date_to, period_type, events_cb,
+            poll_key_holder,
+        )
+    finally:
+        # Runs on success, failure AND cancellation (the stream reaper awaits
+        # this unwind), after the transaction — and with it the exclusive
+        # advisory lock — is already gone.
+        if poll_key_holder[0]:
+            await _unregister_poll(poll_key_holder[0])
+
+
+async def _fetch_dpd_volumes_impl(
+    devices: List[Dict],
+    date_from: datetime,
+    date_to: datetime,
+    period_type: str,
+    events_cb: Optional[Callable[[Dict], None]],
+    poll_key_holder: List[Optional[str]],
+) -> List[Dict]:
     branch_id = pick_branch_id(devices)
     if branch_id is None:
         raise LookupError("Could not determine branch for requested lines")
@@ -270,44 +378,47 @@ async def fetch_dpd_volumes(
             poll_devices, device_spans, device_days = _compute_missing(devices)
 
             if poll_devices:
-                # Locks are PER DEVICE (+period_type): requests touching
-                # disjoint device sets run in parallel, fully-cached requests
-                # take no locks at all and never wait. Only requests that
-                # would poll the SAME devices serialize — deliberately: the
-                # waiter is then served from cache right after the leader
-                # instead of re-downloading the same data from DPD. Keys are
-                # sorted so concurrent acquisitions cannot deadlock.
-                if events_cb is not None:
-                    events_cb({"type": "status", "phase": "waiting"})
-                lock_keys = sorted(
-                    "dpd-dev-{}-{}-{}-{}-{}".format(*_device_key(d), period_type)
-                    for d in poll_devices
+                # Parallel by default. Wait ONLY when this request is fully
+                # contained (window and devices) in a poll already talking to
+                # DPD — then its data lands in cache within seconds and
+                # re-downloading it would just double the DPD load. Partially
+                # overlapping / disjoint requests proceed concurrently; the
+                # SQL-side payload merge keeps shared boundary rows safe.
+                mode, lock_key = await _find_or_register_poll(
+                    session, period_type,
+                    _as_dt(window_from), _as_dt(window_to),
+                    sorted(_device_hash(_device_key(d)) for d in poll_devices),
                 )
-                await session.execute(
-                    text(
-                        "SELECT pg_advisory_xact_lock(hashtextextended(k, 0)) "
-                        "FROM unnest(CAST(:keys AS text[])) AS k"
-                    ),
-                    {"keys": lock_keys},
-                )
-                # Re-read the locked devices: a concurrent poll may have
-                # cached (part of) what we were about to ask DPD for.
-                for device in poll_devices:
-                    key4 = _device_key(device)
-                    cached[key4] = {}
-                    tried_days.difference_update(
-                        {t for t in tried_days if t[0] == key4}
+                if mode == "wait":
+                    if events_cb is not None:
+                        events_cb({"type": "status", "phase": "waiting"})
+                    # Shared lock: waiters don't serialize behind each other.
+                    await session.execute(
+                        text("SELECT pg_advisory_xact_lock_shared("
+                             "hashtextextended(:k, 0))"),
+                        {"k": lock_key},
                     )
-                for row in await dao.load_range(
-                    poll_devices,
-                    period_type,
-                    day_from - timedelta(days=1),
-                    day_to + timedelta(days=1),
-                ):
-                    _absorb_row(row)
-                poll_devices, device_spans, device_days = _compute_missing(
-                    poll_devices
-                )
+                    # The containing poll finished — re-read what it stored.
+                    for device in poll_devices:
+                        key4 = _device_key(device)
+                        cached[key4] = {}
+                        tried_days.difference_update(
+                            {t for t in tried_days if t[0] == key4}
+                        )
+                    for row in await dao.load_range(
+                        poll_devices,
+                        period_type,
+                        day_from - timedelta(days=1),
+                        day_to + timedelta(days=1),
+                    ):
+                        _absorb_row(row)
+                    # Leftovers (holes the leader couldn't fill) are polled
+                    # below without registering — they are tiny by now.
+                    poll_devices, device_spans, device_days = _compute_missing(
+                        poll_devices
+                    )
+                else:
+                    poll_key_holder[0] = lock_key
 
             if events_cb is not None:
                 events_cb({"type": "progress", "done": 0,

@@ -52,16 +52,22 @@ class DpdCacheDao(BasicDao):
         return list(result.scalars().all())
 
     async def upsert_days(self, rows: List[Dict]) -> None:
-        """Insert/replace per-(device, day) payload rows.
+        """Insert/merge per-(device, day) payload rows.
 
         `rows` are dicts with the DpdVolumeCache column names, unique per
         (device, period_type, day) — a key repeated within one call would make
         ON CONFLICT DO UPDATE fail ("cannot affect row a second time").
 
+        On conflict the payload is MERGED stamp-wise in SQL (union by the
+        record "date", the incoming record wins): polls run in parallel and
+        two of them can write the same boundary day (one brings its
+        00:00-06:00 hours, the other 07:00-23:00) — replacing the whole array
+        would silently drop the other poll's records.
+
         asyncpg COPY into a temp table + one INSERT ... ON CONFLICT is ~20x
         faster than chunked multi-VALUES for a full-month poll (~9.5k JSONB
         rows). Everything runs inside the caller's transaction (no commit
-        here — committing would release the branch advisory lock mid-poll);
+        here — committing would release the poll's advisory lock mid-flight);
         temp tables are per-connection, so concurrent workers cannot clash."""
         if not rows:
             return
@@ -83,7 +89,20 @@ class DpdCacheDao(BasicDao):
             f"INSERT INTO dpd_volume_cache ({cols}) "
             f"SELECT {cols} FROM _tmp_dpd_volume_cache "
             "ON CONFLICT ON CONSTRAINT uq_dpd_cache_device_period_day "
-            "DO UPDATE SET payload = EXCLUDED.payload, "
+            "DO UPDATE SET payload = ("
+            "  SELECT COALESCE(jsonb_agg(rec ORDER BY stamp), '[]'::jsonb)"
+            "  FROM ("
+            "    SELECT DISTINCT ON (rec->>'date') rec, rec->>'date' AS stamp"
+            "    FROM ("
+            "      SELECT r AS rec, 1 AS pri"
+            "      FROM jsonb_array_elements(EXCLUDED.payload) AS r"
+            "      UNION ALL"
+            "      SELECT r AS rec, 0 AS pri"
+            "      FROM jsonb_array_elements(dpd_volume_cache.payload) AS r"
+            "    ) all_recs"
+            "    ORDER BY rec->>'date', pri DESC"
+            "  ) dedup"
+            "), "
             "fetched_at = EXCLUDED.fetched_at"
         ))
         await self.session.execute(text("DROP TABLE _tmp_dpd_volume_cache"))

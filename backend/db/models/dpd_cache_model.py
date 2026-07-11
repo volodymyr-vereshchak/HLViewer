@@ -1,8 +1,8 @@
 from datetime import date, datetime
-from typing import Optional
+from typing import List, Optional
 
 from sqlalchemy import BigInteger, Column, Index, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlmodel import Field, SQLModel
 
 
@@ -41,3 +41,28 @@ class DpdVolumeCache(SQLModel, table=True):
         sa_column=Column(JSONB, nullable=False, server_default="[]"),
     )
     fetched_at: datetime
+
+
+class DpdActivePoll(SQLModel, table=True):
+    """Ephemeral registry of DPD polls currently talking to the API.
+
+    One row per in-flight poll: its request window, period_type and the
+    hashes of the devices it covers. A later request whose window AND device
+    set are fully contained in a running poll waits on the poll's advisory
+    lock (lock_key) and is then served from cache; everything else runs in
+    parallel. Rows are deleted on completion; stale leftovers (crashed
+    workers) are purged lazily at registration time, and the table is
+    UNLOGGED — no WAL cost, auto-truncated on a Postgres restart. Nobody can
+    hang on a stale row: the advisory lock dies with its transaction."""
+
+    __tablename__ = "dpd_active_poll"
+    __table_args__ = {"prefixes": ["UNLOGGED"]}
+
+    lock_key: str = Field(primary_key=True, max_length=64)
+    period_type: str = Field(max_length=8)
+    window_from: datetime
+    window_to: datetime
+    device_hashes: List[int] = Field(
+        sa_column=Column(ARRAY(BigInteger), nullable=False)
+    )
+    started_at: datetime

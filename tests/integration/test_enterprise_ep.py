@@ -324,7 +324,9 @@ class TestEnterpriseVolumes:
 
         kinds = [e["type"] for e in events]
         assert "progress" in kinds
-        assert any(
+        # No waiting phase: this request leads its own poll (waiting appears
+        # only when a containing poll is already running).
+        assert not any(
             e.get("phase") == "waiting" for e in events if e["type"] == "status"
         )
         assert events[-1]["type"] == "result"
