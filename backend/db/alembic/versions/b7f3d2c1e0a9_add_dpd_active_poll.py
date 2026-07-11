@@ -1,10 +1,10 @@
-"""add dpd_active_poll (ephemeral registry of in-flight DPD polls)
+﻿"""add dpd_active_poll (ephemeral registry of in-flight DPD polls)
 
 UNLOGGED: rows live seconds-to-minutes (registered before a real DPD poll,
-deleted on completion), so WAL durability is unwanted — the table is simply
+deleted on completion), so WAL durability is unwanted вЂ” the table is simply
 truncated when Postgres restarts.
 
-Revision ID: a1b2c3d4e5f6
+Revision ID: b7f3d2c1e0a9
 Revises: f9a0b1c2d3e4
 Create Date: 2026-07-11
 
@@ -16,7 +16,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = "a1b2c3d4e5f6"
+revision: str = "b7f3d2c1e0a9"
 down_revision: Union[str, None] = "f9a0b1c2d3e4"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -40,3 +40,4 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table("dpd_active_poll")
+
