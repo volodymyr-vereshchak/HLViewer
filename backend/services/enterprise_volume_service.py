@@ -481,14 +481,19 @@ def aggregate_volumes(
             logger.warning(f"Device not found in mappings: {device_key}")
             continue
 
-        line_key = device_info["line_id"]
+        # A physical line reports to every requested line it belongs to:
+        # itself (when requested directly) and/or its virtual parents.
         if line_remap is not None:
-            line_key = line_remap.get(line_key)
-            if line_key is None:
+            line_keys = line_remap.get(device_info["line_id"]) or []
+            if not isinstance(line_keys, (list, tuple)):
+                line_keys = [line_keys]
+            if not line_keys:
                 logger.debug(
                     f"Physical line {device_info['line_id']} not in requested lines, skipping"
                 )
                 continue
+        else:
+            line_keys = [device_info["line_id"]]
 
         # Most devices report the commercial volume in dvstAlwrk; a few models
         # (ТКБ, smart104) report it in dvwrkAlwrk — selected by device identity.
@@ -510,22 +515,23 @@ def aggregate_volumes(
         if isinstance(pressure_unit, str):
             pressure_unit = pressure_unit.strip() or None
 
-        key = (line_key, record_period)
-        if volume is not None:
-            aggregated[key]["total"] += volume
-        aggregated[key]["devices"].append(
-            DeviceVolume(
-                serNum=device_info["serNum"],
-                mfDev=device_info["mfDev"],
-                typeDev=device_info["typeDev"],
-                chNum=device_info["chNum"],
-                enterprise_name=device_info.get("enterprise_name", ""),
-                volume=volume,
-                temperature=record.get("temper"),
-                pressure=record.get("press"),
-                pressure_unit=pressure_unit,
+        for line_key in line_keys:
+            key = (line_key, record_period)
+            if volume is not None:
+                aggregated[key]["total"] += volume
+            aggregated[key]["devices"].append(
+                DeviceVolume(
+                    serNum=device_info["serNum"],
+                    mfDev=device_info["mfDev"],
+                    typeDev=device_info["typeDev"],
+                    chNum=device_info["chNum"],
+                    enterprise_name=device_info.get("enterprise_name", ""),
+                    volume=volume,
+                    temperature=record.get("temper"),
+                    pressure=record.get("press"),
+                    pressure_unit=pressure_unit,
+                )
             )
-        )
 
     result = [
         EnterpriseVolumeResponse(

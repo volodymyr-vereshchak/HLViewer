@@ -34,29 +34,25 @@ async def resolve_virtual_devices(
     """Resolve a mixed virtual/physical line list to enterprise devices.
 
     Returns (devices, physical_to_original): the line_remap for
-    aggregate_volumes mapping each physical line back to the requested
-    (virtual or physical) line. Shared by the plain and streaming endpoints."""
+    aggregate_volumes mapping each physical line to EVERY requested line it
+    must be reported under — itself when requested directly, plus each
+    requested virtual parent it belongs to. A line that is both requested
+    and a virtual member contributes to both (previously the virtual parent
+    silently stole its volumes, so the line itself got no enterprise data).
+    Shared by the plain and streaming endpoints."""
     virtual_lines_config = await get_active_virtual_lines_db(session)
 
     # Separate virtual and physical line IDs (DB-backed, no numeric threshold)
     virtual_line_ids = [lid for lid in line_id if str(lid) in virtual_lines_config]
     physical_line_ids = [lid for lid in line_id if str(lid) not in virtual_lines_config]
 
-    # Create mapping: physical_line_id -> original_line_id (virtual or physical)
-    physical_to_original = {}
+    # physical_line_id -> [requested lines it reports to]
+    physical_to_original: dict = {}
     for pline_id in physical_line_ids:
-        physical_to_original[pline_id] = pline_id
-
-    # Map each virtual line's physical members to their virtual parent
+        physical_to_original.setdefault(pline_id, []).append(pline_id)
     for vline_id in virtual_line_ids:
-        vline_id_str = str(vline_id)
-        for pline_id in virtual_lines_config[vline_id_str]["physical_line_ids"]:
-            if pline_id in physical_to_original:
-                logger.warning(
-                    f"Physical line {pline_id} is in multiple lines: "
-                    f"{physical_to_original[pline_id]} and {vline_id}"
-                )
-            physical_to_original[pline_id] = vline_id
+        for pline_id in virtual_lines_config[str(vline_id)]["physical_line_ids"]:
+            physical_to_original.setdefault(pline_id, []).append(vline_id)
 
     all_physical_ids = list(physical_to_original.keys())
     if not all_physical_ids:
