@@ -121,6 +121,7 @@ class EnterpriseVirtualRouter:
             pattern="^(daily|hourly)$",
             description="Data granularity: 'daily' or 'hourly'"
         ),
+        include_devices: bool = Query(default=True, description="Set false to strip per-device breakdowns (line totals only)"),
         session: AsyncSession = Depends(get_session),
     ) -> List[EnterpriseVolumeResponse]:
         """
@@ -220,6 +221,9 @@ class EnterpriseVirtualRouter:
             line_remap=physical_to_original,
             none_volume_as_zero=True,
         )
+        if not include_devices:
+            for r in result:
+                r.devices = []
 
         logger.info(
             f"Returning {len(result)} aggregated enterprise volume records "

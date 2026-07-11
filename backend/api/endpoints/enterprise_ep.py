@@ -11,7 +11,6 @@ import logging
 import pandas as pd
 from typing import List, Optional
 from fastapi import APIRouter, Depends, Query, status, HTTPException, UploadFile, File
-from fastapi.encoders import jsonable_encoder
 from backend.api.endpoints.auth_ep import get_branch_filter
 from backend.api.endpoints.enterprise_virtual_ep import resolve_virtual_devices
 from fastapi.responses import StreamingResponse
@@ -149,6 +148,7 @@ class EnterpriseRouter:
             description="Data granularity: 'daily' or 'hourly'"
         ),
         virtual: bool = Query(default=False, description="volumes_virtual semantics: resolve virtual lines, report missing volumes as 0"),
+        include_devices: bool = Query(default=True, description="Set false to strip per-device breakdowns from the result (reports that only need line totals get a ~100x smaller payload)"),
         serNum: Optional[int] = Query(None, description="Optional: Filter by device serial number"),
         mfDev: Optional[int] = Query(None, description="Optional: Manufacturer code"),
         typeDev: Optional[int] = Query(None, description="Optional: Device type code"),
@@ -210,7 +210,7 @@ class EnterpriseRouter:
         return StreamingResponse(
             self._volume_events(
                 devices, date_from, date_to, period_type,
-                line_remap, none_volume_as_zero,
+                line_remap, none_volume_as_zero, include_devices,
             ),
             media_type="application/x-ndjson",
             # nginx honors this per-response: events reach the browser as they
@@ -220,7 +220,8 @@ class EnterpriseRouter:
 
     @staticmethod
     async def _volume_events(
-        devices, date_from, date_to, period_type, line_remap, none_volume_as_zero
+        devices, date_from, date_to, period_type,
+        line_remap, none_volume_as_zero, include_devices=True,
     ):
         """NDJSON event generator around fetch_dpd_volumes.
 
@@ -298,7 +299,18 @@ class EnterpriseRouter:
             if latest["dirty"]:
                 yield dump(latest["progress"])
             result = await task
-            yield dump({"type": "result", "data": jsonable_encoder(result)})
+            if not include_devices:
+                for r in result:
+                    r.devices = []
+            # Serialize with the pydantic core (jsonable_encoder walked ~118k
+            # nested device objects in pure Python — minutes on prod) and off
+            # the event loop, so a big result cannot stall the whole worker.
+            yield await asyncio.to_thread(
+                lambda: dump({
+                    "type": "result",
+                    "data": [r.model_dump(mode="json") for r in result],
+                })
+            )
         except asyncio.CancelledError:
             # Client went away; the poll is reaped in the finally below.
             logger.info("Enterprise volume stream cancelled by client")
@@ -340,6 +352,7 @@ class EnterpriseRouter:
         mfDev: Optional[int] = Query(None, description="Optional: Manufacturer code"),
         typeDev: Optional[int] = Query(None, description="Optional: Device type code"),
         chNum: Optional[int] = Query(None, description="Optional: Filter by device channel number"),
+        include_devices: bool = Query(default=True, description="Set false to strip per-device breakdowns (line totals only)"),
         session: AsyncSession = Depends(get_session),
     ) -> List[EnterpriseVolumeResponse]:
         logger.info(
@@ -408,6 +421,9 @@ class EnterpriseRouter:
             return []
 
         result = aggregate_volumes(volumes_data, devices, period_type)
+        if not include_devices:
+            for r in result:
+                r.devices = []
         logger.info(
             f"Returning {len(result)} aggregated enterprise volume records "
             f"for {len(devices)} devices"

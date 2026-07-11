@@ -333,6 +333,36 @@ class TestEnterpriseVolumes:
         assert result[0]["line_id"] == seed_topology["line1"]
         assert result[0]["total_volume"] == 100.5
 
+    async def test_stream_include_devices_false_strips_breakdowns(
+        self, admin_client, seed_topology, mocker
+    ):
+        """Reports only need line totals: include_devices=false drops the
+        per-device arrays (a month of hourly data shrank from ~18 MB)."""
+        await admin_client.post(
+            "/enterprise-mappings/", json=_enterprise_payload(seed_topology)
+        )
+        mock_client = mocker.AsyncMock()
+        mock_client.get_volumes.return_value = [{
+            "serNum": 123456, "mfDev": 1, "typeDev": 3, "chNum": 0,
+            "date": "2024-12-25", "dvstAlwrk": 100.5,
+        }]
+        mocker.patch(
+            "backend.services.enterprise_volume_service.DPDClient.for_branch",
+            mocker.AsyncMock(return_value=mock_client),
+        )
+
+        events = await read_stream_events(admin_client, {
+            "line_id": [seed_topology["line1"]],
+            "from_date": "2024-12-25",
+            "to_date": "2024-12-25",
+            "include_devices": "false",
+        })
+
+        result = events[-1]["data"]
+        assert result[0]["total_volume"] == 100.5
+        assert result[0]["device_count"] == 1
+        assert result[0]["devices"] == []
+
     async def test_stream_reports_dpd_failure_in_band(
         self, admin_client, seed_topology, mocker
     ):
