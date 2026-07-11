@@ -464,6 +464,38 @@ class TestDpdCacheHourly:
         assert len(again) == 24
 
 
+class TestDpdCacheEvents:
+    async def test_events_cb_reports_phases_and_progress(self, dpd_mock):
+        """The streaming endpoint's event feed: waiting → initial progress with
+        the poll denominator → aggregating. Per-device increments are covered
+        by the dpd_client unit test (get_volumes is mocked here)."""
+        devices = [make_device(101), make_device(102)]
+        dpd_mock.get_volumes.return_value = daily_records(devices, [DAY1])
+        events = []
+
+        await fetch_dpd_volumes(devices, as_dt(DAY1), as_dt(DAY1), "daily",
+                                events_cb=events.append)
+
+        kinds = [(e.get("type"), e.get("phase")) for e in events]
+        assert kinds[0] == ("status", "waiting")
+        progress = [e for e in events if e["type"] == "progress"]
+        assert progress[0] == {"type": "progress", "done": 0, "total": 2}
+        assert ("status", "aggregating") in kinds
+
+        # Full cache hit: no poll, but the same coherent phase sequence.
+        dpd_mock.get_volumes.reset_mock()
+        events.clear()
+        await fetch_dpd_volumes(devices, as_dt(DAY1), as_dt(DAY1), "daily",
+                                events_cb=events.append)
+        dpd_mock.get_volumes.assert_not_awaited()
+        assert [(e.get("type"), e.get("phase")) for e in events] == [
+            ("status", "waiting"),
+            ("progress", None),
+            ("status", "aggregating"),
+        ]
+        assert events[1]["total"] == 0
+
+
 class TestDpdDedup:
     async def test_concurrent_identical_requests_poll_once(self, dpd_mock):
         devices = [make_device(101), make_device(102)]

@@ -184,6 +184,20 @@ class TestRequestParams:
 
         assert seen[111] == ("2026-07-01", "2026-07-03")
 
+    async def test_progress_cb_fires_once_per_completed_device(self):
+        seen = {}
+        client = self.make_recording_client(seen)
+        devices = [dict(DEVICE, serNum=100 + i) for i in range(5)]
+        calls = []
+
+        await client.get_volumes(
+            devices, DATE_FROM, DATE_TO,
+            progress_cb=lambda done, total: calls.append((done, total)),
+        )
+
+        assert [c[0] for c in calls] == [1, 2, 3, 4, 5]
+        assert all(total == 5 for _, total in calls)
+
     async def test_device_ranges_override_per_device(self):
         seen = {}
         client = self.make_recording_client(seen)
@@ -233,6 +247,7 @@ class TestCancellation:
         assert built[0].is_closed
         orphans = [
             t for t in asyncio.all_tasks()
-            if "_get_device_indications" in repr(t) and not t.done()
+            if ("_poll_device" in repr(t) or "_get_device_indications" in repr(t))
+            and not t.done()
         ]
         assert orphans == []

@@ -17,7 +17,7 @@ import logging
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from time import perf_counter
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from sqlalchemy import text
 
@@ -151,9 +151,17 @@ async def fetch_dpd_volumes(
     date_from: datetime,
     date_to: datetime,
     period_type: str,
+    events_cb: Optional[Callable[[Dict], None]] = None,
 ) -> List[Dict]:
     """Raw volume records for the requested devices/range, DPD polled only for
     what the Postgres cache cannot serve.
+
+    ``events_cb`` (optional, SYNCHRONOUS, must be non-blocking) receives
+    progress events for streaming endpoints:
+    {"type":"status","phase":"waiting"} before the advisory lock,
+    {"type":"progress","done":N,"total":M} as device polls complete,
+    {"type":"status","phase":"aggregating"} once polling is over. It runs on
+    the polling path — a slow consumer must drop events, never block here.
 
     The whole read-poll-write cycle runs inside one transaction holding a
     per-branch advisory lock: identical or overlapping requests from any
@@ -176,6 +184,9 @@ async def fetch_dpd_volumes(
 
     async with async_session_factory() as session:
         async with session.begin():
+            if events_cb is not None:
+                # Another poll for this branch may hold the lock for a while.
+                events_cb({"type": "status", "phase": "waiting"})
             await session.execute(
                 text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
                 {"key": f"dpd-branch-{branch_id}"},
@@ -219,6 +230,10 @@ async def fetch_dpd_volumes(
                     poll_devices.append(device)
                     device_spans[key4] = (_as_dt(min(missing)), _as_dt(max(missing)))
 
+            if events_cb is not None:
+                events_cb({"type": "progress", "done": 0,
+                           "total": len(poll_devices)})
+
             fresh: Dict[tuple, Dict] = defaultdict(dict)
             if poll_devices:
                 poll_from = min(span[0] for span in device_spans.values())
@@ -235,14 +250,23 @@ async def fetch_dpd_volumes(
                 )
                 client = await DPDClient.for_branch(branch_id, session)
                 t_poll = perf_counter()
+                progress_cb = None
+                if events_cb is not None:
+                    progress_cb = lambda done, total: events_cb(
+                        {"type": "progress", "done": done, "total": total}
+                    )
                 fresh_records = await client.get_volumes(
                     poll_devices,
                     poll_from,
                     poll_to,
                     type_request=period_type,
                     device_ranges=device_spans,
+                    progress_cb=progress_cb,
                 )
                 poll_secs = perf_counter() - t_poll
+                if events_cb is not None:
+                    # Covers store + merge + the caller's aggregation.
+                    events_cb({"type": "status", "phase": "aggregating"})
 
                 t_store = perf_counter()
                 for record in fresh_records:
@@ -296,6 +320,8 @@ async def fetch_dpd_volumes(
                     f"{len(devices)} devices {window_from}..{window_to} "
                     f"({period_type})"
                 )
+                if events_cb is not None:
+                    events_cb({"type": "status", "phase": "aggregating"})
 
             if touch_ids:
                 # Sliding retention: reading rows keeps them alive another week.

@@ -28,6 +28,50 @@ from backend.services.virtual_lines_config import get_active_virtual_lines_db
 logger = logging.getLogger(__name__)
 
 
+async def resolve_virtual_devices(
+    line_id: List[int], session: AsyncSession
+) -> tuple[List[dict], dict]:
+    """Resolve a mixed virtual/physical line list to enterprise devices.
+
+    Returns (devices, physical_to_original): the line_remap for
+    aggregate_volumes mapping each physical line back to the requested
+    (virtual or physical) line. Shared by the plain and streaming endpoints."""
+    virtual_lines_config = await get_active_virtual_lines_db(session)
+
+    # Separate virtual and physical line IDs (DB-backed, no numeric threshold)
+    virtual_line_ids = [lid for lid in line_id if str(lid) in virtual_lines_config]
+    physical_line_ids = [lid for lid in line_id if str(lid) not in virtual_lines_config]
+
+    # Create mapping: physical_line_id -> original_line_id (virtual or physical)
+    physical_to_original = {}
+    for pline_id in physical_line_ids:
+        physical_to_original[pline_id] = pline_id
+
+    # Map each virtual line's physical members to their virtual parent
+    for vline_id in virtual_line_ids:
+        vline_id_str = str(vline_id)
+        for pline_id in virtual_lines_config[vline_id_str]["physical_line_ids"]:
+            if pline_id in physical_to_original:
+                logger.warning(
+                    f"Physical line {pline_id} is in multiple lines: "
+                    f"{physical_to_original[pline_id]} and {vline_id}"
+                )
+            physical_to_original[pline_id] = vline_id
+
+    all_physical_ids = list(physical_to_original.keys())
+    if not all_physical_ids:
+        logger.info("No physical lines to query after virtual resolution")
+        return [], physical_to_original
+
+    logger.info(
+        f"Resolved {len(line_id)} requested lines to "
+        f"{len(all_physical_ids)} physical lines "
+        f"({len(virtual_line_ids)} virtual, {len(physical_line_ids)} physical)"
+    )
+    devices = await get_devices_for_lines_db(all_physical_ids, session)
+    return devices, physical_to_original
+
+
 class EnterpriseVirtualRouter:
     """Router for enterprise volume endpoints with virtual lines support."""
 
@@ -135,56 +179,17 @@ class EnterpriseVirtualRouter:
                 detail="All line_ids must be positive integers"
             )
 
-        # Load virtual lines from DB
+        # Resolve virtual lines and load device mappings (shared helper)
         try:
-            virtual_lines_config = await get_active_virtual_lines_db(session)
-        except Exception as e:
-            logger.error(f"Error loading virtual lines config: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Error loading virtual lines configuration: {e}"
+            devices, physical_to_original = await resolve_virtual_devices(
+                line_id, session
             )
-
-        # Separate virtual and physical line IDs (DB-backed, no numeric threshold)
-        virtual_line_ids = [lid for lid in line_id if str(lid) in virtual_lines_config]
-        physical_line_ids = [lid for lid in line_id if str(lid) not in virtual_lines_config]
-
-        # Create mapping: physical_line_id -> original_line_id (virtual or physical)
-        physical_to_original = {}
-
-        # Add direct physical lines
-        for pline_id in physical_line_ids:
-            physical_to_original[pline_id] = pline_id
-
-        # Map each virtual line's physical members to their virtual parent
-        for vline_id in virtual_line_ids:
-            vline_id_str = str(vline_id)
-            for pline_id in virtual_lines_config[vline_id_str]["physical_line_ids"]:
-                if pline_id in physical_to_original:
-                    logger.warning(
-                        f"Physical line {pline_id} is in multiple lines: "
-                        f"{physical_to_original[pline_id]} and {vline_id}"
-                    )
-                physical_to_original[pline_id] = vline_id
-
-        # Get all physical line IDs to query
-        all_physical_ids = list(physical_to_original.keys())
-
-        if not all_physical_ids:
-            logger.info("No physical lines to query after virtual resolution")
-            return []
-
-        logger.info(f"Resolved {len(line_id)} requested lines to {len(all_physical_ids)} physical lines")
-
-        # Load enterprise mappings for physical lines from DB
-        try:
-            devices = await get_devices_for_lines_db(all_physical_ids, session)
         except Exception as e:
-            logger.error(f"Error loading enterprise mappings from DB: {e}")
+            logger.error(f"Error resolving virtual lines / mappings: {e}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
         if not devices:
-            logger.info(f"No enterprise mappings found for lines {all_physical_ids}")
+            logger.info(f"No enterprise mappings found for lines {line_id}")
             return []
 
         # Fetch volumes from DPD API
@@ -218,8 +223,7 @@ class EnterpriseVirtualRouter:
 
         logger.info(
             f"Returning {len(result)} aggregated enterprise volume records "
-            f"for {len(devices)} devices across {len(line_id)} requested lines "
-            f"({len(virtual_line_ids)} virtual, {len(physical_line_ids)} physical)"
+            f"for {len(devices)} devices across {len(line_id)} requested lines"
         )
 
         return result

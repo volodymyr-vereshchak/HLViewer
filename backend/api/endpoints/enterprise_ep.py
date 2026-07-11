@@ -5,11 +5,15 @@ Provides endpoints for fetching enterprise volume data from DPD API,
 aggregating by line_id and date, and CRUD management of enterprise records.
 """
 
+import asyncio
+import json
 import logging
 import pandas as pd
 from typing import List, Optional
 from fastapi import APIRouter, Depends, Query, status, HTTPException, UploadFile, File
+from fastapi.encoders import jsonable_encoder
 from backend.api.endpoints.auth_ep import get_branch_filter
+from backend.api.endpoints.enterprise_virtual_ep import resolve_virtual_devices
 from fastapi.responses import StreamingResponse
 
 from sqlalchemy import delete
@@ -87,6 +91,19 @@ class EnterpriseRouter:
             ),
         )
         self.router.add_api_route(
+            path="/enterprise/volumes/stream",
+            tags=["enterprise"],
+            endpoint=self.stream_enterprise_volumes,
+            methods=["GET"],
+            summary="Enterprise volumes with NDJSON progress stream",
+            description=(
+                "Same data as /enterprise/volumes/ (or /enterprise/volumes_virtual/ "
+                "with virtual=true), but the response is an application/x-ndjson "
+                "stream: one JSON event per line — status/progress/ping while the "
+                "DPD poll runs, then a final result (or error) event."
+            ),
+        )
+        self.router.add_api_route(
             path="/enterprise/cache/",
             tags=["enterprise"],
             endpoint=self.clear_dpd_cache,
@@ -100,6 +117,173 @@ class EnterpriseRouter:
             ),
         )
 
+
+    async def stream_enterprise_volumes(
+        self,
+        line_id: Optional[List[int]] = Query(default=None, description="Line IDs (physical, or mixed with virtual when virtual=true)"),
+        from_date: str = Query(..., description="Start date (YYYY-MM-DD)"),
+        to_date: str = Query(..., description="End date (YYYY-MM-DD)"),
+        period_type: str = Query(
+            default="daily",
+            pattern="^(daily|hourly)$",
+            description="Data granularity: 'daily' or 'hourly'"
+        ),
+        virtual: bool = Query(default=False, description="volumes_virtual semantics: resolve virtual lines, report missing volumes as 0"),
+        serNum: Optional[int] = Query(None, description="Optional: Filter by device serial number"),
+        mfDev: Optional[int] = Query(None, description="Optional: Manufacturer code"),
+        typeDev: Optional[int] = Query(None, description="Optional: Device type code"),
+        chNum: Optional[int] = Query(None, description="Optional: Filter by device channel number"),
+        session: AsyncSession = Depends(get_session),
+    ) -> StreamingResponse:
+        logger.info(
+            f"Streaming enterprise volumes for lines {line_id} "
+            f"(virtual={virtual}), period {from_date} to {to_date}, "
+            f"granularity: {period_type}"
+        )
+        try:
+            date_from, date_to = parse_date_range(from_date, to_date)
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid date format: {e}. Use YYYY-MM-DD format."
+            )
+
+        # Devices are resolved before the stream starts so validation and DB
+        # problems still surface as ordinary HTTP errors, not 200 + error event.
+        line_remap = None
+        none_volume_as_zero = False
+        try:
+            if virtual:
+                if not line_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="line_id is required with virtual=true"
+                    )
+                devices, line_remap = await resolve_virtual_devices(line_id, session)
+                none_volume_as_zero = True
+            elif line_id:
+                devices = await get_devices_for_lines_db(line_id, session)
+                if serNum is not None and chNum is not None:
+                    devices = [d for d in devices if d["serNum"] == serNum and d["chNum"] == chNum]
+            elif None not in (serNum, mfDev, typeDev, chNum):
+                ent = await EnterpriseDao(session).get_by_device(serNum, mfDev, typeDev, chNum)
+                devices = [] if not ent else [{
+                    "line_id": ent.line_id,
+                    "branch_id": ent.branch_id,
+                    "serNum": ent.ser_num,
+                    "mfDev": ent.mf_dev,
+                    "typeDev": ent.type_dev,
+                    "chNum": ent.ch_num,
+                    "enterprise_name": ent.enterprise_name,
+                }]
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Provide line_id or serNum+chNum"
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error loading enterprise mappings from DB: {e}")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+        return StreamingResponse(
+            self._volume_events(
+                devices, date_from, date_to, period_type,
+                line_remap, none_volume_as_zero,
+            ),
+            media_type="application/x-ndjson",
+            # nginx honors this per-response: events reach the browser as they
+            # happen instead of being buffered — no nginx config change needed.
+            headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+        )
+
+    @staticmethod
+    async def _volume_events(
+        devices, date_from, date_to, period_type, line_remap, none_volume_as_zero
+    ):
+        """NDJSON event generator around fetch_dpd_volumes.
+
+        The poll pushes events through a non-blocking callback: progress goes
+        into a single latest-value slot (only the newest counter matters, so a
+        slow client merely skips intermediate values and can never slow the
+        poll down), rare status events go into a queue. This generator drains
+        both at <=10 events/s and pings on silent stretches (waiting for the
+        branch advisory lock) so proxies don't drop the connection."""
+        # Deferred import: backend.api.main imports this module at startup.
+        from backend.api.main import _sanitize_nan
+
+        def dump(event) -> str:
+            return json.dumps(
+                _sanitize_nan(event), ensure_ascii=False,
+                allow_nan=False, separators=(",", ":"),
+            ) + "\n"
+
+        if not devices:
+            yield dump({"type": "result", "data": []})
+            return
+
+        queue: asyncio.Queue = asyncio.Queue()
+        latest = {"progress": None, "dirty": False}
+
+        def events_cb(event):
+            if event.get("type") == "progress":
+                latest["progress"] = event
+                latest["dirty"] = True
+            else:
+                queue.put_nowait(event)
+
+        async def run():
+            volumes = await fetch_dpd_volumes(
+                devices, date_from, date_to, period_type, events_cb=events_cb
+            )
+            return aggregate_volumes(
+                volumes, devices, period_type,
+                line_remap=line_remap,
+                none_volume_as_zero=none_volume_as_zero,
+            )
+
+        task = asyncio.create_task(run())
+        silent = 0.0
+        try:
+            while True:
+                if latest["dirty"]:
+                    latest["dirty"] = False
+                    silent = 0.0
+                    yield dump(latest["progress"])
+                try:
+                    event = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    if task.done():
+                        break
+                    await asyncio.sleep(0.1)
+                    silent += 0.1
+                    if silent >= 15.0:
+                        silent = 0.0
+                        yield dump({"type": "ping"})
+                    continue
+                silent = 0.0
+                yield dump(event)
+            # Flush whatever arrived between the last drain and task completion.
+            while True:
+                try:
+                    yield dump(queue.get_nowait())
+                except asyncio.QueueEmpty:
+                    break
+            if latest["dirty"]:
+                yield dump(latest["progress"])
+            result = await task
+            yield dump({"type": "result", "data": jsonable_encoder(result)})
+        except asyncio.CancelledError:
+            raise  # client went away — unwind (finally cancels the poll)
+        except Exception as e:
+            # The response is already streaming with status 200, so failures
+            # can only be reported in-band.
+            logger.exception("Enterprise volume stream failed")
+            yield dump({"type": "error", "detail": str(e)})
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
     async def clear_dpd_cache(
         self,

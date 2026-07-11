@@ -10,7 +10,7 @@ import httpx
 import logging
 import warnings
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from backend.settings import backend_settings
 
@@ -297,6 +297,7 @@ class DPDClient:
         type_request: str = "daily",
         max_retries: int = 3,
         device_ranges: Optional[Dict[Tuple, Tuple[datetime, datetime]]] = None,
+        progress_cb: Optional[Callable[[int, int], None]] = None,
     ) -> List[Dict]:
         """
         Fetch volume data for multiple devices from DPD API.
@@ -314,6 +315,10 @@ class DPDClient:
                 keyed by (serNum, mfDev, typeDev, chNum). A device missing only
                 one cached day then downloads that day, not the whole range.
                 Devices absent from the dict use the date_from/date_to args.
+            progress_cb: Optional SYNCHRONOUS callable invoked as
+                progress_cb(done, total) after each device request completes.
+                It must be non-blocking (fire-and-forget) — it runs on the
+                polling path and must never slow a device request down.
 
         Returns:
             List of dicts with volume data, each containing:
@@ -353,6 +358,20 @@ class DPDClient:
             # Create parallel tasks for each device. The shared client's connection
             # pool limits how many actually run at once (the rest await a free slot).
             device_ranges = device_ranges or {}
+            total_devices = len(devices)
+            done_devices = 0
+
+            async def _poll_device(device, dev_from, dev_to):
+                nonlocal done_devices
+                result = await self._get_device_indications(
+                    client, device, dev_from, dev_to, type_request,
+                    max_retries, not_found,
+                )
+                done_devices += 1
+                if progress_cb is not None:
+                    progress_cb(done_devices, total_devices)
+                return result
+
             tasks = []
             for device in devices:
                 dev_from, dev_to = device_ranges.get(
@@ -360,12 +379,7 @@ class DPDClient:
                     (date_from, date_to),
                 )
                 tasks.append(
-                    asyncio.create_task(
-                        self._get_device_indications(
-                            client, device, dev_from, dev_to, type_request,
-                            max_retries, not_found,
-                        )
-                    )
+                    asyncio.create_task(_poll_device(device, dev_from, dev_to))
                 )
 
             try:

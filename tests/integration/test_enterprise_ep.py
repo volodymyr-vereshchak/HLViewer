@@ -3,12 +3,26 @@
 mocked DPDClient — no live DPD API calls."""
 
 import io
+import json
 
 import openpyxl
 import pytest_asyncio
 
 from backend.db.engine import async_session_factory
 from backend.db.models.device_catalog_model import CorectorType, Manufacturer
+
+
+async def read_stream_events(client, params) -> list[dict]:
+    """Consume the NDJSON progress stream into a list of event dicts."""
+    events = []
+    async with client.stream(
+        "GET", "/enterprise/volumes/stream", params=params
+    ) as resp:
+        assert resp.status_code == 200, await resp.aread()
+        async for line in resp.aiter_lines():
+            if line.strip():
+                events.append(json.loads(line))
+    return events
 
 
 @pytest_asyncio.fixture
@@ -276,6 +290,90 @@ class TestEnterpriseVolumes:
             },
         )
         assert resp.status_code == 400
+
+    async def test_stream_emits_progress_then_result(
+        self, admin_client, seed_topology, mocker
+    ):
+        await admin_client.post(
+            "/enterprise-mappings/", json=_enterprise_payload(seed_topology)
+        )
+        mock_client = mocker.AsyncMock()
+
+        async def fake_get_volumes(devices, date_from, date_to, *,
+                                   type_request="daily", max_retries=3,
+                                   device_ranges=None, progress_cb=None):
+            if progress_cb:
+                for i in range(1, len(devices) + 1):
+                    progress_cb(i, len(devices))
+            return [{
+                "serNum": 123456, "mfDev": 1, "typeDev": 3, "chNum": 0,
+                "date": "2024-12-25", "dvstAlwrk": 100.5,
+            }]
+
+        mock_client.get_volumes = fake_get_volumes
+        mocker.patch(
+            "backend.services.enterprise_volume_service.DPDClient.for_branch",
+            mocker.AsyncMock(return_value=mock_client),
+        )
+
+        events = await read_stream_events(admin_client, {
+            "line_id": [seed_topology["line1"]],
+            "from_date": "2024-12-25",
+            "to_date": "2024-12-25",
+        })
+
+        kinds = [e["type"] for e in events]
+        assert "progress" in kinds
+        assert any(
+            e.get("phase") == "waiting" for e in events if e["type"] == "status"
+        )
+        assert events[-1]["type"] == "result"
+        result = events[-1]["data"]
+        assert len(result) == 1
+        assert result[0]["line_id"] == seed_topology["line1"]
+        assert result[0]["total_volume"] == 100.5
+
+    async def test_stream_reports_dpd_failure_in_band(
+        self, admin_client, seed_topology, mocker
+    ):
+        """The stream is already 200 when the poll fails — the failure arrives
+        as an error event, not as an HTTP status."""
+        await admin_client.post(
+            "/enterprise-mappings/", json=_enterprise_payload(seed_topology)
+        )
+        mock_client = mocker.AsyncMock()
+        mock_client.get_volumes.side_effect = ConnectionError("DPD is down")
+        mocker.patch(
+            "backend.services.enterprise_volume_service.DPDClient.for_branch",
+            mocker.AsyncMock(return_value=mock_client),
+        )
+
+        events = await read_stream_events(admin_client, {
+            "line_id": [seed_topology["line1"]],
+            "from_date": "2024-12-25",
+            "to_date": "2024-12-25",
+        })
+
+        assert events[-1]["type"] == "error"
+        assert "DPD is down" in events[-1]["detail"]
+
+    async def test_stream_no_devices_returns_empty_result(
+        self, admin_client, seed_topology
+    ):
+        events = await read_stream_events(admin_client, {
+            "line_id": [seed_topology["line1"]],  # no mappings created
+            "from_date": "2024-12-25",
+            "to_date": "2024-12-25",
+        })
+        assert events == [{"type": "result", "data": []}]
+
+    async def test_stream_requires_auth(self, anon_client):
+        resp = await anon_client.get("/enterprise/volumes/stream", params={
+            "line_id": [1],
+            "from_date": "2024-12-25",
+            "to_date": "2024-12-25",
+        })
+        assert resp.status_code == 401
 
     async def test_cache_clear_admin_only(
         self, admin_client, viewer_client, seed_topology, mocker
