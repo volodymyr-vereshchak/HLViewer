@@ -37,13 +37,23 @@ logger = logging.getLogger(__name__)
 # records with null volumes for stamps it has no data for (yet) — those are
 # gaps, not data (see _has_data). A request re-polls only the stamps missing
 # from the cache (unpublished/future hours, holes, null skeletons, empty
-# responses) plus 404 devices, each device over its own missing span. fetched_at
+# responses) plus 404 devices, each device over its own missing span.
+# Polled days that returned nothing still get an empty row — the mark that
+# the range was TRIED: a hole older than HOLE_RETRY_WINDOW whose day was
+# already tried is permanent (the data will never appear at DPD) and is not
+# re-polled, so ancient holes stop stretching the poll spans. Untried ranges
+# (cold cache, cache cleared) are always fetched regardless of age. fetched_at
 # carries no freshness meaning — it only drives the 7-day sliding
 # retention: reads touch it (at most once per TOUCH_MIN_AGE to avoid write
 # churn) and delete_older_than prunes rows nobody viewed for a week.
 # For hourly data a bare date range means commercial days, mirroring DPD:
 # from=D1&to=D2 denotes the stamp window [D1 07:00 .. D2+1 06:00].
 TOUCH_MIN_AGE = timedelta(hours=1)
+
+# Missing stamps older than this are re-asked only while their day was never
+# polled; once tried, they are permanent holes. Late-arriving telemetry lands
+# within a couple of days — 3 is a safe margin (user decision 2026-07-11).
+HOLE_RETRY_WINDOW = timedelta(days=3)
 
 # Only the fields the aggregation/UI actually reads are cached; device
 # identifiers live in the row key and are restored on read. Cuts the JSONB
@@ -205,10 +215,12 @@ async def fetch_dpd_volumes(
             # return records on those days and the merge below must not lose
             # their cached siblings.
             cached: Dict[tuple, Dict] = defaultdict(dict)
+            tried_days: set = set()  # (key4, day) rows that exist, even empty
             touch_ids: List[int] = []
 
             def _absorb_row(row) -> None:
                 key4 = (row.ser_num, row.mf_dev, row.type_dev, row.ch_num)
+                tried_days.add((key4, row.day))
                 for rec in _restore_ids(row.payload, row):
                     stamp = _record_stamp(rec, period_type)
                     if stamp is not None and _has_data(rec):
@@ -229,20 +241,33 @@ async def fetch_dpd_volumes(
             # every request by construction, while a device with no cached
             # data at all must not force the whole branch to re-download the
             # full range.
+            hole_cutoff = now - HOLE_RETRY_WINDOW
+
             def _compute_missing(candidates: List[Dict]):
                 polls: List[Dict] = []
                 spans: Dict[tuple, tuple] = {}
+                days: Dict[tuple, set] = {}
                 for device in candidates:
                     key4 = _device_key(device)
-                    missing = [s for s in expected if s not in cached[key4]]
+                    missing = []
+                    for s in expected:
+                        if s in cached[key4]:
+                            continue
+                        if (
+                            _as_dt(s) < hole_cutoff
+                            and (key4, _stamp_day(s)) in tried_days
+                        ):
+                            continue  # permanent hole: tried, still no data
+                        missing.append(s)
                     if missing:
                         polls.append(device)
                         spans[key4] = (
                             _as_dt(min(missing)), _as_dt(max(missing))
                         )
-                return polls, spans
+                        days[key4] = {_stamp_day(s) for s in missing}
+                return polls, spans, days
 
-            poll_devices, device_spans = _compute_missing(devices)
+            poll_devices, device_spans, device_days = _compute_missing(devices)
 
             if poll_devices:
                 # Locks are PER DEVICE (+period_type): requests touching
@@ -268,7 +293,11 @@ async def fetch_dpd_volumes(
                 # Re-read the locked devices: a concurrent poll may have
                 # cached (part of) what we were about to ask DPD for.
                 for device in poll_devices:
-                    cached[_device_key(device)] = {}
+                    key4 = _device_key(device)
+                    cached[key4] = {}
+                    tried_days.difference_update(
+                        {t for t in tried_days if t[0] == key4}
+                    )
                 for row in await dao.load_range(
                     poll_devices,
                     period_type,
@@ -276,7 +305,9 @@ async def fetch_dpd_volumes(
                     day_to + timedelta(days=1),
                 ):
                     _absorb_row(row)
-                poll_devices, device_spans = _compute_missing(poll_devices)
+                poll_devices, device_spans, device_days = _compute_missing(
+                    poll_devices
+                )
 
             if events_cb is not None:
                 events_cb({"type": "progress", "done": 0,
@@ -327,14 +358,18 @@ async def fetch_dpd_volumes(
                 # outside the requested window are final data too — they warm
                 # the cache; null skeletons are not, see _has_data). Fresh
                 # stamps are merged into the day rows they belong to, fresh
-                # winning over cached, and only days that actually got new
-                # records are written.
+                # winning over cached. Days we asked about but got nothing
+                # for still get a row (possibly empty) — the "tried" mark
+                # that turns their holes permanent after HOLE_RETRY_WINDOW.
                 upsert_rows = []
-                for key4, stamps in fresh.items():
+                for device in poll_devices:
+                    key4 = _device_key(device)
                     by_day: Dict[date, Dict] = defaultdict(dict)
-                    for stamp, rec in stamps.items():
+                    for stamp, rec in fresh.get(key4, {}).items():
                         if _has_data(rec):
                             by_day[_stamp_day(stamp)][stamp] = rec
+                    for day in device_days.get(key4, ()):
+                        by_day.setdefault(day, {})
                     for day, day_stamps in by_day.items():
                         merged = {
                             s: r

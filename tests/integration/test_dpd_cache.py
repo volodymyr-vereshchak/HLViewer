@@ -27,6 +27,9 @@ from backend.services.enterprise_volume_service import (
 BRANCH_ID = 1
 
 DAY1, DAY2, DAY3 = date(2024, 12, 20), date(2024, 12, 21), date(2024, 12, 22)
+# Inside HOLE_RETRY_WINDOW: holes on these days are still re-polled.
+YESTERDAY = date.today() - timedelta(days=1)
+TODAY = date.today()
 
 
 def make_device(ser_num: int) -> dict:
@@ -178,45 +181,77 @@ class TestDpdCacheDaily:
         dpd_mock.get_volumes.assert_not_awaited()
         assert record_keys(second) == record_keys(first)
 
-    async def test_only_holes_repolled(self, dpd_mock):
-        """Days DPD returned nothing for stay gaps: the re-poll span covers
-        exactly the missing days, cached days are not re-asked."""
+    async def test_old_holes_become_permanent_after_first_try(self, dpd_mock):
+        """A hole older than HOLE_RETRY_WINDOW whose day was already polled is
+        permanent: the data will never appear at DPD, so it is not re-asked
+        (this was the amplification that made every poll re-download weeks)."""
         devices = [make_device(101)]
         dpd_mock.get_volumes.return_value = daily_records(devices, [DAY1, DAY3])
 
         first = await fetch_dpd_volumes(devices, as_dt(DAY1), as_dt(DAY3), "daily")
-        assert await cache_row_count() == 2  # no row for the empty DAY2
+        # DAY2 returned nothing but was tried → empty marker row.
+        assert await cache_row_count() == 3
 
         dpd_mock.get_volumes.reset_mock()
-        dpd_mock.get_volumes.return_value = []
-
         second = await fetch_dpd_volumes(devices, as_dt(DAY1), as_dt(DAY3), "daily")
+
+        dpd_mock.get_volumes.assert_not_awaited()  # DAY2 hole is permanent
+        assert record_keys(second) == record_keys(first)
+
+    async def test_recent_holes_still_repolled(self, dpd_mock):
+        """Holes inside HOLE_RETRY_WINDOW keep being re-asked — late-arriving
+        telemetry can still fill them."""
+        day_before = TODAY - timedelta(days=2)
+        devices = [make_device(101)]
+        dpd_mock.get_volumes.return_value = daily_records(devices, [day_before])
+
+        await fetch_dpd_volumes(
+            devices, as_dt(day_before), as_dt(YESTERDAY), "daily"
+        )
+        assert await cache_row_count() == 2  # data + tried-mark for YESTERDAY
+
+        dpd_mock.get_volumes.reset_mock()
+        dpd_mock.get_volumes.return_value = daily_records(devices, [YESTERDAY])
+
+        second = await fetch_dpd_volumes(
+            devices, as_dt(day_before), as_dt(YESTERDAY), "daily"
+        )
 
         dpd_mock.get_volumes.assert_awaited_once()
         _, poll_from, poll_to = dpd_mock.get_volumes.await_args.args
-        assert (poll_from.date(), poll_to.date()) == (DAY2, DAY2)
-        assert record_keys(second) == record_keys(first)
+        assert (poll_from.date(), poll_to.date()) == (YESTERDAY, YESTERDAY)
+        assert record_keys(second) == {
+            (101, day_before.isoformat()), (101, YESTERDAY.isoformat()),
+        }
 
     async def test_per_device_spans(self, dpd_mock):
         """A device with no cached data must not force devices that miss a
         single day to re-download the whole range."""
         dev_a, dev_b = make_device(101), make_device(102)
-        # A gets DAY1..DAY2 cached (DAY3 empty at DPD).
-        dpd_mock.get_volumes.return_value = daily_records([dev_a], [DAY1, DAY2])
-        await fetch_dpd_volumes([dev_a], as_dt(DAY1), as_dt(DAY3), "daily")
+        # A gets two days cached; YESTERDAY stays a (recent) hole.
+        day_before = TODAY - timedelta(days=2)
+        day_first = TODAY - timedelta(days=3)
+        dpd_mock.get_volumes.return_value = daily_records(
+            [dev_a], [day_first, day_before]
+        )
+        await fetch_dpd_volumes([dev_a], as_dt(day_first), as_dt(YESTERDAY), "daily")
 
         dpd_mock.get_volumes.reset_mock()
-        dpd_mock.get_volumes.return_value = daily_records([dev_b], [DAY1, DAY2, DAY3])
+        dpd_mock.get_volumes.return_value = daily_records(
+            [dev_b], [day_first, day_before, YESTERDAY]
+        )
 
-        await fetch_dpd_volumes([dev_a, dev_b], as_dt(DAY1), as_dt(DAY3), "daily")
+        await fetch_dpd_volumes(
+            [dev_a, dev_b], as_dt(day_first), as_dt(YESTERDAY), "daily"
+        )
 
         dpd_mock.get_volumes.assert_awaited_once()
         polled, poll_from, poll_to = dpd_mock.get_volumes.await_args.args
         assert polled == [dev_a, dev_b]
-        assert (poll_from.date(), poll_to.date()) == (DAY1, DAY3)  # envelope
+        assert (poll_from.date(), poll_to.date()) == (day_first, YESTERDAY)
         ranges = dpd_mock.get_volumes.await_args.kwargs["device_ranges"]
-        assert ranges[device_key(dev_a)] == (as_dt(DAY3), as_dt(DAY3))
-        assert ranges[device_key(dev_b)] == (as_dt(DAY1), as_dt(DAY3))
+        assert ranges[device_key(dev_a)] == (as_dt(YESTERDAY), as_dt(YESTERDAY))
+        assert ranges[device_key(dev_b)] == (as_dt(day_first), as_dt(YESTERDAY))
 
     async def test_out_of_window_records_cached_not_returned(self, dpd_mock):
         """Records past the requested window (the commercial-date rounding
@@ -321,39 +356,46 @@ class TestDpdCacheHourly:
         assert len(again) == 24
 
     async def test_hole_repolled_from_first_missing_stamp(self, dpd_mock):
-        """A device missing a few hours re-polls exactly the missing span, and
-        the merge keeps the hours already cached."""
+        """A device missing a few recent hours re-polls exactly the missing
+        span, and the merge keeps the hours already cached."""
         devices = [make_device(101)]
         # First poll: only hours 07:00–16:00 published yet.
         dpd_mock.get_volumes.return_value = hourly_records(
-            devices, commercial_stamps(DAY1, range(10))
+            devices, commercial_stamps(YESTERDAY, range(10))
         )
-        first = await fetch_dpd_volumes(devices, as_dt(DAY1), as_dt(DAY1), "hourly")
+        first = await fetch_dpd_volumes(
+            devices, as_dt(YESTERDAY), as_dt(YESTERDAY), "hourly"
+        )
         assert len(first) == 10
-        assert await cache_row_count() == 1  # all 10 stamps on DAY1
+        # 10 stamps on YESTERDAY + an empty tried-mark row for TODAY's tail.
+        assert await cache_row_count() == 2
 
         # Second request: the rest of the commercial day has appeared.
         dpd_mock.get_volumes.reset_mock()
         dpd_mock.get_volumes.return_value = hourly_records(
-            devices, commercial_stamps(DAY1, range(10, 24))
+            devices, commercial_stamps(YESTERDAY, range(10, 24))
         )
-        second = await fetch_dpd_volumes(devices, as_dt(DAY1), as_dt(DAY1), "hourly")
+        second = await fetch_dpd_volumes(
+            devices, as_dt(YESTERDAY), as_dt(YESTERDAY), "hourly"
+        )
 
         ranges = dpd_mock.get_volumes.await_args.kwargs["device_ranges"]
         assert ranges[device_key(devices[0])] == (
-            datetime(2024, 12, 20, 17),  # first missing stamp
-            datetime(2024, 12, 21, 6),   # window end
+            as_dt(YESTERDAY) + timedelta(hours=17),  # first missing stamp
+            as_dt(TODAY) + timedelta(hours=6),       # window end
         )
         assert len(second) == 24
 
-        # Merge preserved the earlier hours in the DAY1 row.
+        # Merge preserved the earlier hours in YESTERDAY's row.
         by_day = {row.day: row.payload for row in await cache_rows()}
-        assert len(by_day[DAY1]) == 17  # 07:00..23:00
-        assert len(by_day[date(2024, 12, 21)]) == 7  # 00:00..06:00
+        assert len(by_day[YESTERDAY]) == 17  # 07:00..23:00
+        assert len(by_day[TODAY]) == 7  # 00:00..06:00
 
         # Fully cached now → no poll.
         dpd_mock.get_volumes.reset_mock()
-        third = await fetch_dpd_volumes(devices, as_dt(DAY1), as_dt(DAY1), "hourly")
+        third = await fetch_dpd_volumes(
+            devices, as_dt(YESTERDAY), as_dt(YESTERDAY), "hourly"
+        )
         dpd_mock.get_volumes.assert_not_awaited()
         assert len(third) == 24
 
@@ -377,34 +419,42 @@ class TestDpdCacheHourly:
         are returned to the caller but never cached, and the stamps stay
         missing until real values appear."""
         devices = [make_device(101)]
-        skeleton = hourly_records(devices, commercial_stamps(DAY1))
+        skeleton = hourly_records(devices, commercial_stamps(YESTERDAY))
         for i, rec in enumerate(skeleton):
             if i not in (1, 2):  # data exists only for 08:00 and 09:00
                 rec["dvstAlwrk"] = None
 
         dpd_mock.get_volumes.return_value = skeleton
-        first = await fetch_dpd_volumes(devices, as_dt(DAY1), as_dt(DAY1), "hourly")
+        first = await fetch_dpd_volumes(
+            devices, as_dt(YESTERDAY), as_dt(YESTERDAY), "hourly"
+        )
         assert len(first) == 24  # nulls still returned to the caller
 
-        rows = await cache_rows()
-        assert len(rows) == 1 and len(rows[0].payload) == 2  # only real data cached
+        by_day = {row.day: row.payload for row in await cache_rows()}
+        assert len(by_day[YESTERDAY]) == 2  # only real data cached
+        assert by_day[TODAY] == []  # tried-mark for the empty tail
 
         # Real values appeared at DPD → the null stamps are re-asked in full.
         dpd_mock.get_volumes.reset_mock()
         dpd_mock.get_volumes.return_value = hourly_records(
-            devices, commercial_stamps(DAY1)
+            devices, commercial_stamps(YESTERDAY)
         )
-        second = await fetch_dpd_volumes(devices, as_dt(DAY1), as_dt(DAY1), "hourly")
+        second = await fetch_dpd_volumes(
+            devices, as_dt(YESTERDAY), as_dt(YESTERDAY), "hourly"
+        )
 
         ranges = dpd_mock.get_volumes.await_args.kwargs["device_ranges"]
         assert ranges[device_key(devices[0])] == (
-            datetime(2024, 12, 20, 7), datetime(2024, 12, 21, 6),
+            as_dt(YESTERDAY) + timedelta(hours=7),
+            as_dt(TODAY) + timedelta(hours=6),
         )
         assert len(second) == 24
         assert all(r["dvstAlwrk"] is not None for r in second)
 
         dpd_mock.get_volumes.reset_mock()
-        third = await fetch_dpd_volumes(devices, as_dt(DAY1), as_dt(DAY1), "hourly")
+        third = await fetch_dpd_volumes(
+            devices, as_dt(YESTERDAY), as_dt(YESTERDAY), "hourly"
+        )
         dpd_mock.get_volumes.assert_not_awaited()
         assert len(third) == 24
 
@@ -413,29 +463,33 @@ class TestDpdCacheHourly:
         they must not satisfy their stamps — the holes get re-polled and the
         rewritten rows keep only real data."""
         dev = make_device(101)
-        stamps = commercial_stamps(DAY1)
-        await insert_cache_row(dev, DAY1, [
+        stamps = commercial_stamps(YESTERDAY)
+        await insert_cache_row(dev, YESTERDAY, [
             {"date": s.strftime("%Y-%m-%dT%H:%M:%S"),
              "dvstAlwrk": 1.0 if i in (1, 2) else None}
-            for i, s in enumerate(stamps) if s.date() == DAY1
+            for i, s in enumerate(stamps) if s.date() == YESTERDAY
         ])
-        await insert_cache_row(dev, date(2024, 12, 21), [
+        await insert_cache_row(dev, TODAY, [
             {"date": s.strftime("%Y-%m-%dT%H:%M:%S"), "dvstAlwrk": None}
-            for s in stamps if s.date() == date(2024, 12, 21)
+            for s in stamps if s.date() == TODAY
         ])
 
         dpd_mock.get_volumes.return_value = hourly_records([dev], stamps)
-        records = await fetch_dpd_volumes([dev], as_dt(DAY1), as_dt(DAY1), "hourly")
+        records = await fetch_dpd_volumes(
+            [dev], as_dt(YESTERDAY), as_dt(YESTERDAY), "hourly"
+        )
 
         dpd_mock.get_volumes.assert_awaited_once()  # null stamps = gaps
         assert len(records) == 24
         assert all(r["dvstAlwrk"] is not None for r in records)
         by_day = {row.day: row.payload for row in await cache_rows()}
-        assert len(by_day[DAY1]) == 17  # nulls purged on rewrite
-        assert all(r["dvstAlwrk"] is not None for r in by_day[DAY1])
+        assert len(by_day[YESTERDAY]) == 17  # nulls purged on rewrite
+        assert all(r["dvstAlwrk"] is not None for r in by_day[YESTERDAY])
 
         dpd_mock.get_volumes.reset_mock()
-        again = await fetch_dpd_volumes([dev], as_dt(DAY1), as_dt(DAY1), "hourly")
+        again = await fetch_dpd_volumes(
+            [dev], as_dt(YESTERDAY), as_dt(YESTERDAY), "hourly"
+        )
         dpd_mock.get_volumes.assert_not_awaited()
         assert len(again) == 24
 
