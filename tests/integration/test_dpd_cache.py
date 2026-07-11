@@ -484,18 +484,17 @@ class TestDpdCacheEvents:
         assert progress[0] == {"type": "progress", "done": 0, "total": 2}
         assert ("status", "aggregating") in kinds
 
-        # Full cache hit: no poll, but the same coherent phase sequence.
+        # Full cache hit: no poll, no locks — no waiting phase either.
         dpd_mock.get_volumes.reset_mock()
         events.clear()
         await fetch_dpd_volumes(devices, as_dt(DAY1), as_dt(DAY1), "daily",
                                 events_cb=events.append)
         dpd_mock.get_volumes.assert_not_awaited()
         assert [(e.get("type"), e.get("phase")) for e in events] == [
-            ("status", "waiting"),
             ("progress", None),
             ("status", "aggregating"),
         ]
-        assert events[1]["total"] == 0
+        assert events[0]["total"] == 0
 
 
 class TestDpdStreamCancellation:
@@ -565,9 +564,77 @@ class TestDpdDedup:
         assert calls["count"] == 1  # the follower was served from cache
         assert record_keys(first) == record_keys(second)
 
+    async def test_disjoint_device_sets_do_not_wait(self, dpd_mock):
+        """Locks are per device: requests polling different devices of the
+        same branch and period_type run in parallel."""
+        dev_a, dev_b = make_device(101), make_device(102)
+        a_started = asyncio.Event()
+        release_a = asyncio.Event()
+
+        async def get_volumes(polled, date_from, date_to, **kwargs):
+            if polled[0]["serNum"] == 101:
+                a_started.set()
+                await release_a.wait()
+            return daily_records(polled, [DAY1])
+
+        dpd_mock.get_volumes = get_volumes
+        task_a = asyncio.create_task(
+            fetch_dpd_volumes([dev_a], as_dt(DAY1), as_dt(DAY1), "daily")
+        )
+        await asyncio.wait_for(a_started.wait(), 5)
+
+        # B completes while A's poll still holds A's device lock.
+        records_b = await asyncio.wait_for(
+            fetch_dpd_volumes([dev_b], as_dt(DAY1), as_dt(DAY1), "daily"),
+            timeout=5,
+        )
+        assert record_keys(records_b) == {(102, DAY1.isoformat())}
+
+        release_a.set()
+        records_a = await task_a
+        assert record_keys(records_a) == {(101, DAY1.isoformat())}
+
+    async def test_fully_cached_request_never_waits_for_a_running_poll(
+        self, dpd_mock
+    ):
+        """A request served entirely from cache takes no locks at all — even
+        when the very devices it reads are being re-polled by someone else."""
+        dev = make_device(101)
+
+        async def quick(polled, date_from, date_to, **kwargs):
+            return daily_records(polled, [DAY1])
+
+        dpd_mock.get_volumes = quick
+        await fetch_dpd_volumes([dev], as_dt(DAY1), as_dt(DAY1), "daily")
+
+        poll_started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def hanging(polled, date_from, date_to, **kwargs):
+            poll_started.set()
+            await release.wait()
+            return []
+
+        dpd_mock.get_volumes = hanging
+        # DAY2..DAY3 are missing → this poll hangs holding the device lock.
+        wide_task = asyncio.create_task(
+            fetch_dpd_volumes([dev], as_dt(DAY1), as_dt(DAY3), "daily")
+        )
+        await asyncio.wait_for(poll_started.wait(), 5)
+
+        # DAY1 is fully cached → served without touching the lock.
+        cached = await asyncio.wait_for(
+            fetch_dpd_volumes([dev], as_dt(DAY1), as_dt(DAY1), "daily"),
+            timeout=5,
+        )
+        assert record_keys(cached) == {(101, DAY1.isoformat())}
+
+        release.set()
+        await wide_task
+
     async def test_hourly_and_daily_polls_do_not_block_each_other(self, dpd_mock):
-        """The lock is per (branch, period_type): a long hourly poll must not
-        make a daily request for the same branch queue behind it."""
+        """The lock includes period_type: a long hourly poll must not
+        make a daily request for the same devices queue behind it."""
         devices = [make_device(101)]
         hourly_started = asyncio.Event()
         release_hourly = asyncio.Event()

@@ -158,18 +158,19 @@ async def fetch_dpd_volumes(
 
     ``events_cb`` (optional, SYNCHRONOUS, must be non-blocking) receives
     progress events for streaming endpoints:
-    {"type":"status","phase":"waiting"} before the advisory lock,
+    {"type":"status","phase":"waiting"} before the device locks,
     {"type":"progress","done":N,"total":M} as device polls complete,
     {"type":"status","phase":"aggregating"} once polling is over. It runs on
     the polling path — a slow consumer must drop events, never block here.
 
-    The whole read-poll-write cycle runs inside one transaction holding a
-    per-branch advisory lock: identical or overlapping requests from any
-    uvicorn worker (browser auto-retries, double-fired frontend fetches,
-    several users) serialize here, and every follower finds the leader's rows
-    already cached instead of launching its own DPD poll. It also means at
-    most one poll per branch hits DPD at a time, capping the load at one
-    connection pool.
+    Concurrency: the read-poll-write cycle runs inside one transaction
+    holding per-(device, period_type) advisory locks for the devices about to
+    be polled. Requests over disjoint devices run in parallel; fully-cached
+    requests take no locks and never wait; identical/overlapping requests
+    from any uvicorn worker (browser auto-retries, double-fired frontend
+    fetches, several users) serialize per device, and after acquiring the
+    locks the cache is RE-read, so a follower finds the leader's rows cached
+    instead of launching its own DPD poll for the same data.
 
     Raises LookupError when no device carries a branch_id, ValueError when the
     branch has no/incomplete credentials (DPDClient.for_branch), and whatever
@@ -184,11 +185,8 @@ async def fetch_dpd_volumes(
 
     async with async_session_factory() as session:
         async with session.begin():
-            if events_cb is not None:
-                # Another poll for this branch may hold the lock for a while.
-                events_cb({"type": "status", "phase": "waiting"})
-            # Safety nets against a wedged branch: don't queue on the advisory
-            # lock forever (a stuck poll would otherwise stack every following
+            # Safety nets against a wedged poll: don't queue on advisory locks
+            # forever (a stuck poll would otherwise stack every following
             # request and drain the connection pool — the whole app hangs),
             # and let Postgres kill a leaked idle-in-transaction connection as
             # a last resort. The cap is generous because a healthy poll keeps
@@ -196,15 +194,6 @@ async def fetch_dpd_volumes(
             await session.execute(text("SET LOCAL lock_timeout = '300s'"))
             await session.execute(
                 text("SET LOCAL idle_in_transaction_session_timeout = '1800s'")
-            )
-            # Lock per (branch, period_type): daily and hourly are separate
-            # DPD requests, so they never need to wait for each other. Within
-            # one period_type serialization is deliberate — an identical
-            # concurrent request would re-download the same data from DPD,
-            # while the waiter gets it from cache in seconds after the leader.
-            await session.execute(
-                text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
-                {"key": f"dpd-branch-{branch_id}-{period_type}"},
             )
 
             dao = DpdCacheDao(session)
@@ -217,17 +206,21 @@ async def fetch_dpd_volumes(
             # their cached siblings.
             cached: Dict[tuple, Dict] = defaultdict(dict)
             touch_ids: List[int] = []
+
+            def _absorb_row(row) -> None:
+                key4 = (row.ser_num, row.mf_dev, row.type_dev, row.ch_num)
+                for rec in _restore_ids(row.payload, row):
+                    stamp = _record_stamp(rec, period_type)
+                    if stamp is not None and _has_data(rec):
+                        cached[key4][stamp] = rec
+
             for row in await dao.load_range(
                 devices,
                 period_type,
                 day_from - timedelta(days=1),
                 day_to + timedelta(days=1),
             ):
-                key4 = (row.ser_num, row.mf_dev, row.type_dev, row.ch_num)
-                for rec in _restore_ids(row.payload, row):
-                    stamp = _record_stamp(rec, period_type)
-                    if stamp is not None and _has_data(rec):
-                        cached[key4][stamp] = rec
+                _absorb_row(row)
                 if now - row.fetched_at >= TOUCH_MIN_AGE:
                     touch_ids.append(row.id)
 
@@ -236,14 +229,54 @@ async def fetch_dpd_volumes(
             # every request by construction, while a device with no cached
             # data at all must not force the whole branch to re-download the
             # full range.
-            poll_devices: List[Dict] = []
-            device_spans: Dict[tuple, tuple] = {}
-            for device in devices:
-                key4 = _device_key(device)
-                missing = [s for s in expected if s not in cached[key4]]
-                if missing:
-                    poll_devices.append(device)
-                    device_spans[key4] = (_as_dt(min(missing)), _as_dt(max(missing)))
+            def _compute_missing(candidates: List[Dict]):
+                polls: List[Dict] = []
+                spans: Dict[tuple, tuple] = {}
+                for device in candidates:
+                    key4 = _device_key(device)
+                    missing = [s for s in expected if s not in cached[key4]]
+                    if missing:
+                        polls.append(device)
+                        spans[key4] = (
+                            _as_dt(min(missing)), _as_dt(max(missing))
+                        )
+                return polls, spans
+
+            poll_devices, device_spans = _compute_missing(devices)
+
+            if poll_devices:
+                # Locks are PER DEVICE (+period_type): requests touching
+                # disjoint device sets run in parallel, fully-cached requests
+                # take no locks at all and never wait. Only requests that
+                # would poll the SAME devices serialize — deliberately: the
+                # waiter is then served from cache right after the leader
+                # instead of re-downloading the same data from DPD. Keys are
+                # sorted so concurrent acquisitions cannot deadlock.
+                if events_cb is not None:
+                    events_cb({"type": "status", "phase": "waiting"})
+                lock_keys = sorted(
+                    "dpd-dev-{}-{}-{}-{}-{}".format(*_device_key(d), period_type)
+                    for d in poll_devices
+                )
+                await session.execute(
+                    text(
+                        "SELECT pg_advisory_xact_lock(hashtextextended(k, 0)) "
+                        "FROM unnest(CAST(:keys AS text[])) AS k"
+                    ),
+                    {"keys": lock_keys},
+                )
+                # Re-read the locked devices: a concurrent poll may have
+                # cached (part of) what we were about to ask DPD for.
+                for device in poll_devices:
+                    cached[_device_key(device)] = {}
+                for row in await dao.load_range(
+                    poll_devices,
+                    period_type,
+                    day_from - timedelta(days=1),
+                    day_to + timedelta(days=1),
+                ):
+                    _absorb_row(row)
+                poll_devices, device_spans = _compute_missing(poll_devices)
 
             if events_cb is not None:
                 events_cb({"type": "progress", "done": 0,
