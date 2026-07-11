@@ -200,9 +200,21 @@ async def lifespan(application: FastAPI):
     logger.info("HLViewer backend shutting down")
 
 
+class StreamAwareGZipMiddleware(GZipMiddleware):
+    """GZip everything except the NDJSON progress stream: gzip accumulates the
+    tiny event lines in its compression buffer, so the browser would receive
+    every progress event in one burst at the end instead of live."""
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["path"].endswith("/enterprise/volumes/stream"):
+            await self.app(scope, receive, send)
+            return
+        await super().__call__(scope, receive, send)
+
+
 # run FastApi
 app = FastAPI(openapi_tags=tags_metadata, lifespan=lifespan, default_response_class=NaNSafeJSONResponse)
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+app.add_middleware(StreamAwareGZipMiddleware, minimum_size=1000)
 
 
 @app.middleware("http")

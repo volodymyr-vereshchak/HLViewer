@@ -197,9 +197,14 @@ async def fetch_dpd_volumes(
             await session.execute(
                 text("SET LOCAL idle_in_transaction_session_timeout = '1800s'")
             )
+            # Lock per (branch, period_type): daily and hourly are separate
+            # DPD requests, so they never need to wait for each other. Within
+            # one period_type serialization is deliberate — an identical
+            # concurrent request would re-download the same data from DPD,
+            # while the waiter gets it from cache in seconds after the leader.
             await session.execute(
                 text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
-                {"key": f"dpd-branch-{branch_id}"},
+                {"key": f"dpd-branch-{branch_id}-{period_type}"},
             )
 
             dao = DpdCacheDao(session)

@@ -564,3 +564,34 @@ class TestDpdDedup:
 
         assert calls["count"] == 1  # the follower was served from cache
         assert record_keys(first) == record_keys(second)
+
+    async def test_hourly_and_daily_polls_do_not_block_each_other(self, dpd_mock):
+        """The lock is per (branch, period_type): a long hourly poll must not
+        make a daily request for the same branch queue behind it."""
+        devices = [make_device(101)]
+        hourly_started = asyncio.Event()
+        release_hourly = asyncio.Event()
+
+        async def get_volumes(polled, date_from, date_to, **kwargs):
+            if kwargs.get("type_request") == "hourly":
+                hourly_started.set()
+                await release_hourly.wait()
+                return []
+            return daily_records(polled, [DAY1])
+
+        dpd_mock.get_volumes = get_volumes
+
+        hourly_task = asyncio.create_task(
+            fetch_dpd_volumes(devices, as_dt(DAY1), as_dt(DAY1), "hourly")
+        )
+        await asyncio.wait_for(hourly_started.wait(), 5)
+
+        # Completes while the hourly poll still holds its own lock.
+        records = await asyncio.wait_for(
+            fetch_dpd_volumes(devices, as_dt(DAY1), as_dt(DAY1), "daily"),
+            timeout=5,
+        )
+        assert record_keys(records) == {(101, DAY1.isoformat())}
+
+        release_hourly.set()
+        await hourly_task
