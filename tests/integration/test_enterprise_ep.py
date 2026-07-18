@@ -135,6 +135,51 @@ class TestExcelTemplateAndExport:
         assert row[3] == "ВЕГА-1.01"
         assert row[7] == seed_topology["line1"]
 
+    @staticmethod
+    def _dropdowns_by_column(ws) -> dict:
+        """First data-validation per data-sheet column letter."""
+        out = {}
+        for dv in ws.data_validations.dataValidation:
+            col = str(dv.sqref).strip()[0]
+            out[col] = dv
+        return out
+
+    async def test_template_and_export_have_strict_dropdowns(
+        self, admin_client, device_catalog, seed_topology
+    ):
+        """Manufacturer, model, line-ID and Так/Ні columns are restricted by
+        stop-style list validation in BOTH downloadable workbooks (exports get
+        edited and re-imported, so they need the same guard rails)."""
+        for path in ("/enterprise-mappings/template", "/enterprise-mappings/export"):
+            resp = await admin_client.get(path)
+            assert resp.status_code == 200, path
+            wb = openpyxl.load_workbook(io.BytesIO(resp.content))
+            dvs = self._dropdowns_by_column(wb["Дані"])
+
+            assert set(dvs) >= {"C", "D", "F", "G", "H"}, path
+            assert dvs["C"].formula1.startswith("'Довідник'!$I$2")
+            assert dvs["D"].formula1.startswith("'Довідник'!$B$2")
+            assert dvs["H"].formula1.startswith("'Довідник'!$D$2")
+            assert dvs["F"].formula1 == '"Так,Ні"'
+            for dv in dvs.values():
+                assert dv.errorStyle == "stop"
+                assert dv.showErrorMessage is True
+
+            # Reference sheet: unique-manufacturer dropdown source + fixed header
+            ref = wb["Довідник"]
+            assert ref.cell(row=1, column=9).value == "Виробники (унікальні)"
+            assert ref.cell(row=2, column=9).value == "РадмирТех"
+            assert ref.cell(row=1, column=6).value == "Обчислювач"
+
+    async def test_template_spelling_fixed(
+        self, admin_client, device_catalog, seed_topology
+    ):
+        resp = await admin_client.get("/enterprise-mappings/template")
+        ref = openpyxl.load_workbook(io.BytesIO(resp.content))["Довідник"]
+        headers = [ref.cell(row=1, column=c).value for c in range(1, 10)]
+        assert "Вичислювач" not in headers
+        assert "Обчислювач" in headers
+
 
 class TestExcelImport:
     def _workbook_bytes(self, rows: list[list]) -> bytes:

@@ -36,7 +36,8 @@ def aggregate_to_virtual_lines(
 
     Logic:
         1. Load virtual lines configuration
-        2. Create mapping: physical_line_id -> virtual_line_id
+        2. Create mapping: physical_line_id -> [virtual_line_ids] (a line may
+           belong to MANY rings — each requested ring gets its contribution)
         3. Group by (virtual_line_id, period)
         4. Aggregate:
            - volume: SUM
@@ -44,7 +45,7 @@ def aggregate_to_virtual_lines(
            - pressure: WEIGHTED AVG (by volume)
            - temperature: WEIGHTED AVG (by volume)
            - density: WEIGHTED AVG (by volume)
-        5. Return only requested virtual lines + physical lines not in rings
+        5. Return requested virtual lines + directly requested physical lines
     """
     if virtual_lines is None:
         virtual_lines = get_active_virtual_lines()
@@ -57,30 +58,28 @@ def aggregate_to_virtual_lines(
         # No virtual lines requested, return archives as-is (as dicts)
         return [_archive_to_dict(archive) for archive in archives]
 
-    # Create mapping: physical_line_id -> virtual_line_id
-    physical_to_virtual = {}
+    # physical_line_id -> ALL rings containing it. A single-target map here
+    # made the last ring silently steal a shared line: its volumes vanished
+    # from every other ring's charts (same defect the enterprise aggregation
+    # had before line_remap became a list of targets).
+    physical_to_virtual: Dict[int, List[int]] = defaultdict(list)
     for vline_id_str, vline_data in virtual_lines.items():
         vline_id = int(vline_id_str)
         for pline_id in vline_data["physical_line_ids"]:
-            physical_to_virtual[pline_id] = vline_id
+            physical_to_virtual[pline_id].append(vline_id)
 
-    # Get set of physical lines that are in rings
-    physical_in_rings = set(physical_to_virtual.keys())
-
-    # Separate archives into virtual and physical
+    # Separate archives into virtual and physical. An archive feeds EVERY
+    # ring its line belongs to, and is also returned as-is when the physical
+    # line itself was requested directly.
     virtual_archives = defaultdict(lambda: defaultdict(list))
     physical_archives = []
 
     for archive in archives:
         line_id = archive.line_id
 
-        if line_id in physical_to_virtual:
-            # This physical line is part of a virtual line
-            virtual_line_id = physical_to_virtual[line_id]
-            period = archive.period
-            virtual_archives[virtual_line_id][period].append(archive)
-        elif line_id in physical_requested:
-            # Physical line requested directly (not in any ring)
+        for virtual_line_id in physical_to_virtual.get(line_id, ()):
+            virtual_archives[virtual_line_id][archive.period].append(archive)
+        if line_id in physical_requested:
             physical_archives.append(_archive_to_dict(archive))
 
     # Aggregate virtual lines

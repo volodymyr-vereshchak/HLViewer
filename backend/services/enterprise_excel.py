@@ -15,6 +15,7 @@ from typing import Optional
 import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.datavalidation import DataValidation
 from sqlmodel import select
 
 from backend.db.dao.device_catalog_dao import CorectorTypeDao, ManufacturerDao
@@ -79,13 +80,103 @@ async def _lines_with_context(session):
     return (await session.execute(stmt)).all()
 
 
-async def build_template_workbook() -> openpyxl.Workbook:
-    """Empty import template: data sheet with hints + reference sheet with the
-    device catalog and all lines (ID + calculator + LUMG context)."""
+async def _catalog_for_workbook():
+    """Manufacturers, corrector types and line context shared by the template
+    and export builders (reference sheet + dropdowns)."""
     async with async_session_factory() as session:
         manufacturers = await ManufacturerDao(session).get_all()
         corector_types = await CorectorTypeDao(session).get_all()
         lines_ctx = await _lines_with_context(session)  # (id, name, calc, lumg)
+    return manufacturers, corector_types, lines_ctx
+
+
+def _build_reference_sheet(wb, manufacturers, corector_types, lines_ctx):
+    """The 'Довідник' sheet: manufacturer/model pairs (A:B), lines with
+    context (D:G) and the unique-manufacturer list (I) that feeds the
+    data-sheet dropdown."""
+    ref = wb.create_sheet("Довідник")
+    ref_hdr_fill = PatternFill("solid", fgColor=_REF_HDR_FILL)
+    ref_hdr_font = Font(bold=True, color="FFFFFF")
+
+    # Manufacturers + models
+    ref.cell(row=1, column=1, value="Виробник (скорочено)").font = ref_hdr_font
+    ref.cell(row=1, column=1).fill = ref_hdr_fill
+    ref.cell(row=1, column=2, value="Модель коректора").font = ref_hdr_font
+    ref.cell(row=1, column=2).fill = ref_hdr_fill
+    ref.column_dimensions["A"].width = 20
+    ref.column_dimensions["B"].width = 28
+
+    mfr_map = {m.id: m.short_name for m in manufacturers}
+    row = 2
+    for ct in corector_types:
+        ref.cell(row=row, column=1, value=mfr_map.get(ct.manufacturer_id, ""))
+        ref.cell(row=row, column=2, value=ct.model_name)
+        row += 1
+
+    # Lines — ID + назва + обчислювач + ЛУМГ (look up the ID by name here, then
+    # put the ID into the 'ID лінії' column on the data sheet).
+    line_ref_cols = [("ID лінії", 10), ("Назва лінії", 32), ("Обчислювач", 28), ("ЛУМГ", 24)]
+    for j, (title, width) in enumerate(line_ref_cols, start=4):  # columns D, E, F, G
+        c = ref.cell(row=1, column=j, value=title)
+        c.font = ref_hdr_font
+        c.fill = ref_hdr_fill
+        ref.column_dimensions[get_column_letter(j)].width = width
+    for i, (lid, lname, cname, lumgname) in enumerate(lines_ctx, start=2):
+        ref.cell(row=i, column=4, value=lid)
+        ref.cell(row=i, column=5, value=lname)
+        ref.cell(row=i, column=6, value=cname)
+        ref.cell(row=i, column=7, value=lumgname)
+
+    # Unique manufacturers — source range for the 'Виробник' dropdown
+    # (column A repeats the manufacturer per model, so it can't be used).
+    c = ref.cell(row=1, column=9, value="Виробники (унікальні)")
+    c.font = ref_hdr_font
+    c.fill = ref_hdr_fill
+    ref.column_dimensions["I"].width = 22
+    unique_mfrs = sorted({m.short_name for m in manufacturers})
+    for i, name in enumerate(unique_mfrs, start=2):
+        ref.cell(row=i, column=9, value=name)
+
+    return len(unique_mfrs), len(corector_types), len(lines_ctx)
+
+
+# Data rows the dropdown validations cover on the data sheet.
+_DV_MAX_ROW = 3000
+
+
+def _add_dropdown_validations(ws, n_mfrs: int, n_models: int, n_lines: int):
+    """Strict list dropdowns on the data sheet: Виробник (C), Модель (D),
+    Активний/Увімкнений (F/G, Так/Ні) and ID лінії (H). errorStyle="stop"
+    rejects anything not in the list, so the import can't receive free-text
+    garbage in these columns. A dependent manufacturer→model dropdown
+    (INDIRECT over named ranges) is deliberately NOT used — Cyrillic/spaced
+    names break defined-name syntax; the import validates the pair instead."""
+
+    def dv(formula: str) -> DataValidation:
+        d = DataValidation(
+            type="list", formula1=formula, allow_blank=True,
+            showErrorMessage=True, errorStyle="stop",
+            errorTitle="Невірне значення",
+            error="Оберіть значення зі списку (аркуш 'Довідник')",
+        )
+        ws.add_data_validation(d)
+        return d
+
+    if n_mfrs:
+        dv(f"'Довідник'!$I$2:$I${1 + n_mfrs}").add(f"C3:C{_DV_MAX_ROW}")
+    if n_models:
+        dv(f"'Довідник'!$B$2:$B${1 + n_models}").add(f"D3:D{_DV_MAX_ROW}")
+    if n_lines:
+        dv(f"'Довідник'!$D$2:$D${1 + n_lines}").add(f"H3:H{_DV_MAX_ROW}")
+    dv('"Так,Ні"').add(f"F3:F{_DV_MAX_ROW}")
+    dv('"Так,Ні"').add(f"G3:G{_DV_MAX_ROW}")
+
+
+async def build_template_workbook() -> openpyxl.Workbook:
+    """Empty import template: data sheet with hints + reference sheet with the
+    device catalog and all lines (ID + calculator + LUMG context). Manufacturer,
+    model, line-ID and Так/Ні columns are restricted by strict dropdowns."""
+    manufacturers, corector_types, lines_ctx = await _catalog_for_workbook()
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -114,51 +205,25 @@ async def build_template_workbook() -> openpyxl.Workbook:
     ):
         ws.cell(row=3, column=col_idx, value=val)
 
-    # ── Sheet 2: Reference ────────────────────────────────────────────────────
-    ref = wb.create_sheet("Довідник")
-    ref_hdr_fill = PatternFill("solid", fgColor=_REF_HDR_FILL)
-    ref_hdr_font = Font(bold=True, color="FFFFFF")
-
-    # Manufacturers + models
-    ref.cell(row=1, column=1, value="Виробник (скорочено)").font = ref_hdr_font
-    ref.cell(row=1, column=1).fill = ref_hdr_fill
-    ref.cell(row=1, column=2, value="Модель коректора").font = ref_hdr_font
-    ref.cell(row=1, column=2).fill = ref_hdr_fill
-    ref.column_dimensions["A"].width = 20
-    ref.column_dimensions["B"].width = 28
-
-    mfr_map = {m.id: m.short_name for m in manufacturers}
-    row = 2
-    for ct in corector_types:
-        ref.cell(row=row, column=1, value=mfr_map.get(ct.manufacturer_id, ""))
-        ref.cell(row=row, column=2, value=ct.model_name)
-        row += 1
-
-    # Lines — ID + назва + вичислювач + ЛУМГ (look up the ID by name here, then
-    # put the ID into the 'ID лінії' column on the data sheet).
-    line_ref_cols = [("ID лінії", 10), ("Назва лінії", 32), ("Вичислювач", 28), ("ЛУМГ", 24)]
-    for j, (title, width) in enumerate(line_ref_cols, start=4):  # columns D, E, F, G
-        c = ref.cell(row=1, column=j, value=title)
-        c.font = ref_hdr_font
-        c.fill = ref_hdr_fill
-        ref.column_dimensions[get_column_letter(j)].width = width
-    for i, (lid, lname, cname, lumgname) in enumerate(lines_ctx, start=2):
-        ref.cell(row=i, column=4, value=lid)
-        ref.cell(row=i, column=5, value=lname)
-        ref.cell(row=i, column=6, value=cname)
-        ref.cell(row=i, column=7, value=lumgname)
+    n_mfrs, n_models, n_lines = _build_reference_sheet(
+        wb, manufacturers, corector_types, lines_ctx
+    )
+    _add_dropdown_validations(ws, n_mfrs, n_models, n_lines)
 
     return wb
 
 
 async def build_export_workbook() -> openpyxl.Workbook:
     """Export the current enterprise table; device codes resolved through the
-    corrector-type catalog when linked, legacy columns otherwise."""
+    corrector-type catalog when linked, legacy columns otherwise. Carries the
+    same reference sheet and strict dropdowns as the template — exports are
+    routinely edited and re-imported."""
     async with async_session_factory() as session:
         enterprises = await EnterpriseDao(session).get_all()
         manufacturers = await ManufacturerDao(session).get_all()
         corector_types = await CorectorTypeDao(session).get_all()
         lines = await LineDao(session).get_all()
+        lines_ctx = await _lines_with_context(session)
 
     mfr_by_mfdev = {m.mf_dev: m.short_name for m in manufacturers}
     mfr_id_by_mfdev = {m.mf_dev: m.id for m in manufacturers}
@@ -203,6 +268,11 @@ async def build_export_workbook() -> openpyxl.Workbook:
         ws.cell(row=row_idx, column=7, value="Так" if ent.enabled else "Ні")
         ws.cell(row=row_idx, column=8, value=ent.line_id if ent.line_id else None)
         ws.cell(row=row_idx, column=9, value=line_name)
+
+    n_mfrs, n_models, n_lines = _build_reference_sheet(
+        wb, manufacturers, corector_types, lines_ctx
+    )
+    _add_dropdown_validations(ws, n_mfrs, n_models, n_lines)
 
     return wb
 

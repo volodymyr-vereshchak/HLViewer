@@ -227,23 +227,8 @@ def validate_config() -> Dict:
         all_lines = load_virtual_lines(force_reload=True)
         active_lines = get_active_virtual_lines()
 
-        # Check for duplicate physical lines in active virtual lines
-        physical_line_usage = {}
-        for vline_id, vline_data in active_lines.items():
-            if not vline_data.get("active", False):
-                continue
-
-            for pline_id in vline_data["physical_line_ids"]:
-                if pline_id not in physical_line_usage:
-                    physical_line_usage[pline_id] = []
-                physical_line_usage[pline_id].append(vline_id)
-
-        # Check for duplicates
-        for pline_id, vline_ids in physical_line_usage.items():
-            if len(vline_ids) > 1:
-                errors.append(
-                    f"Physical line {pline_id} is used in multiple active virtual lines: {vline_ids}"
-                )
+        # A physical line may legitimately belong to MANY rings (each ring
+        # aggregates its own copy) — multi-ring membership is NOT an error.
 
         # Get hidden physical lines
         hidden_lines = sorted(list(get_physical_lines_in_rings()))
@@ -362,17 +347,8 @@ async def validate_config_db(session) -> Dict:
     try:
         all_lines_dict = await get_active_virtual_lines_db(session)
 
-        # Check for physical lines used in multiple virtual lines
-        physical_usage: Dict[int, List[str]] = {}
-        for vline_id_str, vline_data in all_lines_dict.items():
-            for pline_id in vline_data["physical_line_ids"]:
-                physical_usage.setdefault(pline_id, []).append(vline_id_str)
-
-        for pline_id, vline_ids in physical_usage.items():
-            if len(vline_ids) > 1:
-                errors.append(
-                    f"Physical line {pline_id} is used in multiple active virtual lines: {vline_ids}"
-                )
+        # A physical line may legitimately belong to MANY rings (each ring
+        # aggregates its own copy) — multi-ring membership is NOT an error.
 
         hidden_lines = sorted(
             {pid for data in all_lines_dict.values() for pid in data["physical_line_ids"]}

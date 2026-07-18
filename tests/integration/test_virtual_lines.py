@@ -93,6 +93,85 @@ class TestVisibleLines:
         assert all(r["is_virtual"] is False for r in body)
 
 
+class TestSharedLineInManyRings:
+    async def test_line_stays_in_both_rings(self, admin_client, seed_topology):
+        """Adding a line to a second ring must NOT remove it from the first
+        (reported bug: the last ring silently stole shared lines)."""
+        vl_a = await _create_vl(
+            admin_client, seed_topology, name="Кільце-А",
+            physical_line_ids=[seed_topology["line1"], seed_topology["line2"]],
+        )
+        vl_b = await _create_vl(
+            admin_client, seed_topology, name="Кільце-Б",
+            physical_line_ids=[seed_topology["line1"]],
+        )
+
+        listed = {v["id"]: v for v in (await admin_client.get("/virtual_lines/")).json()}
+        assert seed_topology["line1"] in listed[vl_a["id"]]["physical_line_ids"]
+        assert seed_topology["line1"] in listed[vl_b["id"]]["physical_line_ids"]
+
+    async def test_shared_line_feeds_both_rings_aggregates(
+        self, admin_client, seed_topology
+    ):
+        """A shared line's archives contribute to EVERY requested ring — the
+        single-target map used to give them to one ring only."""
+        vl_a = await _create_vl(
+            admin_client, seed_topology, name="Кільце-А",
+            physical_line_ids=[seed_topology["line1"], seed_topology["line2"]],
+        )
+        vl_b = await _create_vl(
+            admin_client, seed_topology, name="Кільце-Б",
+            physical_line_ids=[seed_topology["line1"]],
+        )
+        async with async_session_factory() as session:
+            for line_id, volume in (
+                (seed_topology["line1"], 100.0),
+                (seed_topology["line2"], 50.0),
+            ):
+                session.add(
+                    HourlyArchive(
+                        period=datetime(2024, 12, 25, 10),
+                        volume=volume,
+                        w_volume_dp=1.0,
+                        pressure=5.0,
+                        temperature=20.0,
+                        density=0.7,
+                        line_id=line_id,
+                    )
+                )
+            await session.commit()
+
+        resp = await admin_client.get(
+            "/hourly_virtual/",
+            params={
+                "from_date": "2024-12-25T00:00:00",
+                "to_date": "2024-12-25T23:00:00",
+                "line_id": [vl_a["id"], vl_b["id"]],
+            },
+        )
+        assert resp.status_code == 200
+        by_line = {r["line_id"]: r for r in resp.json()}
+        assert by_line[vl_a["id"]]["volume"] == 150.0  # line1 + line2
+        assert by_line[vl_b["id"]]["volume"] == 100.0  # line1 again
+
+    async def test_validate_allows_multi_ring_membership(
+        self, admin_client, seed_topology
+    ):
+        await _create_vl(
+            admin_client, seed_topology, name="Кільце-А",
+            physical_line_ids=[seed_topology["line1"]],
+        )
+        await _create_vl(
+            admin_client, seed_topology, name="Кільце-Б",
+            physical_line_ids=[seed_topology["line1"]],
+        )
+        resp = await admin_client.get("/virtual_lines/validate")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["valid"] is True
+        assert body["errors"] == []
+
+
 class TestHourlyVirtual:
     async def test_aggregates_ring_volumes(self, admin_client, seed_topology):
         vl = await _create_vl(admin_client, seed_topology)
