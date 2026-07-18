@@ -9,11 +9,12 @@ row-level validation all live here.
 
 import io
 import logging
+import re
 from collections import defaultdict
 from typing import Optional
 
 import openpyxl
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles import Alignment, Font, PatternFill, Protection
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 from sqlmodel import select
@@ -27,8 +28,9 @@ from backend.db.models.enterprise_model import Enterprise
 logger = logging.getLogger(__name__)
 
 COLUMNS = ["Підприємство", "Серійний номер", "Виробник", "Модель коректора",
-           "Канал (0-based)", "Активний", "Увімкнений", "ID лінії", "Назва лінії (довідково)"]
-COL_WIDTHS = [40, 18, 16, 24, 16, 12, 14, 12, 32]
+           "Канал (0-based)", "Активний", "Увімкнений", "ID лінії (авто)",
+           "Лінія (вибір зі списку)"]
+COL_WIDTHS = [40, 18, 16, 24, 16, 12, 14, 14, 60]
 
 _HDR_FILL = "2E7D32"
 _HINT_FILL = "1B5E20"
@@ -78,6 +80,13 @@ async def _lines_with_context(session):
         .order_by(Lumg.name, GasVolumeCalc.name, Line.name)
     )
     return (await session.execute(stmt)).all()
+
+
+def _line_label(lid, lname, cname, lumgname) -> str:
+    """Unique, human-readable dropdown label for a line. The trailing [ID N]
+    both guarantees uniqueness and lets the import recover the id when the
+    workbook was produced without Excel recalculating the ID formula."""
+    return f"{lname} — {cname} / {lumgname} [ID {lid}]"
 
 
 async def _catalog_for_workbook():
@@ -137,6 +146,17 @@ def _build_reference_sheet(wb, manufacturers, corector_types, lines_ctx):
     for i, name in enumerate(unique_mfrs, start=2):
         ref.cell(row=i, column=9, value=name)
 
+    # Composite line labels — source range for the data-sheet line dropdown.
+    # Line names are NOT globally unique (only within their calculator), so
+    # the pickable label carries calculator/LUMG context and the ID; the
+    # data sheet derives 'ID лінії' from the picked label by formula.
+    c = ref.cell(row=1, column=10, value="Лінія (для вибору)")
+    c.font = ref_hdr_font
+    c.fill = ref_hdr_fill
+    ref.column_dimensions["J"].width = 60
+    for i, (lid, lname, cname, lumgname) in enumerate(lines_ctx, start=2):
+        ref.cell(row=i, column=10, value=_line_label(lid, lname, cname, lumgname))
+
     return len(unique_mfrs), len(corector_types), len(lines_ctx)
 
 
@@ -146,11 +166,12 @@ _DV_MAX_ROW = 3000
 
 def _add_dropdown_validations(ws, n_mfrs: int, n_models: int, n_lines: int):
     """Strict list dropdowns on the data sheet: Виробник (C), Модель (D),
-    Активний/Увімкнений (F/G, Так/Ні) and ID лінії (H). errorStyle="stop"
-    rejects anything not in the list, so the import can't receive free-text
-    garbage in these columns. A dependent manufacturer→model dropdown
-    (INDIRECT over named ranges) is deliberately NOT used — Cyrillic/spaced
-    names break defined-name syntax; the import validates the pair instead."""
+    Активний/Увімкнений (F/G, Так/Ні) and Лінія (I — composite labels).
+    errorStyle="stop" rejects anything not in the list, so the import can't
+    receive free-text garbage in these columns. A dependent
+    manufacturer→model dropdown (INDIRECT over named ranges) is deliberately
+    NOT used — Cyrillic/spaced names break defined-name syntax; the import
+    validates the pair instead."""
 
     def dv(formula: str) -> DataValidation:
         d = DataValidation(
@@ -167,9 +188,27 @@ def _add_dropdown_validations(ws, n_mfrs: int, n_models: int, n_lines: int):
     if n_models:
         dv(f"'Довідник'!$B$2:$B${1 + n_models}").add(f"D3:D{_DV_MAX_ROW}")
     if n_lines:
-        dv(f"'Довідник'!$D$2:$D${1 + n_lines}").add(f"H3:H{_DV_MAX_ROW}")
+        dv(f"'Довідник'!$J$2:$J${1 + n_lines}").add(f"I3:I{_DV_MAX_ROW}")
     dv('"Так,Ні"').add(f"F3:F{_DV_MAX_ROW}")
     dv('"Так,Ні"').add(f"G3:G{_DV_MAX_ROW}")
+
+
+def _add_line_id_formulas_and_protection(ws, n_lines: int):
+    """'ID лінії' (H) is derived, not typed: each data row carries an
+    INDEX/MATCH over the reference sheet resolving the picked line label (I)
+    to its id. The sheet is protected with ONLY the entry columns unlocked,
+    so the id column physically cannot be edited (user request: the id must
+    not be selectable — pick the line by name, the id follows)."""
+    unlocked = Protection(locked=False)
+    for row in range(3, _DV_MAX_ROW + 1):
+        if n_lines:
+            ws.cell(row=row, column=8).value = (
+                f"=IFERROR(INDEX('Довідник'!$D$2:$D${1 + n_lines},"
+                f"MATCH(I{row},'Довідник'!$J$2:$J${1 + n_lines},0)),\"\")"
+            )
+        for col in (1, 2, 3, 4, 5, 6, 7, 9):  # everything except H
+            ws.cell(row=row, column=col).protection = unlocked
+    ws.protection.sheet = True
 
 
 async def build_template_workbook() -> openpyxl.Workbook:
@@ -191,17 +230,17 @@ async def build_template_workbook() -> openpyxl.Workbook:
         "0, 1, 2, …",
         "Так / Ні",
         "Так / Ні",
-        "ID лінії з аркуша 'Довідник' (або порожньо)",
-        "Заповнюється автоматично при експорті",
+        "Заповнюється автоматично за вибраною лінією",
+        "Оберіть лінію зі списку (або залиште порожньо)",
     ])
 
-    # example row
+    # example row (H is filled by the shared formula below)
     ex_mfr = manufacturers[0].short_name if manufacturers else "РадмирТех"
     ex_model = corector_types[0].model_name if corector_types else "ВЕГА-1.01"
-    ex_lid = lines_ctx[0][0] if lines_ctx else ""
-    ex_lname = lines_ctx[0][1] if lines_ctx else ""
-    for col_idx, val in enumerate(
-        ["ТОВ Завод №1", 123456, ex_mfr, ex_model, 0, "Так", "Так", ex_lid, ex_lname], start=1
+    ex_label = _line_label(*lines_ctx[0]) if lines_ctx else ""
+    for col_idx, val in zip(
+        (1, 2, 3, 4, 5, 6, 7, 9),
+        ("ТОВ Завод №1", 123456, ex_mfr, ex_model, 0, "Так", "Так", ex_label),
     ):
         ws.cell(row=3, column=col_idx, value=val)
 
@@ -209,6 +248,7 @@ async def build_template_workbook() -> openpyxl.Workbook:
         wb, manufacturers, corector_types, lines_ctx
     )
     _add_dropdown_validations(ws, n_mfrs, n_models, n_lines)
+    _add_line_id_formulas_and_protection(ws, n_lines)
 
     return wb
 
@@ -222,7 +262,6 @@ async def build_export_workbook() -> openpyxl.Workbook:
         enterprises = await EnterpriseDao(session).get_all()
         manufacturers = await ManufacturerDao(session).get_all()
         corector_types = await CorectorTypeDao(session).get_all()
-        lines = await LineDao(session).get_all()
         lines_ctx = await _lines_with_context(session)
 
     mfr_by_mfdev = {m.mf_dev: m.short_name for m in manufacturers}
@@ -234,7 +273,8 @@ async def build_export_workbook() -> openpyxl.Workbook:
         key = (ct.manufacturer_id, ct.type_dev)
         if key not in ct_model:
             ct_model[key] = ct.model_name
-    line_by_id = {ln.id: ln.name for ln in lines}
+    label_by_id = {lid: _line_label(lid, lname, cname, lumgname)
+                   for lid, lname, cname, lumgname in lines_ctx}
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -258,7 +298,7 @@ async def build_export_workbook() -> openpyxl.Workbook:
             mfr_short = mfr_by_mfdev.get(ent.mf_dev, str(ent.mf_dev) if ent.mf_dev is not None else "")
             mfr_id = mfr_id_by_mfdev.get(ent.mf_dev)
             model_name = ct_model.get((mfr_id, ent.type_dev), "") if mfr_id else ""
-        line_name = line_by_id.get(ent.line_id, "") if ent.line_id else ""
+        line_label = label_by_id.get(ent.line_id, "") if ent.line_id else ""
         ws.cell(row=row_idx, column=1, value=ent.enterprise_name)
         ws.cell(row=row_idx, column=2, value=ent.ser_num)
         ws.cell(row=row_idx, column=3, value=mfr_short)
@@ -266,13 +306,14 @@ async def build_export_workbook() -> openpyxl.Workbook:
         ws.cell(row=row_idx, column=5, value=ent.ch_num)
         ws.cell(row=row_idx, column=6, value="Так" if ent.active else "Ні")
         ws.cell(row=row_idx, column=7, value="Так" if ent.enabled else "Ні")
-        ws.cell(row=row_idx, column=8, value=ent.line_id if ent.line_id else None)
-        ws.cell(row=row_idx, column=9, value=line_name)
+        # H is written by the shared formula pass; the label drives the id.
+        ws.cell(row=row_idx, column=9, value=line_label)
 
     n_mfrs, n_models, n_lines = _build_reference_sheet(
         wb, manufacturers, corector_types, lines_ctx
     )
     _add_dropdown_validations(ws, n_mfrs, n_models, n_lines)
+    _add_line_id_formulas_and_protection(ws, n_lines)
 
     return wb
 
@@ -369,6 +410,12 @@ async def parse_upload(content: bytes, branch_id: Optional[int]) -> tuple[list[d
         # line (optional): column "ID лінії". Primary = numeric line ID; fall back
         # to a name match for older files — but reject ambiguous names (a name that
         # belongs to several lines across calculators), telling the user to use the ID.
+        # When the id cell is empty (the ID formula was never recalculated by
+        # Excel), recover the id from the picked label's trailing "[ID N]".
+        if (line_key is None or not str(line_key).strip()) and _line_name_info:
+            m = re.search(r"\[ID (\d+)\]\s*$", str(_line_name_info))
+            if m:
+                line_key = m.group(1)
         line_id = None
         if line_key is not None and str(line_key).strip():
             key = str(line_key).strip()

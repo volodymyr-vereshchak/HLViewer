@@ -115,6 +115,9 @@ class TestExcelTemplateAndExport:
         assert ref.cell(row=2, column=2).value == "ВЕГА-1.01"
         line_ids = {ref.cell(row=i, column=4).value for i in range(2, 4)}
         assert line_ids == {seed_topology["line1"], seed_topology["line2"]}
+        # composite pickable labels carry the id
+        labels = {ref.cell(row=i, column=10).value for i in range(2, 4)}
+        assert any(f"[ID {seed_topology['line1']}]" in l for l in labels)
 
     async def test_export_contains_enterprise(
         self, admin_client, device_catalog, seed_topology
@@ -128,12 +131,14 @@ class TestExcelTemplateAndExport:
         resp = await admin_client.get("/enterprise-mappings/export")
         assert resp.status_code == 200
         ws = openpyxl.load_workbook(io.BytesIO(resp.content))["Дані"]
-        row = [ws.cell(row=3, column=c).value for c in range(1, 9)]
+        row = [ws.cell(row=3, column=c).value for c in range(1, 10)]
         assert row[0] == "ТОВ Завод №1"
         assert row[1] == 123456
         assert row[2] == "РадмирТех"
         assert row[3] == "ВЕГА-1.01"
-        assert row[7] == seed_topology["line1"]
+        # H is a formula deriving the id from the picked label in I
+        assert str(row[7]).startswith("=IFERROR(INDEX(")
+        assert f"[ID {seed_topology['line1']}]" in row[8]
 
     @staticmethod
     def _dropdowns_by_column(ws) -> dict:
@@ -147,28 +152,39 @@ class TestExcelTemplateAndExport:
     async def test_template_and_export_have_strict_dropdowns(
         self, admin_client, device_catalog, seed_topology
     ):
-        """Manufacturer, model, line-ID and Так/Ні columns are restricted by
-        stop-style list validation in BOTH downloadable workbooks (exports get
-        edited and re-imported, so they need the same guard rails)."""
+        """Manufacturer, model, line (by label) and Так/Ні columns are
+        restricted by stop-style list validation in BOTH downloadable
+        workbooks; the id column is formula-driven and the sheet protection
+        leaves only the entry columns editable."""
         for path in ("/enterprise-mappings/template", "/enterprise-mappings/export"):
             resp = await admin_client.get(path)
             assert resp.status_code == 200, path
             wb = openpyxl.load_workbook(io.BytesIO(resp.content))
-            dvs = self._dropdowns_by_column(wb["Дані"])
+            ws = wb["Дані"]
+            dvs = self._dropdowns_by_column(ws)
 
-            assert set(dvs) >= {"C", "D", "F", "G", "H"}, path
+            assert set(dvs) >= {"C", "D", "F", "G", "I"}, path
+            assert "H" not in dvs  # id is not user-selectable at all
             assert dvs["C"].formula1.startswith("'Довідник'!$I$2")
             assert dvs["D"].formula1.startswith("'Довідник'!$B$2")
-            assert dvs["H"].formula1.startswith("'Довідник'!$D$2")
+            assert dvs["I"].formula1.startswith("'Довідник'!$J$2")
             assert dvs["F"].formula1 == '"Так,Ні"'
             for dv in dvs.values():
                 assert dv.errorStyle == "stop"
                 assert dv.showErrorMessage is True
 
-            # Reference sheet: unique-manufacturer dropdown source + fixed header
+            # The id column is a locked formula; entry columns are unlocked.
+            assert ws.protection.sheet is True
+            assert str(ws.cell(row=5, column=8).value).startswith("=IFERROR(INDEX(")
+            assert ws.cell(row=5, column=8).protection.locked is True
+            assert ws.cell(row=5, column=9).protection.locked is False
+            assert ws.cell(row=5, column=1).protection.locked is False
+
+            # Reference sheet: dropdown sources + fixed header
             ref = wb["Довідник"]
             assert ref.cell(row=1, column=9).value == "Виробники (унікальні)"
             assert ref.cell(row=2, column=9).value == "РадмирТех"
+            assert ref.cell(row=1, column=10).value == "Лінія (для вибору)"
             assert ref.cell(row=1, column=6).value == "Обчислювач"
 
     async def test_template_spelling_fixed(
@@ -226,6 +242,24 @@ class TestExcelImport:
         # effective device codes resolved through the catalog
         assert ent["mf_dev"] == device_catalog["mf_dev"]
         assert ent["type_dev"] == device_catalog["type_dev"]
+
+    async def test_import_recovers_line_id_from_label(
+        self, admin_client, device_catalog, seed_topology
+    ):
+        """When the id cell is empty (the ID formula was never recalculated
+        by Excel), the id is recovered from the picked label's [ID N] tail."""
+        label = f"l1 — a12 / TESTLUMG [ID {seed_topology['line1']}]"
+        content = self._workbook_bytes([
+            ["ТОВ Імпорт", 555002, "РадмирТех", "ВЕГА-1.01", 0, "Так", "Так",
+             None, label],
+        ])
+        resp = await self._upload(
+            admin_client, content, branch_id=seed_topology["branch"]
+        )
+        assert resp.status_code == 200
+        assert resp.json()["errors"] == []
+        listed = (await admin_client.get("/enterprise-mappings/")).json()
+        assert listed[0]["line_id"] == seed_topology["line1"]
 
     async def test_reimport_updates_not_duplicates(
         self, admin_client, device_catalog, seed_topology
