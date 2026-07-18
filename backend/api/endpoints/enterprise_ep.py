@@ -15,13 +15,13 @@ from backend.api.endpoints.auth_ep import get_branch_filter
 from backend.api.endpoints.enterprise_virtual_ep import resolve_virtual_devices
 from fastapi.responses import StreamingResponse
 
-from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from backend.db.engine import get_session
+from backend.db.dao.dpd_archive_dao import DpdArchiveDao
 from backend.db.dao.enterprise_dao import EnterpriseDao
-from backend.db.models.dpd_cache_model import DpdVolumeCache
+from backend.services import dpd_archive_refresh
 from backend.db.models.enterprise_model import EnterpriseRead, EnterpriseCreate, EnterpriseUpdate
 from backend.db.models.enterprise_models import (
     EnterpriseVolumeResponse,
@@ -125,15 +125,36 @@ class EnterpriseRouter:
         self.router.add_api_route(
             path="/enterprise/cache/",
             tags=["enterprise"],
-            endpoint=self.clear_dpd_cache,
+            endpoint=self.clear_dpd_archive,
             methods=["DELETE"],
             status_code=status.HTTP_200_OK,
-            summary="Clear the DPD volume cache",
+            summary="Wipe the DPD archive",
             description=(
-                "Deletes every cached DPD volume row; subsequent requests "
-                "re-poll DPD from scratch. Admin-only (the auth middleware "
-                "requires the admin role for any DELETE)."
+                "Deletes both archive tables and the coverage registry; the "
+                "next scheduler run (or manual refresh) reloads the window "
+                "from scratch. Admin-only (the auth middleware requires the "
+                "admin role for any DELETE)."
             ),
+        )
+        self.router.add_api_route(
+            path="/enterprise/archive/refresh",
+            tags=["enterprise"],
+            endpoint=self.trigger_archive_refresh,
+            methods=["POST"],
+            status_code=status.HTTP_202_ACCEPTED,
+            summary="Manually refresh the DPD archive now",
+            description=(
+                "Starts the same job the scheduler runs at DPD_REFRESH_TIMES: "
+                "re-poll the last DPD_ARCHIVE_WINDOW_DAYS for all enterprises. "
+                "409 when a refresh is already running. Admin-only (POST)."
+            ),
+        )
+        self.router.add_api_route(
+            path="/enterprise/archive/refresh/status",
+            tags=["enterprise"],
+            endpoint=self.archive_refresh_status,
+            methods=["GET"],
+            summary="DPD archive refresh status",
         )
 
 
@@ -188,6 +209,7 @@ class EnterpriseRouter:
             elif None not in (serNum, mfDev, typeDev, chNum):
                 ent = await EnterpriseDao(session).get_by_device(serNum, mfDev, typeDev, chNum)
                 devices = [] if not ent else [{
+                    "id": ent.id,
                     "line_id": ent.line_id,
                     "branch_id": ent.branch_id,
                     "serNum": ent.ser_num,
@@ -329,14 +351,27 @@ class EnterpriseRouter:
             _poll_reapers.add(reaper)
             reaper.add_done_callback(_poll_reapers.discard)
 
-    async def clear_dpd_cache(
+    async def clear_dpd_archive(
         self,
         session: AsyncSession = Depends(get_session),
     ) -> dict:
-        result = await session.execute(delete(DpdVolumeCache))
+        await DpdArchiveDao(session).clear_all()
         await session.commit()
-        logger.info(f"DPD volume cache cleared ({result.rowcount} rows)")
-        return {"deleted": result.rowcount}
+        logger.info("DPD archive wiped (daily, hourly, coverage)")
+        return {"cleared": True}
+
+    async def trigger_archive_refresh(self) -> dict:
+        if not await dpd_archive_refresh.acquire():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Оновлення архіву вже виконується",
+            )
+        # Lock is held; run detached (same lifecycle as the scheduler run).
+        asyncio.create_task(dpd_archive_refresh.execute_locked())
+        return {"started": True}
+
+    async def archive_refresh_status(self) -> dict:
+        return await dpd_archive_refresh.read_status()
 
     async def get_enterprise_volumes(
         self,
@@ -387,6 +422,7 @@ class EnterpriseRouter:
                     logger.warning(f"No enterprise found: serNum={serNum} mfDev={mfDev} typeDev={typeDev} chNum={chNum}")
                     return []
                 devices = [{
+                    "id": ent.id,
                     "line_id": ent.line_id,
                     "branch_id": ent.branch_id,
                     "serNum": ent.ser_num,
@@ -628,3 +664,4 @@ async def upload_enterprises(file: UploadFile = File(...), branch_id: Optional[i
 
 # Attach CRUD router to the main enterprise router so main.py needs no change
 enterprise_router.include_router(_crud_router)
+

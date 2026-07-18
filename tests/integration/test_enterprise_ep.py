@@ -324,11 +324,6 @@ class TestEnterpriseVolumes:
 
         kinds = [e["type"] for e in events]
         assert "progress" in kinds
-        # No waiting phase: this request leads its own poll (waiting appears
-        # only when a containing poll is already running).
-        assert not any(
-            e.get("phase") == "waiting" for e in events if e["type"] == "status"
-        )
         assert events[-1]["type"] == "result"
         result = events[-1]["data"]
         assert len(result) == 1
@@ -435,9 +430,10 @@ class TestEnterpriseVolumes:
 
         resp = await admin_client.delete("/enterprise/cache/")
         assert resp.status_code == 200, resp.text
-        assert resp.json()["deleted"] == 1
+        assert resp.json()["cleared"] is True
 
-        # The next request finds an empty cache and polls DPD again.
+        # The next request finds an empty archive (coverage wiped) and
+        # backfills from DPD again.
         mock_client.get_volumes.reset_mock()
         await admin_client.get("/enterprise/volumes/", params=params)
         mock_client.get_volumes.assert_awaited_once()

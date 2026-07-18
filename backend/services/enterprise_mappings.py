@@ -276,10 +276,8 @@ def get_devices_for_lines(line_ids: List[int]) -> List[Dict]:
     return devices
 
 
-async def get_devices_for_lines_db(line_ids: list[int], session) -> list[dict]:
-    """
-    DB-backed replacement for get_devices_for_lines().
-    Returns the same format: list of dicts with keys serNum, mfDev, typeDev, chNum, enterprise_name, line_id.
+async def _query_devices_db(session, *where) -> list[dict]:
+    """Shared device-dict builder for the DB-backed lookups below.
 
     Device codes are read THROUGH the corrector-type catalog when the enterprise
     is linked (so catalog edits propagate to DPD polling), falling back to the
@@ -294,8 +292,9 @@ async def get_devices_for_lines_db(line_ids: list[int], session) -> list[dict]:
         .outerjoin(CorectorType, Enterprise.corector_type_id == CorectorType.id)
         .outerjoin(Manufacturer, CorectorType.manufacturer_id == Manufacturer.id)
         .where(Enterprise.active == True)  # noqa: E712
-        .where(Enterprise.line_id.in_(line_ids))
     )
+    for clause in where:
+        stmt = stmt.where(clause)
     rows = (await session.execute(stmt)).all()
 
     devices = []
@@ -307,6 +306,7 @@ async def get_devices_for_lines_db(line_ids: list[int], session) -> list[dict]:
         if eff_mf is None or eff_type is None:
             continue
         devices.append({
+            "id": e.id,  # enterprise_id — archive tables key rows by it
             "line_id": e.line_id,
             "branch_id": e.branch_id,
             "serNum": e.ser_num,
@@ -316,6 +316,22 @@ async def get_devices_for_lines_db(line_ids: list[int], session) -> list[dict]:
             "enterprise_name": e.enterprise_name,
         })
     return devices
+
+
+async def get_devices_for_lines_db(line_ids: list[int], session) -> list[dict]:
+    """DB-backed replacement for get_devices_for_lines(): active enterprises
+    of the given lines as device dicts (serNum, mfDev, typeDev, chNum, ...)."""
+    from backend.db.models.enterprise_model import Enterprise
+
+    return await _query_devices_db(session, Enterprise.line_id.in_(line_ids))
+
+
+async def get_devices_for_branch_db(branch_id: int, session) -> list[dict]:
+    """All active enterprises of a branch — the scheduler refresh works
+    branch-by-branch (DPD credentials are per branch)."""
+    from backend.db.models.enterprise_model import Enterprise
+
+    return await _query_devices_db(session, Enterprise.branch_id == branch_id)
 
 
 def validate_mappings() -> Dict[str, any]:

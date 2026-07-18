@@ -15,6 +15,7 @@ since the archive upsert is idempotent a restart costs at most one redundant run
 import asyncio
 import logging
 import time
+from datetime import datetime, timedelta
 
 from sqlmodel import select
 
@@ -23,6 +24,8 @@ from backend.db.models.lumg_model import LumgDataPath
 from backend.hl_engine.main import update_hostlibs
 from backend.hl_engine.update_job_lock import run_guarded_update
 from backend.logging_config import setup_logging
+from backend.services import dpd_archive_refresh
+from backend.settings import backend_settings
 from backend.utils.path_utils import resolve_stored_path
 from utils.files_utils import newest_zip_signature
 
@@ -100,6 +103,36 @@ async def poll_once() -> None:
         logger.info("Update already running (manual) — skipping this tick")
 
 
+def _last_due_refresh(now: datetime) -> datetime:
+    """The most recent scheduled DPD-refresh moment at or before `now`
+    (DPD_REFRESH_TIMES, local clock). Yesterday's last slot when `now` is
+    before today's first one."""
+    slots = []
+    for hhmm in backend_settings["DPD_REFRESH_TIMES"]:
+        hour, minute = (int(x) for x in hhmm.split(":"))
+        slots.append(now.replace(hour=hour, minute=minute, second=0, microsecond=0))
+    slots.sort()
+    passed = [s for s in slots if s <= now]
+    return passed[-1] if passed else slots[-1] - timedelta(days=1)
+
+
+async def maybe_refresh_dpd() -> None:
+    """Run the DPD archive refresh when a scheduled slot has passed since the
+    last run. A never-run job (fresh install, wiped archive) is due
+    immediately — that is the initial month-long load."""
+    now = datetime.now()
+    due = _last_due_refresh(now)
+    started = await dpd_archive_refresh.last_started_at()
+    if started is not None and started >= due:
+        return
+    logger.info(
+        "DPD archive refresh due (slot %s, last run %s) — starting", due, started
+    )
+    ran = await dpd_archive_refresh.run_refresh()
+    if not ran:
+        logger.info("DPD refresh already running elsewhere — skipping")
+
+
 async def main():
     logger.info(
         "File-arrival poller started (interval=%ss, settle=%ss). Waiting for new files...",
@@ -110,6 +143,10 @@ async def main():
             await poll_once()
         except Exception:
             logger.exception("poll_once failed")
+        try:
+            await maybe_refresh_dpd()
+        except Exception:
+            logger.exception("maybe_refresh_dpd failed")
         await asyncio.sleep(POLL_INTERVAL_SEC)
 
 
