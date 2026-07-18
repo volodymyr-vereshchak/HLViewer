@@ -105,7 +105,7 @@ async def last_started_at() -> datetime | None:
 async def _branch_ids_with_credentials() -> list[int]:
     async with async_session_factory() as session:
         rows = await session.execute(sa.text(
-            "SELECT grmu_branch_id FROM grmu_branch_dpd_credential"
+            "SELECT branch_id FROM grmu_branch_dpd_credential"
         ))
         return [r[0] for r in rows]
 
