@@ -124,31 +124,36 @@ def _aggregate_period(
     total_volume = 0.0
     total_w_volume_dp = 0.0
 
-    # For weighted averages
+    # Weighted sums with per-metric weights: DPD-line members carry None in
+    # w_volume_dp/density (and possibly pressure/temperature) — a None value
+    # must not drag the ring average toward zero, so each metric averages
+    # only over the members that actually reported it.
     weighted_pressure = 0.0
+    pressure_volume = 0.0
     weighted_temperature = 0.0
+    temperature_volume = 0.0
     weighted_density = 0.0
+    density_volume = 0.0
 
     for archive in archives:
-        volume = archive.volume
+        volume = archive.volume or 0.0
 
         total_volume += volume
-        total_w_volume_dp += archive.w_volume_dp
+        total_w_volume_dp += archive.w_volume_dp or 0.0
 
-        # Weighted sums (will divide by total_volume later)
-        weighted_pressure += archive.pressure * volume
-        weighted_temperature += archive.temperature * volume
-        weighted_density += archive.density * volume
+        if archive.pressure is not None:
+            weighted_pressure += archive.pressure * volume
+            pressure_volume += volume
+        if archive.temperature is not None:
+            weighted_temperature += archive.temperature * volume
+            temperature_volume += volume
+        if archive.density is not None:
+            weighted_density += archive.density * volume
+            density_volume += volume
 
-    # Calculate weighted averages
-    if total_volume > 0:
-        avg_pressure = weighted_pressure / total_volume
-        avg_temperature = weighted_temperature / total_volume
-        avg_density = weighted_density / total_volume
-    else:
-        avg_pressure = 0.0
-        avg_temperature = 0.0
-        avg_density = 0.0
+    avg_pressure = weighted_pressure / pressure_volume if pressure_volume > 0 else 0.0
+    avg_temperature = weighted_temperature / temperature_volume if temperature_volume > 0 else 0.0
+    avg_density = weighted_density / density_volume if density_volume > 0 else 0.0
 
     return {
         "line_id": virtual_line_id,

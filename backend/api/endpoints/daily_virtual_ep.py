@@ -12,6 +12,7 @@ class DailyVirtualRouter(BaseVirtualArchiveRouter):
             tag="daily_virtual",
             archive_dao=DailyArchiveDao,
             max_days=400,
+            period_type="daily",
         )
 
 

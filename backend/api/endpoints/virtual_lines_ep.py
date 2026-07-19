@@ -24,6 +24,7 @@ from backend.db.models.virtual_line_models import (
     VisibleLineResponse,
     VirtualLinesValidationResponse,
 )
+from backend.db.models.dpd_line_model import DpdLine
 from backend.services.virtual_lines_config import (
     # File-based fallbacks (keep for backward compatibility)
     get_active_virtual_lines,
@@ -201,7 +202,10 @@ class VirtualLinesRouter:
                     VirtualLineMember.virtual_line_id == vl.id
                 ).order_by(VirtualLineMember.sort_order)
             )
-            physical_ids = [m.line_id for m in members.scalars().all()]
+            physical_ids = [
+                m.line_id if m.line_id is not None else m.dpd_line_id
+                for m in members.scalars().all()
+            ]
             item = VirtualLineList(
                 **vl.model_dump(exclude={"members", "branch", "lumg"}),
                 physical_line_ids=physical_ids,
@@ -209,15 +213,30 @@ class VirtualLinesRouter:
             out.append(item)
         return out
 
+    async def _add_members(self, vl_id: int, line_ids: list[int], session):
+        """Insert ring members, routing each id into line_id (physical) or
+        dpd_line_id (DPD) — a member is exactly one of the two kinds."""
+        dpd_ids = set((await session.execute(
+            select(DpdLine.id).where(DpdLine.id.in_(line_ids))
+        )).scalars()) if line_ids else set()
+        for order, lid in enumerate(line_ids):
+            if lid in dpd_ids:
+                session.add(VirtualLineMember(
+                    virtual_line_id=vl_id, dpd_line_id=lid, sort_order=order,
+                ))
+            else:
+                session.add(VirtualLineMember(
+                    virtual_line_id=vl_id, line_id=lid, sort_order=order,
+                ))
+
     async def create(
         self, data: VirtualLineCreate, session: AsyncSession = Depends(get_session)
     ) -> VirtualLineList:
-        """Create a new virtual line with physical line members."""
+        """Create a new virtual line with physical/DPD line members."""
         vl = VirtualLine(**data.model_dump(exclude={"physical_line_ids"}))
         session.add(vl)
         await session.flush()
-        for lid in data.physical_line_ids:
-            session.add(VirtualLineMember(virtual_line_id=vl.id, line_id=lid))
+        await self._add_members(vl.id, data.physical_line_ids, session)
         await session.commit()
         await session.refresh(vl)
         return VirtualLineList(
@@ -239,8 +258,7 @@ class VirtualLinesRouter:
                 VirtualLineMember.virtual_line_id == vl_id
             )
         )
-        for lid in data.physical_line_ids:
-            session.add(VirtualLineMember(virtual_line_id=vl_id, line_id=lid))
+        await self._add_members(vl_id, data.physical_line_ids, session)
         await session.commit()
         await session.refresh(vl)
         return VirtualLineList(

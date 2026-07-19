@@ -289,7 +289,12 @@ async def get_active_virtual_lines_db(session) -> Dict:
 
         out[str(vl.id)] = {
             "name": vl.name,
-            "physical_line_ids": [m.line_id for m in members],
+            # Effective member ids: physical or DPD lines (ids never collide —
+            # shared_line_id_seq). The historical key name is kept as-is.
+            "physical_line_ids": [
+                m.line_id if m.line_id is not None else m.dpd_line_id
+                for m in members
+            ],
             "active": vl.active,
             "description": vl.description,
             "branch_id": vl.branch_id,

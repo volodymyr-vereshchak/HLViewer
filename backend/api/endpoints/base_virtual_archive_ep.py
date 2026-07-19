@@ -8,13 +8,17 @@ path and date-range cap (mirrors the BaseArchiveRouter pattern).
 """
 
 from datetime import datetime
+from types import SimpleNamespace
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import select
 
 from backend.api.endpoints.auth_ep import get_current_user
+from backend.db.dao.dpd_line_dao import DpdLineArchiveDao
 from backend.db.engine import get_session
+from backend.db.models.dpd_line_model import DpdLine
 from backend.services.virtual_lines_aggregator import aggregate_to_virtual_lines
 from backend.services.virtual_lines_config import (
     get_active_virtual_lines_db,
@@ -23,9 +27,12 @@ from backend.services.virtual_lines_config import (
 
 
 class BaseVirtualArchiveRouter:
-    def __init__(self, path: str, tag: str, archive_dao, max_days: int):
+    def __init__(self, path: str, tag: str, archive_dao, max_days: int,
+                 period_type: str):
         self.archive_dao = archive_dao
         self.max_days = max_days
+        # "daily" | "hourly" — which DPD-line archive feeds DPD ring members.
+        self.period_type = period_type
         self.router = APIRouter(dependencies=[Depends(get_current_user)])
         self.router.add_api_route(
             path=path,
@@ -60,7 +67,33 @@ class BaseVirtualArchiveRouter:
         virtual_lines = await get_active_virtual_lines_db(session)
         physical_line_ids = await resolve_virtual_to_physical_db(line_id, session)
         archive_dao = self.archive_dao(session=session)
-        archives = await archive_dao.get_range(from_date, to_date, physical_line_ids)
+        archives = list(
+            await archive_dao.get_range(from_date, to_date, physical_line_ids)
+        )
+
+        # Resolved member ids may include DPD lines (a ring can mix kinds);
+        # their data lives in the dpd_line_* archives, not in hourly/daily
+        # archive — fetch and merge before aggregation. Shims mirror the
+        # archive-row attributes the aggregator reads.
+        dpd_ids = list((await session.execute(
+            select(DpdLine.id).where(DpdLine.id.in_(physical_line_ids))
+        )).scalars()) if physical_line_ids else []
+        if dpd_ids:
+            dpd_rows = await DpdLineArchiveDao(session).load_range(
+                self.period_type, dpd_ids, from_date, to_date
+            )
+            archives.extend(
+                SimpleNamespace(
+                    line_id=r["dpd_line_id"],
+                    period=r["stamp"],
+                    volume=r["volume"],
+                    w_volume_dp=None,
+                    pressure=r["pressure"],
+                    temperature=r["temperature"],
+                    density=None,
+                )
+                for r in dpd_rows
+            )
 
         has_virtual = any(str(lid) in virtual_lines for lid in line_id)
         if has_virtual:

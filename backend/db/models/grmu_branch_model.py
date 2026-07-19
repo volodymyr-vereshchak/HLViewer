@@ -220,16 +220,29 @@ class VirtualLineMember(HlBaseModel, table=True):
             "virtual_line_id", "line_id",
             name="uq_vlm_virtual_line_line",
         ),
+        UniqueConstraint(
+            "virtual_line_id", "dpd_line_id",
+            name="uq_vlm_virtual_line_dpd",
+        ),
         Index("idx_vlm_virtual_line", "virtual_line_id"),
         Index("idx_vlm_line", "line_id"),
+        Index("idx_vlm_dpd_line", "dpd_line_id"),
     )
 
     id: int | None = Field(default=None, primary_key=True, sa_type=BigInteger)
     virtual_line_id: int = Field(
         foreign_key="virtual_line.id", ondelete="CASCADE", sa_type=BigInteger,
     )
-    line_id: int = Field(
+    # Exactly one of line_id/dpd_line_id is set (ck_vlm_single_line): a ring
+    # member is either a physical or a DPD line. Ids never collide across
+    # kinds (shared_line_id_seq) — the effective member id is the COALESCE.
+    line_id: int | None = Field(
+        default=None,
         foreign_key="gas_volume_line.id", ondelete="CASCADE", sa_type=BigInteger,
+    )
+    dpd_line_id: int | None = Field(
+        default=None,
+        foreign_key="dpd_line.id", ondelete="CASCADE", sa_type=BigInteger,
     )
     sort_order: int = Field(default=0)
 
