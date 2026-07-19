@@ -24,7 +24,7 @@ from backend.db.models.lumg_model import LumgDataPath
 from backend.hl_engine.main import update_hostlibs
 from backend.hl_engine.update_job_lock import run_guarded_update
 from backend.logging_config import setup_logging
-from backend.services import dpd_archive_refresh
+from backend.services import dpd_archive_refresh, dpd_line_refresh
 from backend.settings import backend_settings
 from backend.utils.path_utils import resolve_stored_path
 from utils.files_utils import newest_zip_signature
@@ -40,6 +40,10 @@ SETTLE_SECONDS = 60
 
 # resolved_path -> signature of the last batch we processed. In-memory by design.
 _last_sig: dict[str, frozenset] = {}
+
+# Strong refs to detached DPD-line update tasks (bare create_task results may
+# be garbage-collected before completion).
+_dpd_line_tasks: set = set()
 
 
 async def _active_paths() -> list[str]:
@@ -97,6 +101,12 @@ async def poll_once() -> None:
             if max_mtime == 0 or (now - max_mtime) >= SETTLE_SECONDS:
                 _last_sig[path] = sig
         logger.info("Update finished")
+        # DPD lines refresh alongside the hostlib update (user decision):
+        # detached so it never blocks the poll loop or the hostlib lock;
+        # per-line dpd_line_job locks dedupe against manual inits.
+        task = asyncio.create_task(dpd_line_refresh.run_update_all())
+        _dpd_line_tasks.add(task)
+        task.add_done_callback(_dpd_line_tasks.discard)
     else:
         # A manual update is in progress; retry on the next tick (signatures
         # deliberately not committed).

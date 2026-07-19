@@ -99,3 +99,16 @@ from .device_catalog_model import (
 )
 
 from .update_job_model import UpdateJob
+
+from .dpd_line_model import (
+    DpdLine,
+    DpdLineBase,
+    DpdLineCreate,
+    DpdLineList,
+    DpdLineDevice,
+    DpdLineDeviceIn,
+    DpdLineDeviceRead,
+    DpdLineDailyArchive,
+    DpdLineHourlyArchive,
+    DpdLineJob,
+)

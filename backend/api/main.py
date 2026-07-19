@@ -26,6 +26,7 @@ from backend.api.endpoints import (
     virtual_lines_ep,
     hourly_virtual_ep,
     daily_virtual_ep,
+    dpd_line_ep,
     grmu_branch_ep,
     auth_ep,
 )
@@ -119,6 +120,13 @@ tags_metadata = [
     {
         "name": "virtual_lines",
         "description": "Operations with virtual lines (rings).",
+    },
+    {
+        "name": "dpd_lines",
+        "description": (
+            "Operations with DPD lines: lines fed from the DPD API with a "
+            "device (corrector) history."
+        ),
     },
     {
         "name": "hourly_virtual",
@@ -332,6 +340,7 @@ app.include_router(param_ep.param_router)
 app.include_router(enterprise_ep.enterprise_router)
 app.include_router(enterprise_virtual_ep.enterprise_virtual_router)
 app.include_router(virtual_lines_ep.virtual_lines_router)
+app.include_router(dpd_line_ep.dpd_line_router)
 app.include_router(hourly_virtual_ep.hourly_virtual_router)
 app.include_router(daily_virtual_ep.daily_virtual_router)
 app.include_router(grmu_branch_ep.grmu_branch_router)
