@@ -97,10 +97,17 @@ async def fetch_dpd_volumes(
     date_to: datetime,
     period_type: str,
     events_cb: Optional[Callable[[Dict], None]] = None,
+    live: bool = False,
 ) -> List[Dict]:
     """Raw volume records for the requested devices/range, served from the DB
     archive; DPD is contacted only to backfill ranges older than a device's
     coverage.
+
+    ``live=True`` (the enterprise poll page): the WHOLE requested range is
+    re-polled from the DPD API for every device first (results upserted into
+    the archive), so the response carries fresh data; when the API poll
+    fails, the error is logged and the archive serves whatever it has —
+    DB data is the fallback, not the primary source.
 
     ``events_cb`` (optional, SYNCHRONOUS, must be non-blocking) receives
     progress events for the streaming endpoint:
@@ -136,25 +143,47 @@ async def fetch_dpd_volumes(
             )
             dao = DpdArchiveDao(session)
 
-            backfill = await _plan_backfill(
-                dao, ent_by_id, period_type, requested_from, date_to
-            )
-            if events_cb is not None:
-                events_cb({"type": "progress", "done": 0, "total": len(backfill)})
-            if backfill:
+            if live:
+                # Fresh poll of the full range for every device; the archive
+                # both caches the result and covers devices that failed.
+                spans = {
+                    ent_id: (requested_from, date_to.date())
+                    for ent_id in ent_by_id
+                }
                 if events_cb is not None:
+                    events_cb({"type": "progress", "done": 0,
+                               "total": len(spans)})
                     events_cb({"type": "status", "phase": "waiting"})
-                await _lock_backfill(session, backfill, period_type)
-                # A concurrent request may have backfilled while we waited.
-                backfill = await _plan_backfill(
-                    dao, {e: ent_by_id[e] for e in backfill}, period_type,
-                    requested_from, date_to,
-                )
-                if backfill:
+                await _lock_backfill(session, spans, period_type)
+                try:
                     await _run_backfill(
-                        session, dao, ent_by_id, backfill, period_type,
+                        session, dao, ent_by_id, spans, period_type,
                         requested_from, events_cb,
                     )
+                except Exception:
+                    logger.exception(
+                        "Live DPD poll failed — serving archive data as fallback"
+                    )
+            else:
+                backfill = await _plan_backfill(
+                    dao, ent_by_id, period_type, requested_from, date_to
+                )
+                if events_cb is not None:
+                    events_cb({"type": "progress", "done": 0, "total": len(backfill)})
+                if backfill:
+                    if events_cb is not None:
+                        events_cb({"type": "status", "phase": "waiting"})
+                    await _lock_backfill(session, backfill, period_type)
+                    # A concurrent request may have backfilled while we waited.
+                    backfill = await _plan_backfill(
+                        dao, {e: ent_by_id[e] for e in backfill}, period_type,
+                        requested_from, date_to,
+                    )
+                    if backfill:
+                        await _run_backfill(
+                            session, dao, ent_by_id, backfill, period_type,
+                            requested_from, events_cb,
+                        )
             if events_cb is not None:
                 events_cb({"type": "status", "phase": "aggregating"})
 

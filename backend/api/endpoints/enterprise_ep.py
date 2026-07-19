@@ -174,11 +174,15 @@ class EnterpriseRouter:
         mfDev: Optional[int] = Query(None, description="Optional: Manufacturer code"),
         typeDev: Optional[int] = Query(None, description="Optional: Device type code"),
         chNum: Optional[int] = Query(None, description="Optional: Filter by device channel number"),
+        live: bool = Query(default=False, description=(
+            "Re-poll the DPD API for the whole range first (fresh data); the "
+            "archive serves as fallback when the API is unreachable"
+        )),
         session: AsyncSession = Depends(get_session),
     ) -> StreamingResponse:
         logger.info(
             f"Streaming enterprise volumes for lines {line_id} "
-            f"(virtual={virtual}), period {from_date} to {to_date}, "
+            f"(virtual={virtual}, live={live}), period {from_date} to {to_date}, "
             f"granularity: {period_type}"
         )
         try:
@@ -232,7 +236,7 @@ class EnterpriseRouter:
         return StreamingResponse(
             self._volume_events(
                 devices, date_from, date_to, period_type,
-                line_remap, none_volume_as_zero, include_devices,
+                line_remap, none_volume_as_zero, include_devices, live,
             ),
             media_type="application/x-ndjson",
             # nginx honors this per-response: events reach the browser as they
@@ -243,7 +247,7 @@ class EnterpriseRouter:
     @staticmethod
     async def _volume_events(
         devices, date_from, date_to, period_type,
-        line_remap, none_volume_as_zero, include_devices=True,
+        line_remap, none_volume_as_zero, include_devices=True, live=False,
     ):
         """NDJSON event generator around fetch_dpd_volumes.
 
@@ -278,7 +282,8 @@ class EnterpriseRouter:
 
         async def run():
             volumes = await fetch_dpd_volumes(
-                devices, date_from, date_to, period_type, events_cb=events_cb
+                devices, date_from, date_to, period_type,
+                events_cb=events_cb, live=live,
             )
             return aggregate_volumes(
                 volumes, devices, period_type,
@@ -388,11 +393,16 @@ class EnterpriseRouter:
         typeDev: Optional[int] = Query(None, description="Optional: Device type code"),
         chNum: Optional[int] = Query(None, description="Optional: Filter by device channel number"),
         include_devices: bool = Query(default=True, description="Set false to strip per-device breakdowns (line totals only)"),
+        live: bool = Query(default=False, description=(
+            "Re-poll the DPD API for the whole range first (fresh data); the "
+            "archive serves as fallback when the API is unreachable"
+        )),
         session: AsyncSession = Depends(get_session),
     ) -> List[EnterpriseVolumeResponse]:
         logger.info(
             f"Fetching enterprise volumes for lines {line_id}, "
-            f"period {from_date} to {to_date}, granularity: {period_type}"
+            f"period {from_date} to {to_date}, granularity: {period_type}, "
+            f"live={live}"
         )
 
         try:
@@ -440,7 +450,9 @@ class EnterpriseRouter:
             return []
 
         try:
-            volumes_data = await fetch_dpd_volumes(devices, date_from, date_to, period_type)
+            volumes_data = await fetch_dpd_volumes(
+                devices, date_from, date_to, period_type, live=live
+            )
         except LookupError as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
         except ValueError as e:
