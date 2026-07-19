@@ -28,6 +28,7 @@ class DpdLineBase(HlBaseModel):
     description: Optional[str] = None
     active: bool = Field(default=True)
     include_in_trends: bool = Field(default=False)
+    include_in_report: bool = Field(default=False)
 
 
 class DpdLine(DpdLineBase, table=True):

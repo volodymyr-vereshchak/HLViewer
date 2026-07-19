@@ -160,7 +160,9 @@ class RootRouter:
         try:
             updater = HostlibUpdater()
             from backend.db.dao.hourly_archive_dao import HourlyArchiveDao
+            from backend.db.dao.dpd_line_dao import DpdLineArchiveDao
             from backend.db.models import HourlyArchiveList
+            from backend.db.models.dpd_line_model import DpdLine
             from backend.db.models.line_model import Line
             from datetime import timedelta
             from sqlmodel import select
@@ -172,6 +174,15 @@ class RootRouter:
                 select(Line).where(Line.include_in_report == True)  # noqa: E712
             )).scalars().all()
             line_flags = {ln.id: ln.is_high_pressure for ln in report_lines}
+            # DPD lines carry the same flag; they have no is_high_pressure —
+            # the report labels their pressure as Pвых.
+            dpd_report_lines = (await session.execute(
+                select(DpdLine).where(
+                    DpdLine.include_in_report == True,  # noqa: E712
+                    DpdLine.active == True,  # noqa: E712
+                )
+            )).scalars().all()
+            line_flags.update({dl.id: False for dl in dpd_report_lines})
             if not line_flags:
                 return {
                     "message": "Немає ліній з увімкненим прапорцем «у звіт» (include_in_report)",
@@ -191,6 +202,23 @@ class RootRouter:
             extracted_data = [
                 HourlyArchiveList(**vars(item)).model_dump() for item in result
             ]
+            # DPD-line rows come from their own archive; w_volume_dp is 0 (no
+            # dP on correctors) so the shared message math stays numeric.
+            if dpd_report_lines:
+                dpd_rows = await DpdLineArchiveDao(session).load_range(
+                    "hourly", [dl.id for dl in dpd_report_lines], start, end
+                )
+                extracted_data.extend({
+                    "line_id": r["dpd_line_id"],
+                    "period": r["stamp"],
+                    "volume": r["volume"] or 0.0,
+                    "w_volume_dp": 0.0,
+                    "pressure": r["pressure"] or 0.0,
+                    "temperature": r["temperature"] or 0.0,
+                    "density": None,
+                } for r in dpd_rows)
+            if not extracted_data:
+                return {"message": "Немає годинних даних для звіту", "success": False}
             df = pd.DataFrame(extracted_data).sort_values("period")
 
             # Создаем сообщение

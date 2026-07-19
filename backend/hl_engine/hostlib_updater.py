@@ -87,13 +87,19 @@ class HostlibUpdater:
 
     @staticmethod
     async def get_line_name(line_id: int) -> str:
-        """Get line name for physical or virtual line (DB-backed)."""
-        # Try virtual line first (DB)
+        """Get line name for a physical, virtual or DPD line (DB-backed).
+        The three kinds share one id space (shared_line_id_seq)."""
         async with async_session_factory() as session:
             from backend.db.models.grmu_branch_model import VirtualLine
             vl = await session.get(VirtualLine, line_id)
             if vl:
                 return vl.name
+
+        async with async_session_factory() as session:
+            from backend.db.models.dpd_line_model import DpdLine
+            dl = await session.get(DpdLine, line_id)
+            if dl:
+                return dl.name
 
         # Physical line — get from database
         async with async_session_factory() as session:
