@@ -103,3 +103,7 @@ class DpdRefreshJob(SQLModel, table=True):
     finished_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None  # heartbeat for crash detection
     error: Optional[str] = None
+    # Per-device progress of a running refresh (each device counts twice:
+    # daily + hourly). NULL outside a running refresh.
+    progress_done: Optional[int] = None
+    progress_total: Optional[int] = None

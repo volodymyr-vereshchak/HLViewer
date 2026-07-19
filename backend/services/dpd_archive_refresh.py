@@ -7,7 +7,9 @@ tables, lowers coverage and prunes retention. Runs from the scheduler process
 POST /enterprise/archive/refresh — both guarded by the single-row
 dpd_refresh_job lock (same pattern as update_job_lock), so only one refresh
 runs at a time across all uvicorn workers and the scheduler."""
+import asyncio
 import logging
+import time
 from datetime import date, datetime, timedelta
 
 import sqlalchemy as sa
@@ -39,7 +41,8 @@ async def acquire() -> bool:
                 """
                 UPDATE dpd_refresh_job
                 SET status = 'running', started_at = now(), updated_at = now(),
-                    finished_at = NULL, error = NULL
+                    finished_at = NULL, error = NULL,
+                    progress_done = NULL, progress_total = NULL
                 WHERE id = 1
                   AND (status <> 'running'
                        OR updated_at < now() - make_interval(secs => :stale))
@@ -51,6 +54,78 @@ async def acquire() -> bool:
         acquired = result.scalar() is not None
         await session.commit()
         return acquired
+
+
+class _ProgressWriter:
+    """Throttled progress_done writes for the admin progress bar.
+
+    get_volumes calls its progress_cb synchronously on the polling path, so
+    the callback only stores the latest value and fires a detached write task
+    at most every INTERVAL seconds — it can never slow a device request down.
+    Writes are guarded by status='running' (they double as heartbeats), so a
+    late task after finalize is a no-op."""
+
+    INTERVAL = 2.0
+
+    def __init__(self, total: int):
+        self.total = total
+        self.done = 0
+        self._offset = 0
+        self._last_write = 0.0
+        self._task: asyncio.Task | None = None
+
+    def segment_cb(self, device_count: int):
+        """Callback for one get_volumes call; advances the base offset."""
+        offset = self._offset
+        self._offset = offset + device_count
+
+        def cb(done: int, _total: int) -> None:
+            self.done = offset + done
+            self._maybe_write()
+
+        return cb
+
+    def skip_to(self, expected_offset: int) -> None:
+        """Jump over devices that will not be polled (e.g. branch failed)."""
+        self._offset = max(self._offset, expected_offset)
+        self.done = self._offset
+        self._maybe_write()
+
+    def _maybe_write(self) -> None:
+        now = time.monotonic()
+        if self._task is not None and not self._task.done():
+            return
+        if now - self._last_write < self.INTERVAL:
+            return
+        self._last_write = now
+        self._task = asyncio.get_running_loop().create_task(self._write())
+
+    async def _write(self) -> None:
+        try:
+            async with async_session_factory() as session:
+                await session.execute(
+                    sa.text(
+                        "UPDATE dpd_refresh_job SET progress_done = :done, "
+                        "updated_at = now() WHERE id = 1 AND status = 'running'"
+                    ),
+                    {"done": self.done},
+                )
+                await session.commit()
+        except Exception:
+            logger.debug("DPD refresh: progress write failed", exc_info=True)
+
+
+async def _write_progress_total(total: int) -> None:
+    async with async_session_factory() as session:
+        await session.execute(
+            sa.text(
+                "UPDATE dpd_refresh_job SET progress_total = :total, "
+                "progress_done = 0, updated_at = now() "
+                "WHERE id = 1 AND status = 'running'"
+            ),
+            {"total": total},
+        )
+        await session.commit()
 
 
 async def _heartbeat() -> None:
@@ -67,6 +142,7 @@ async def _finalize(status: str, error: str | None) -> None:
         await session.execute(
             sa.text(
                 "UPDATE dpd_refresh_job SET status = :status, error = :error, "
+                "progress_done = NULL, progress_total = NULL, "
                 "finished_at = now(), updated_at = now() WHERE id = 1"
             ),
             {"status": status, "error": error},
@@ -79,6 +155,7 @@ async def read_status() -> dict:
         row = (await session.execute(sa.text(
             """
             SELECT status, started_at, finished_at, error,
+                   progress_done, progress_total,
                    (status = 'running'
                     AND updated_at < now() - make_interval(secs => :stale)) AS is_stale
             FROM dpd_refresh_job WHERE id = 1
@@ -86,13 +163,16 @@ async def read_status() -> dict:
         ), {"stale": STALE_SECONDS})).mappings().first()
     if row is None:
         return {"status": "idle", "started_at": None, "finished_at": None,
-                "error": None}
+                "error": None, "progress_done": None, "progress_total": None}
     if row["is_stale"]:
         return {"status": "error", "started_at": row["started_at"],
                 "finished_at": row["finished_at"],
-                "error": "Оновлення перервано (процес зупинився)"}
+                "error": "Оновлення перервано (процес зупинився)",
+                "progress_done": None, "progress_total": None}
     return {"status": row["status"], "started_at": row["started_at"],
-            "finished_at": row["finished_at"], "error": row["error"]}
+            "finished_at": row["finished_at"], "error": row["error"],
+            "progress_done": row["progress_done"],
+            "progress_total": row["progress_total"]}
 
 
 async def last_started_at() -> datetime | None:
@@ -110,12 +190,17 @@ async def _branch_ids_with_credentials() -> list[int]:
         return [r[0] for r in rows]
 
 
-async def _refresh_branch(branch_id: int, window_from: date, today: date) -> None:
+async def _refresh_branch(
+    branch_id: int,
+    devices: list,
+    window_from: date,
+    today: date,
+    progress: _ProgressWriter,
+) -> None:
+    if not devices:
+        logger.info(f"DPD refresh: branch {branch_id} has no active devices")
+        return
     async with async_session_factory() as session:
-        devices = await get_devices_for_branch_db(branch_id, session)
-        if not devices:
-            logger.info(f"DPD refresh: branch {branch_id} has no active devices")
-            return
         client = await DPDClient.for_branch(branch_id, session)
 
     contract_hour = backend_settings.get("CONTRACT_HOUR", 7)
@@ -138,7 +223,8 @@ async def _refresh_branch(branch_id: int, window_from: date, today: date) -> Non
             )
         # get_volumes builds and closes its own HTTP pool per call.
         records = await client.get_volumes(
-            devices, span[0], span[1], type_request=period_type
+            devices, span[0], span[1], type_request=period_type,
+            progress_cb=progress.segment_cb(len(devices)),
         )
         rows = {}
         for record in records:
@@ -194,18 +280,41 @@ async def execute_locked() -> None:
             days=backend_settings["DPD_ARCHIVE_WINDOW_DAYS"]
         )
         branch_ids = await _branch_ids_with_credentials()
+        # Load device lists up-front so the total device count (×2: daily +
+        # hourly) is known before polling — that is the progress bar's 100%.
+        branch_devices: dict[int, list] = {}
+        async with async_session_factory() as session:
+            for branch_id in branch_ids:
+                try:
+                    branch_devices[branch_id] = await get_devices_for_branch_db(
+                        branch_id, session
+                    )
+                except Exception:
+                    logger.exception(
+                        f"DPD refresh: failed to load devices of branch {branch_id}"
+                    )
+                    branch_devices[branch_id] = []
+        total = 2 * sum(len(d) for d in branch_devices.values())
+        progress = _ProgressWriter(total)
+        await _write_progress_total(total)
         logger.info(
-            f"DPD refresh: starting for {len(branch_ids)} branches, "
-            f"window {window_from}..{today}"
+            f"DPD refresh: starting for {len(branch_ids)} branches "
+            f"({total // 2} devices), window {window_from}..{today}"
         )
         failures = []
+        expected_offset = 0
         for branch_id in branch_ids:
+            devices = branch_devices[branch_id]
+            expected_offset += 2 * len(devices)
             try:
-                await _refresh_branch(branch_id, window_from, today)
+                await _refresh_branch(
+                    branch_id, devices, window_from, today, progress
+                )
             except Exception as e:
                 # One broken branch must not kill the whole run.
                 logger.exception(f"DPD refresh failed for branch {branch_id}")
                 failures.append(f"branch {branch_id}: {e}")
+                progress.skip_to(expected_offset)
         async with async_session_factory() as session:
             async with session.begin():
                 dao = DpdArchiveDao(session)

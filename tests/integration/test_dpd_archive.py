@@ -380,6 +380,51 @@ class TestRefreshJob:
         status = await dpd_archive_refresh.read_status()
         assert status["status"] == "done"
 
+    async def test_refresh_reports_progress(
+        self, mocker, make_enterprise, branch_id
+    ):
+        """A running refresh exposes progress_done/progress_total (devices ×2,
+        daily + hourly) for the admin progress bar and clears them on finish."""
+        await make_enterprise(101)
+        await make_enterprise(102)
+        mid_status = {}
+
+        async def get_volumes(devices, date_from, date_to, *, type_request,
+                              progress_cb=None, **kwargs):
+            assert progress_cb is not None
+            progress_cb(len(devices), len(devices))  # all devices polled
+            if type_request == "daily":
+                # The progress write is a detached throttled task — wait for
+                # it, then snapshot what an admin status poll sees mid-run.
+                for _ in range(100):
+                    await asyncio.sleep(0.05)
+                    s = await dpd_archive_refresh.read_status()
+                    if s["progress_done"] == 2:
+                        break
+                mid_status.update(s)
+            return []
+
+        client = mocker.AsyncMock()
+        client.get_volumes = get_volumes
+        mocker.patch(
+            "backend.services.dpd_archive_refresh.DPDClient.for_branch",
+            mocker.AsyncMock(return_value=client),
+        )
+        mocker.patch(
+            "backend.services.dpd_archive_refresh._branch_ids_with_credentials",
+            mocker.AsyncMock(return_value=[branch_id]),
+        )
+
+        assert await dpd_archive_refresh.run_refresh() is True
+
+        assert mid_status["status"] == "running"
+        assert mid_status["progress_total"] == 4  # 2 devices × 2 period types
+        assert mid_status["progress_done"] == 2   # daily pass finished
+        final = await dpd_archive_refresh.read_status()
+        assert final["status"] == "done"
+        assert final["progress_done"] is None
+        assert final["progress_total"] is None
+
     async def test_refresh_lock_rejects_second_run(self, clean_db):
         assert await dpd_archive_refresh.acquire() is True
         # While running, another trigger must be refused.
