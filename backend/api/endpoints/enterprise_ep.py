@@ -210,7 +210,7 @@ class EnterpriseRouter:
                 ent = await EnterpriseDao(session).get_by_device(serNum, mfDev, typeDev, chNum)
                 devices = [] if not ent else [{
                     "id": ent.id,
-                    "line_id": ent.line_id,
+                    "line_id": ent.line_id if ent.line_id is not None else ent.dpd_line_id,
                     "branch_id": ent.branch_id,
                     "serNum": ent.ser_num,
                     "mfDev": ent.mf_dev,
@@ -423,7 +423,7 @@ class EnterpriseRouter:
                     return []
                 devices = [{
                     "id": ent.id,
-                    "line_id": ent.line_id,
+                    "line_id": ent.line_id if ent.line_id is not None else ent.dpd_line_id,
                     "branch_id": ent.branch_id,
                     "serNum": ent.ser_num,
                     "mfDev": ent.mf_dev,
@@ -571,6 +571,11 @@ async def list_enterprises(
     summary="Create enterprise (DB)",
 )
 async def create_enterprise(data: EnterpriseCreate, session: AsyncSession = Depends(get_session)):
+    if data.line_id is not None and data.dpd_line_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Вкажіть або фізичну лінію, або ДПД-лінію — не обидві",
+        )
     dao = EnterpriseDao(session=session)
     return await dao.create(data)
 
@@ -583,6 +588,11 @@ async def create_enterprise(data: EnterpriseCreate, session: AsyncSession = Depe
 async def update_enterprise(
     enterprise_id: int, data: EnterpriseUpdate, session: AsyncSession = Depends(get_session)
 ):
+    if data.line_id is not None and data.dpd_line_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Вкажіть або фізичну лінію, або ДПД-лінію — не обидві",
+        )
     dao = EnterpriseDao(session=session)
     item = await dao.update(enterprise_id, data)
     if not item:

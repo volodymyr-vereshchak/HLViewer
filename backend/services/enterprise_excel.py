@@ -68,10 +68,16 @@ async def _lines_with_context(session):
 
     Line names are NOT globally unique (a line is unique only within its
     calculator), so the reference carries the ID plus calculator + LUMG context
-    to disambiguate. The data sheet then references the line by ID."""
+    to disambiguate. The data sheet then references the line by ID.
+
+    DPD lines are appended after the physical ones with 'ДПД' in place of the
+    calculator — their ids share the line id space (shared_line_id_seq), so
+    the same ID column/dropdown covers both kinds."""
+    from sqlalchemy import func
     from backend.db.models.line_model import Line
     from backend.db.models.gas_volume_calc_model import GasVolumeCalc
     from backend.db.models.lumg_model import Lumg
+    from backend.db.models.dpd_line_model import DpdLine
 
     stmt = (
         select(Line.id, Line.name, GasVolumeCalc.name, Lumg.name)
@@ -79,7 +85,23 @@ async def _lines_with_context(session):
         .join(Lumg, GasVolumeCalc.lumg_id == Lumg.id)
         .order_by(Lumg.name, GasVolumeCalc.name, Line.name)
     )
-    return (await session.execute(stmt)).all()
+    physical = (await session.execute(stmt)).all()
+
+    dpd_stmt = (
+        select(DpdLine.id, DpdLine.name, func.coalesce(Lumg.name, ""))
+        .outerjoin(Lumg, DpdLine.lumg_id == Lumg.id)
+        .order_by(Lumg.name, DpdLine.name)
+    )
+    dpd = [
+        (lid, lname, "ДПД", lumgname)
+        for lid, lname, lumgname in (await session.execute(dpd_stmt)).all()
+    ]
+    return list(physical) + dpd
+
+
+async def _dpd_line_ids(session) -> set:
+    from backend.db.models.dpd_line_model import DpdLine
+    return set((await session.execute(select(DpdLine.id))).scalars())
 
 
 def _line_label(lid, lname, cname, lumgname) -> str:
@@ -298,7 +320,8 @@ async def build_export_workbook() -> openpyxl.Workbook:
             mfr_short = mfr_by_mfdev.get(ent.mf_dev, str(ent.mf_dev) if ent.mf_dev is not None else "")
             mfr_id = mfr_id_by_mfdev.get(ent.mf_dev)
             model_name = ct_model.get((mfr_id, ent.type_dev), "") if mfr_id else ""
-        line_label = label_by_id.get(ent.line_id, "") if ent.line_id else ""
+        eff_line_id = ent.line_id if ent.line_id is not None else ent.dpd_line_id
+        line_label = label_by_id.get(eff_line_id, "") if eff_line_id else ""
         ws.cell(row=row_idx, column=1, value=ent.enterprise_name)
         ws.cell(row=row_idx, column=2, value=ent.ser_num)
         ws.cell(row=row_idx, column=3, value=mfr_short)
@@ -348,16 +371,22 @@ async def parse_upload(content: bytes, branch_id: Optional[int]) -> tuple[list[d
         manufacturers = await ManufacturerDao(session).get_all()
         corector_types = await CorectorTypeDao(session).get_all()
         all_lines = await LineDao(session).get_all()
+        dpd_ids = await _dpd_line_ids(session)
+        dpd_lines_ctx = [
+            row for row in await _lines_with_context(session) if row[0] in dpd_ids
+        ]
 
     mfr_by_short: dict[str, object] = {m.short_name.strip(): m for m in manufacturers}
     ct_by_mfr_model: dict[tuple, object] = {
         (ct.manufacturer_id, ct.model_name.strip()): ct for ct in corector_types
     }
-    line_ids_set: set = {ln.id for ln in all_lines}
+    line_ids_set: set = {ln.id for ln in all_lines} | dpd_ids
     # name → [line_id, …]; a name maps to >1 id when calculators reuse line names
     line_ids_by_name: dict[str, list] = defaultdict(list)
     for ln in all_lines:
         line_ids_by_name[ln.name.strip().lower()].append(ln.id)
+    for lid, lname, _cname, _lumgname in dpd_lines_ctx:
+        line_ids_by_name[lname.strip().lower()].append(lid)
 
     records: list[dict] = []
     errors: list[str] = []
@@ -437,6 +466,9 @@ async def parse_upload(content: bytes, branch_id: Optional[int]) -> tuple[list[d
                 else:
                     errors.append(f"Рядок {row_idx}: лінія '{key}' не знайдена — line_id=null")
 
+        # The resolved id may be a physical or a DPD line (shared id space) —
+        # route it into the matching column; the other one stays NULL.
+        is_dpd = line_id in dpd_ids
         records.append({
             "enterprise_name": str(enterprise_name).strip(),
             "branch_id": branch_id,
@@ -447,7 +479,8 @@ async def parse_upload(content: bytes, branch_id: Optional[int]) -> tuple[list[d
             "ch_num": ch_num_int,
             "active": _parse_bool(active_str),
             "enabled": _parse_bool(enabled_str),
-            "line_id": line_id,
+            "line_id": None if is_dpd else line_id,
+            "dpd_line_id": line_id if is_dpd else None,
         })
 
     return records, errors
@@ -466,6 +499,7 @@ async def upsert_enterprises(records: list[dict]) -> list[int]:
                 'enterprise_name': stmt.excluded.enterprise_name,
                 'branch_id': stmt.excluded.branch_id,
                 'line_id': stmt.excluded.line_id,
+                'dpd_line_id': stmt.excluded.dpd_line_id,
                 'active': stmt.excluded.active,
                 'enabled': stmt.excluded.enabled,
             }

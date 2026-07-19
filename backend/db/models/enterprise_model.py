@@ -12,6 +12,11 @@ class EnterpriseBase(SQLModel):
     enterprise_name: str = Field(index=True)
     branch_id: Optional[int] = Field(default=None, foreign_key="grmu_branch.id", ondelete="CASCADE", sa_type=BigInteger)
     line_id: Optional[int] = Field(default=None, foreign_key="gas_volume_line.id", ondelete="SET NULL", sa_type=BigInteger)
+    # Alternative line link: a DPD line instead of a physical one. At most one
+    # of line_id/dpd_line_id may be set (ck_enterprise_single_line). Ids never
+    # collide across line kinds (shared_line_id_seq), so consumers group by
+    # the effective id COALESCE(line_id, dpd_line_id).
+    dpd_line_id: Optional[int] = Field(default=None, foreign_key="dpd_line.id", ondelete="SET NULL", sa_type=BigInteger)
     # Corrector model the device identity is derived from. SOURCE OF TRUTH for
     # mf_dev/type_dev: when set, the effective codes come from
     # corector_type.type_dev and corector_type.manufacturer.mf_dev, so editing
@@ -58,6 +63,7 @@ class EnterpriseUpdate(SQLModel):
     enterprise_name: Optional[str] = None
     branch_id: Optional[int] = None
     line_id: Optional[int] = None
+    dpd_line_id: Optional[int] = None
     corector_type_id: Optional[int] = None
     ser_num: Optional[int] = None
     mf_dev: Optional[int] = None
