@@ -26,16 +26,22 @@ git --version
 
 ## 2. Отримати файли проєкту
 
-Клонуємо обидва репозиторії (потрібен доступ до інтернету на сервері):
+Клонуємо два репозиторії (потрібен доступ до інтернету на сервері):
 
 ```bash
 mkdir -p /opt/hlviewer
 cd /opt/hlviewer
 
-# Бекенд (FastAPI + БД + scheduler) і фронтенд (React, зібраний dist уже в репо)
+# Бекенд: FastAPI + БД + scheduler
 git clone https://github.com/volodymyr-vereshchak/HLViewer.git  HLViewer
-git clone https://github.com/volodymyr-vereshchak/frontend.git   frontend
+# Фронтенд: зібраний dist лежить у репозиторії, у контейнері нічого не збирається
+git clone https://github.com/volodymyr-vereshchak/hl_frontend.git hl_frontend
 ```
+
+> **Оновлення фронтенду.** Образ бере готовий `dist/` з репозиторію, тому
+> `git pull` у `hl_frontend` + `docker compose up -d --build frontend_v2`
+> достатньо. Якщо змінювали код фронтенду локально — спершу `npm run build`
+> і закомітити `dist/`, інакше поїде стара збірка.
 
 ---
 

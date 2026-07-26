@@ -9,7 +9,7 @@
 
 - **Бекенд:** FastAPI, SQLModel/SQLAlchemy (async), PostgreSQL, Alembic, APScheduler.
 - **Фронтенд:** React + Vite (зібраний `dist` роздається через nginx).
-- **Розгортання:** Docker Compose (Postgres + FastAPI + scheduler + фронтенд).
+- **Розгортання:** Docker Compose (Postgres + FastAPI + scheduler + фронтенд `hl_frontend`).
 - **Автентифікація:** JWT у httpOnly-cookie, ролі `admin` / `viewer` з розмежуванням доступу
   до філіалів.
 
