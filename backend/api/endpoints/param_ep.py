@@ -27,10 +27,21 @@ class ParamRouter(BaseArchiveRouter):
         allowed_line_ids: list[int] | None = Depends(get_allowed_line_ids),
         session: AsyncSession = Depends(get_session),
     ):
+        """Two shapes, chosen by what the caller asks for.
+
+        With BOTH dates: every record in the range, like any other archive.
+        With one or neither: the latest record per line at or before ``to_date``
+        — the configuration snapshot the overview reads ``min_dp``/``max_dp``
+        from. That snapshot is why the inherited range query was replaced here
+        back in 2025; callers that want the range now say so explicitly instead
+        of the two uses fighting over one default.
+        """
         line_id = self._scope_line_ids(line_id, allowed_line_ids)
         if self._scope_is_empty(line_id):
             return []
         archive_dao = self.archive_dao(session=session)
+        if from_date and to_date:
+            return await archive_dao.get_range(from_date, to_date, line_id)
         if line_id and len(line_id) > 1:
             archives = await archive_dao.get_last_per_line_ids(to_date, line_id)
             return archives

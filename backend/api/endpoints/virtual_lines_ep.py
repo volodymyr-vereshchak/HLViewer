@@ -188,7 +188,10 @@ class VirtualLinesRouter:
         session: AsyncSession = Depends(get_session),
     ) -> List[VirtualLineList]:
         """List all virtual lines with their physical line members."""
-        stmt = select(VirtualLine)
+        # ORDER BY id, not heap order: without it Postgres returns rows in
+        # physical order, and an UPDATE moves the touched row to the end — so
+        # flipping a switch in the admin panel reshuffled the whole list.
+        stmt = select(VirtualLine).order_by(VirtualLine.id)
         if include_in_trends is not None:
             stmt = stmt.where(VirtualLine.include_in_trends == include_in_trends)
         if branch_id is not None:

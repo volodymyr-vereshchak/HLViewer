@@ -83,6 +83,8 @@ class LineRouter:
             stmt = stmt.where(Lumg.branch_id.in_(branch_ids))
         if include_in_trends is not None:
             stmt = stmt.where(Line.include_in_trends == include_in_trends)
+        # Stable order: heap order changes whenever a row is updated.
+        stmt = stmt.order_by(Line.id)
         result = await session.execute(stmt)
         return result.scalars().all()
 
