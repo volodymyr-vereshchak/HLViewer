@@ -32,6 +32,7 @@ from backend.db.models.dpd_line_model import (
     DpdLineList,
 )
 from backend.services import dpd_line_refresh
+from backend.utils.dpd_units import normalize_press_unit
 
 logger = logging.getLogger(__name__)
 
@@ -322,6 +323,10 @@ class DpdLineRouter:
                 "w_volume_dp": None,
                 "pressure": r["pressure"],
                 "temperature": r["temperature"],
+                # The unit the device reported it in. A DPD line has no unit
+                # configuration of its own, so without this the archive would
+                # have to guess (and used to caption everything кгс/см²).
+                "press_unit": normalize_press_unit(r["press_unit"]),
                 "density": None,
             }
             for r in rows
