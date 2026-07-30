@@ -52,32 +52,38 @@ def parse_refresh_times(raw) -> list[str]:
     return sorted(times)
 
 
+def default_refresh_times() -> list[str]:
+    """DPD_REFRESH_TIMES from the environment — what applies while the admin
+    panel has nothing stored."""
+    return parse_refresh_times(backend_settings["DPD_REFRESH_TIMES"])
+
+
 async def read_refresh_times() -> list[str]:
     """The schedule the DPD refresh runs on: what the admin panel stored, or
-    DPD_REFRESH_TIMES from the environment while nothing is stored."""
+    the environment default while nothing is stored."""
     async with async_session_factory() as session:
         stored = (await session.execute(sa.text(
             "SELECT refresh_times FROM dpd_refresh_job WHERE id = 1"
         ))).scalar()
-    return parse_refresh_times(stored) or parse_refresh_times(
-        backend_settings["DPD_REFRESH_TIMES"]
-    )
+    return parse_refresh_times(stored) or default_refresh_times()
 
 
 async def write_refresh_times(times: list[str]) -> list[str]:
-    """Store the schedule. Empty (or all-invalid) input is rejected by the
-    caller: it would silently switch automatic DPD updates off."""
+    """Store the schedule and return what now applies.
+
+    An empty selection is not "never refresh" — it clears the column, which
+    puts DPD_REFRESH_TIMES from the environment back in charge (the default
+    10:00 and 16:00). Switching automatic updates off is not something an
+    empty input should mean."""
     clean = parse_refresh_times(times)
-    if not clean:
-        raise ValueError("No valid times")
     async with async_session_factory() as session:
         await session.execute(sa.text(_ENSURE_ROW))
         await session.execute(
             sa.text("UPDATE dpd_refresh_job SET refresh_times = :t WHERE id = 1"),
-            {"t": ",".join(clean)},
+            {"t": ",".join(clean) if clean else None},
         )
         await session.commit()
-    return clean
+    return clean or default_refresh_times()
 
 
 async def acquire() -> bool:
@@ -211,24 +217,25 @@ async def read_status() -> dict:
             FROM dpd_refresh_job WHERE id = 1
             """
         ), {"stale": STALE_SECONDS})).mappings().first()
-    # The schedule rides along on the same row the admin card already polls.
-    env_times = parse_refresh_times(backend_settings["DPD_REFRESH_TIMES"])
+    # The schedule rides along on the same row the admin card already polls;
+    # the default goes with it so the panel can say what "nothing chosen" means
+    # without hardcoding hours the environment may have changed.
+    env_times = default_refresh_times()
+    base = {"refresh_times": env_times, "default_refresh_times": env_times}
     if row is None:
-        return {"status": "idle", "started_at": None, "finished_at": None,
-                "error": None, "progress_done": None, "progress_total": None,
-                "refresh_times": env_times}
-    times = parse_refresh_times(row["refresh_times"]) or env_times
+        return {**base, "status": "idle", "started_at": None,
+                "finished_at": None, "error": None,
+                "progress_done": None, "progress_total": None}
+    base["refresh_times"] = parse_refresh_times(row["refresh_times"]) or env_times
     if row["is_stale"]:
-        return {"status": "error", "started_at": row["started_at"],
+        return {**base, "status": "error", "started_at": row["started_at"],
                 "finished_at": row["finished_at"],
                 "error": "Оновлення перервано (процес зупинився)",
-                "progress_done": None, "progress_total": None,
-                "refresh_times": times}
-    return {"status": row["status"], "started_at": row["started_at"],
+                "progress_done": None, "progress_total": None}
+    return {**base, "status": row["status"], "started_at": row["started_at"],
             "finished_at": row["finished_at"], "error": row["error"],
             "progress_done": row["progress_done"],
-            "progress_total": row["progress_total"],
-            "refresh_times": times}
+            "progress_total": row["progress_total"]}
 
 
 async def last_started_at() -> datetime | None:

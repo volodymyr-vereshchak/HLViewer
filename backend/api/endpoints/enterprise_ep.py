@@ -167,8 +167,9 @@ class EnterpriseRouter:
             description=(
                 "Replaces the schedule with the given list of HH:MM times "
                 "(any number of them); the scheduler picks it up on its next "
-                "tick, no restart. An empty list is rejected — it would switch "
-                "automatic updates off silently. Admin-only (PUT)."
+                "tick, no restart. An empty list restores the default from "
+                "DPD_REFRESH_TIMES. Returns the schedule that now applies. "
+                "Admin-only (PUT)."
             ),
         )
 
@@ -394,13 +395,7 @@ class EnterpriseRouter:
         return await dpd_archive_refresh.read_status()
 
     async def set_archive_refresh_schedule(self, body: ArchiveSchedule) -> dict:
-        try:
-            times = await dpd_archive_refresh.write_refresh_times(body.times)
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Вкажіть хоча б одну годину у форматі ГГ:ХХ",
-            )
+        times = await dpd_archive_refresh.write_refresh_times(body.times)
         logger.info(f"DPD refresh schedule set to {times}")
         return {"refresh_times": times}
 
