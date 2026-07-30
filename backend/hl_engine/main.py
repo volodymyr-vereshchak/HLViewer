@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import shutil
+import time
 from collections import defaultdict
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -28,21 +29,40 @@ from backend.hl_engine.edit_engine import EditEngine
 from backend.hl_engine.hourly_engine import HourlyEngine
 from backend.hl_engine.param_engine import ParamEngine
 from backend.hl_engine.sys_engine import SysEngine
+from backend.hl_engine.update_job_lock import STALE_SECONDS
 from backend.settings import backend_settings
 from utils.files_utils import UnzipUtils
 
 
 def _cleanup_orphan_temp_dirs():
-    """Remove leftover __temp_*__ dirs from previous crashes or force-kills."""
+    """Remove leftover __temp_*__ dirs from previous crashes or force-kills.
+
+    ONLY safe to call while holding the update lock: an extraction in progress
+    owns a temp dir under the same root, and deleting it out from under the
+    writer corrupts that run (it used to, from the API's startup hook running
+    in all 8 uvicorn workers — the scheduler's extraction died with
+    FileExistsError as the directory vanished between mkdir and the isdir
+    recheck inside os.makedirs).
+
+    Belt and braces for the one case the lock does not cover — a stale lock
+    taken over while the previous holder is somehow still alive — dirs younger
+    than the lock's stale window are left alone. An orphan is by definition
+    older than that; a live extraction never is."""
     hostlibs_root = os.path.join(os.getcwd(), "hostlibs")
     if not os.path.exists(hostlibs_root):
         return
+    cutoff = time.time() - STALE_SECONDS
     for name in os.listdir(hostlibs_root):
         if name.startswith("__temp_") and name.endswith("__"):
             path = os.path.join(hostlibs_root, name)
             try:
+                if os.path.getmtime(path) > cutoff:
+                    logger.debug(f"Temp dir {path} is recent — leaving it alone")
+                    continue
                 shutil.rmtree(path)
                 logger.info(f"Cleaned up orphan temp dir: {path}")
+            except FileNotFoundError:
+                pass  # another sweep got there first
             except Exception as e:
                 logger.warning(f"Failed to clean orphan temp dir {path}: {e}")
 
@@ -85,8 +105,14 @@ async def _run_all_engines_parallel(path: str, lumg_id_val: int, chunk_size: int
     ])
 
 
-async def update_hostlibs(session: AsyncSession, lumg_id: int | None = None, progress: dict | None = None):
+async def update_hostlibs(
+    session: AsyncSession, lumg_id: int | None = None, progress: dict | None = None
+) -> set[str]:
+    """Ingest every active LUMG path. Returns the paths whose group FAILED —
+    per-path errors are contained (one bad archive must not sink the rest), so
+    the caller needs them explicitly to decide what to retry."""
     _cleanup_orphan_temp_dirs()
+    failed_paths: set[str] = set()
     query = select(LumgDataPath).where(LumgDataPath.active == True)
     if lumg_id is not None:
         query = query.where(LumgDataPath.lumg_id == lumg_id)
@@ -95,7 +121,7 @@ async def update_hostlibs(session: AsyncSession, lumg_id: int | None = None, pro
 
     if not lumg_paths:
         logger.warning("No active LumgDataPath found in DB — skipping hostlib update")
-        return
+        return failed_paths
 
     if progress is not None:
         for lp in lumg_paths:
@@ -138,6 +164,7 @@ async def update_hostlibs(session: AsyncSession, lumg_id: int | None = None, pro
         """Unzip once, find EIS dirs once, route data correctly."""
         if not os.path.exists(path):
             logger.error(f"Hostlib path does not exist: {path!r} - skipping {len(lumg_path_list)} LUMGs")
+            failed_paths.add(path)
             if progress is not None:
                 for lp in lumg_path_list:
                     progress[lp.lumg_id] = "error"
@@ -172,6 +199,7 @@ async def update_hostlibs(session: AsyncSession, lumg_id: int | None = None, pro
                                     progress[lid] = "done"
                         except Exception as e:
                             logger.error(f"EIS routing error for {path!r}: {e}", exc_info=True)
+                            failed_paths.add(path)
                             if progress is not None:
                                 for lid in targeted_ids:
                                     if progress.get(lid) != "done":
@@ -184,6 +212,7 @@ async def update_hostlibs(session: AsyncSession, lumg_id: int | None = None, pro
                     ])
         except Exception as e:
             logger.error(f"Error processing path {path!r}: {e}", exc_info=True)
+            failed_paths.add(path)
             if progress is not None:
                 for lp in lumg_path_list:
                     if progress.get(lp.lumg_id) not in ("done", "error"):
@@ -202,6 +231,7 @@ async def update_hostlibs(session: AsyncSession, lumg_id: int | None = None, pro
         _process_path_group(path, lumg_list)
         for path, lumg_list in path_groups.items()
     ])
+    return failed_paths
 
 
 async def update_direct(path: str, lumg_id: int, session: AsyncSession, progress: dict | None = None):

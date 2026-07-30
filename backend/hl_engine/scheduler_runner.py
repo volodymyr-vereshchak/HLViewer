@@ -89,14 +89,22 @@ async def poll_once() -> None:
 
     logger.info("New data detected — triggering update")
 
+    failed: set[str] = set()
+
     async def work(session, progress):
-        await update_hostlibs(session=session, progress=progress)
+        failed.update(await update_hostlibs(session=session, progress=progress))
 
     ran = await run_guarded_update(work)
     if ran:
         # Commit the signatures we actually processed (settled ones only); leave
         # any still-settling path unrecorded so it triggers again once ready.
+        # A path whose group errored out counts as NOT processed: recording it
+        # would drop that batch for good, since nothing re-triggers until the
+        # next file lands there.
         for path, (sig, max_mtime) in sigs.items():
+            if path in failed:
+                logger.warning("Path %r failed — will retry on the next tick", path)
+                continue
             if max_mtime == 0 or (now - max_mtime) >= SETTLE_SECONDS:
                 _last_sig[path] = sig
         logger.info("Update finished")

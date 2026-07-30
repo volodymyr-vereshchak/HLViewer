@@ -45,7 +45,6 @@ from backend.api.endpoints.auth_ep import (
     COOKIE_NAME,
     COOKIE_SECURE,
 )
-from backend.hl_engine.main import _cleanup_orphan_temp_dirs
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
@@ -201,7 +200,10 @@ async def _seed_default_user():
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     logger.info("HLViewer backend starting (log dir: %s)", os.getenv("LOG_DIR", "logs"))
-    _cleanup_orphan_temp_dirs()
+    # No temp-dir sweep here. This runs in every uvicorn worker, none of which
+    # holds the update lock, so a restart while the scheduler was extracting
+    # meant 8 processes deleting its live temp dir. update_hostlibs sweeps at
+    # the start of every run instead — under the lock, where it is safe.
     await _seed_admin()
     await _seed_default_user()
     yield
