@@ -467,3 +467,39 @@ class TestStreamCancellation:
             timeout=10,
         )
         assert record_keys(records) == {(101, D_OLD5.isoformat())}
+
+
+class TestRefreshSchedule:
+    """The times the scheduler refreshes at are set from the admin panel and
+    stored on the job row; the env value is only the default."""
+
+    async def test_defaults_to_env_when_unset(self, clean_db):
+        assert await dpd_archive_refresh.read_refresh_times() == ["10:00", "16:00"]
+
+    async def test_put_normalizes_and_persists(self, admin_client, clean_db):
+        resp = await admin_client.put(
+            "/enterprise/archive/refresh/schedule",
+            json={"times": ["16:00", "9:5", "16:00", "garbage"]},
+        )
+        assert resp.status_code == 200
+        assert resp.json() == {"refresh_times": ["09:05", "16:00"]}
+        assert await dpd_archive_refresh.read_refresh_times() == ["09:05", "16:00"]
+        status = await admin_client.get("/enterprise/archive/refresh/status")
+        assert status.json()["refresh_times"] == ["09:05", "16:00"]
+
+    async def test_empty_schedule_rejected(self, admin_client, clean_db):
+        await admin_client.put(
+            "/enterprise/archive/refresh/schedule", json={"times": ["08:00"]}
+        )
+        resp = await admin_client.put(
+            "/enterprise/archive/refresh/schedule", json={"times": ["25:00"]}
+        )
+        assert resp.status_code == 400
+        # The previous schedule survives a rejected write.
+        assert await dpd_archive_refresh.read_refresh_times() == ["08:00"]
+
+    async def test_viewer_cannot_change_schedule(self, viewer_client, clean_db):
+        resp = await viewer_client.put(
+            "/enterprise/archive/refresh/schedule", json={"times": ["08:00"]}
+        )
+        assert resp.status_code == 403

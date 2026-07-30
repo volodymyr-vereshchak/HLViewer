@@ -24,6 +24,7 @@ from backend.db.dao.enterprise_dao import EnterpriseDao
 from backend.services import dpd_archive_refresh
 from backend.db.models.enterprise_model import EnterpriseRead, EnterpriseCreate, EnterpriseUpdate
 from backend.db.models.enterprise_models import (
+    ArchiveSchedule,
     EnterpriseVolumeResponse,
     EnterpriseVolumeError,
     EnterpriseMapping
@@ -155,6 +156,20 @@ class EnterpriseRouter:
             endpoint=self.archive_refresh_status,
             methods=["GET"],
             summary="DPD archive refresh status",
+        )
+        self.router.add_api_route(
+            path="/enterprise/archive/refresh/schedule",
+            tags=["enterprise"],
+            endpoint=self.set_archive_refresh_schedule,
+            methods=["PUT"],
+            status_code=status.HTTP_200_OK,
+            summary="Set the local times the DPD archive refreshes at",
+            description=(
+                "Replaces the schedule with the given list of HH:MM times "
+                "(any number of them); the scheduler picks it up on its next "
+                "tick, no restart. An empty list is rejected — it would switch "
+                "automatic updates off silently. Admin-only (PUT)."
+            ),
         )
 
 
@@ -377,6 +392,17 @@ class EnterpriseRouter:
 
     async def archive_refresh_status(self) -> dict:
         return await dpd_archive_refresh.read_status()
+
+    async def set_archive_refresh_schedule(self, body: ArchiveSchedule) -> dict:
+        try:
+            times = await dpd_archive_refresh.write_refresh_times(body.times)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Вкажіть хоча б одну годину у форматі ГГ:ХХ",
+            )
+        logger.info(f"DPD refresh schedule set to {times}")
+        return {"refresh_times": times}
 
     async def get_enterprise_volumes(
         self,

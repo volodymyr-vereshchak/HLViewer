@@ -28,6 +28,7 @@ from backend.db.models.dpd_line_model import DpdLine
 from backend.services.dpd_client import DPDClient
 from backend.services.enterprise_mappings import volume_field_for_device
 from backend.settings import backend_settings
+from backend.utils.dpd_units import normalize_press_unit
 
 logger = logging.getLogger(__name__)
 
@@ -102,15 +103,13 @@ def _records_to_rows(
         at = _attribution_stamp(stamp, period_type)
         if at < win_from or (win_to is not None and at >= win_to):
             continue  # belongs to another device's window (or to no one)
-        press_unit = record.get("pressUnit")
         rows[stamp] = {
             "dpd_line_id": dpd_line_id,
             "stamp": stamp,
             "volume": volume,
             "pressure": record.get("press"),
             "temperature": record.get("temper"),
-            "press_unit": press_unit.strip() if isinstance(press_unit, str)
-            else press_unit,
+            "press_unit": normalize_press_unit(record.get("pressUnit")),
         }
     return list(rows.values())
 

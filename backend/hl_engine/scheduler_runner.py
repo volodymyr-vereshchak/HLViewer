@@ -25,7 +25,6 @@ from backend.hl_engine.main import update_hostlibs
 from backend.hl_engine.update_job_lock import run_guarded_update
 from backend.logging_config import setup_logging
 from backend.services import dpd_archive_refresh, dpd_line_refresh
-from backend.settings import backend_settings
 from backend.utils.path_utils import resolve_stored_path
 from utils.files_utils import newest_zip_signature
 
@@ -113,14 +112,16 @@ async def poll_once() -> None:
         logger.info("Update already running (manual) — skipping this tick")
 
 
-def _last_due_refresh(now: datetime) -> datetime:
+def _last_due_refresh(now: datetime, times: list[str]) -> datetime | None:
     """The most recent scheduled DPD-refresh moment at or before `now`
-    (DPD_REFRESH_TIMES, local clock). Yesterday's last slot when `now` is
-    before today's first one."""
+    (local clock). Yesterday's last slot when `now` is before today's first
+    one; None when the schedule is empty."""
     slots = []
-    for hhmm in backend_settings["DPD_REFRESH_TIMES"]:
+    for hhmm in times:
         hour, minute = (int(x) for x in hhmm.split(":"))
         slots.append(now.replace(hour=hour, minute=minute, second=0, microsecond=0))
+    if not slots:
+        return None
     slots.sort()
     passed = [s for s in slots if s <= now]
     return passed[-1] if passed else slots[-1] - timedelta(days=1)
@@ -129,9 +130,14 @@ def _last_due_refresh(now: datetime) -> datetime:
 async def maybe_refresh_dpd() -> None:
     """Run the DPD archive refresh when a scheduled slot has passed since the
     last run. A never-run job (fresh install, wiped archive) is due
-    immediately — that is the initial month-long load."""
+    immediately — that is the initial month-long load.
+
+    The schedule is re-read every tick: an admin editing it in the panel takes
+    effect within one POLL_INTERVAL_SEC, without restarting this process."""
     now = datetime.now()
-    due = _last_due_refresh(now)
+    due = _last_due_refresh(now, await dpd_archive_refresh.read_refresh_times())
+    if due is None:
+        return
     started = await dpd_archive_refresh.last_started_at()
     if started is not None and started >= due:
         return

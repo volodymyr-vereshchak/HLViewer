@@ -107,3 +107,7 @@ class DpdRefreshJob(SQLModel, table=True):
     # daily + hourly). NULL outside a running refresh.
     progress_done: Optional[int] = None
     progress_total: Optional[int] = None
+    # Local times (HH:MM, comma-separated) the scheduler refreshes at, set from
+    # the admin panel. NULL = never configured there: DPD_REFRESH_TIMES from the
+    # environment applies, so an untouched deployment keeps its schedule.
+    refresh_times: Optional[str] = Field(default=None, max_length=255)

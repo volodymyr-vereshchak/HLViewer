@@ -56,3 +56,22 @@ class TestLineRemap:
         assert len(result) == 1
         assert result[0].line_id == 10
         assert result[0].total_volume == 5.0
+
+
+class TestPressureUnit:
+    """DPD sometimes answers with the literal string "None" instead of leaving
+    pressUnit out; passed through, it reaches the UI as «Тиск, None»."""
+
+    def _unit(self, raw):
+        rec = dict(record(DEVICE_A, 5.0), pressUnit=raw)
+        result = aggregate_volumes([rec], [DEVICE_A], "daily")
+        return result[0].devices[0].pressure_unit
+
+    def test_literal_none_is_no_unit(self):
+        assert self._unit("None") is None
+        assert self._unit("null") is None
+        assert self._unit("  ") is None
+        assert self._unit(None) is None
+
+    def test_real_unit_survives_trimmed(self):
+        assert self._unit(" кПа ") == "кПа"

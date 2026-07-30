@@ -34,6 +34,7 @@ from backend.db.models.enterprise_models import DeviceVolume, EnterpriseVolumeRe
 from backend.services.dpd_client import DPDClient
 from backend.services.enterprise_mappings import volume_field_for_device
 from backend.settings import backend_settings
+from backend.utils.dpd_units import normalize_press_unit
 
 logger = logging.getLogger(__name__)
 
@@ -211,7 +212,9 @@ async def fetch_dpd_volumes(
             "dvwrkAlwrk": row["dvwrk_alwrk"],
             "press": row["press"],
             "temper": row["temper"],
-            "pressUnit": row["press_unit"],
+            # Rows written before the unit was normalised on ingest may still
+            # hold the literal "None" — clean them on the way out too.
+            "pressUnit": normalize_press_unit(row["press_unit"]),
         })
     return records
 
@@ -325,7 +328,6 @@ async def _run_backfill(
                                   record["typeDev"], record["chNum"]))
         if ent_id is None:
             continue
-        press_unit = record.get("pressUnit")
         rows.append({
             "enterprise_id": ent_id,
             "stamp": stamp if isinstance(stamp, datetime)
@@ -334,8 +336,7 @@ async def _run_backfill(
             "dvwrk_alwrk": record.get("dvwrkAlwrk"),
             "press": record.get("press"),
             "temper": record.get("temper"),
-            "press_unit": press_unit.strip() if isinstance(press_unit, str)
-            else press_unit,
+            "press_unit": normalize_press_unit(record.get("pressUnit")),
         })
     # Deduplicate by (enterprise, stamp) — DPD can repeat a record.
     unique = {(r["enterprise_id"], r["stamp"]): r for r in rows}
@@ -432,9 +433,7 @@ def aggregate_volumes(
         if record_period is None:
             continue
 
-        pressure_unit = record.get("pressUnit")
-        if isinstance(pressure_unit, str):
-            pressure_unit = pressure_unit.strip() or None
+        pressure_unit = normalize_press_unit(record.get("pressUnit"))
 
         for line_key in line_keys:
             key = (line_key, record_period)

@@ -271,6 +271,41 @@ class TestParam:
         assert len(body) == 1
         assert body[0]["period"] == "2024-12-01T00:00:00"
 
+    async def test_range_returns_latest_inside_it(self, admin_client, seed_topology):
+        """With both dates the answer is the last snapshot IN the range — not
+        the whole history of changes, and not a record from before it."""
+        line1 = seed_topology["line1"]
+        await _add(
+            Param(**_PARAM_FLOATS, period=datetime(2024, 12, 1), line_id=line1),
+            Param(**_PARAM_FLOATS, period=datetime(2024, 12, 10), line_id=line1),
+            Param(**_PARAM_FLOATS, period=datetime(2024, 12, 20), line_id=line1),
+        )
+        resp = await admin_client.get(
+            "/param/",
+            params={
+                "line_id": [line1],
+                "from_date": "2024-12-05T00:00:00",
+                "to_date": "2024-12-15T23:59:59",
+            },
+        )
+        body = resp.json()
+        assert len(body) == 1
+        assert body[0]["period"] == "2024-12-10T00:00:00"
+
+    async def test_range_without_records_is_empty(self, admin_client, seed_topology):
+        line1 = seed_topology["line1"]
+        await _add(Param(**_PARAM_FLOATS, period=datetime(2024, 12, 1), line_id=line1))
+        resp = await admin_client.get(
+            "/param/",
+            params={
+                "line_id": [line1],
+                "from_date": "2024-12-05T00:00:00",
+                "to_date": "2024-12-15T00:00:00",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json() == []
+
 
 class TestViewerBranchScoping:
     async def test_viewer_sees_only_allowed_branch(

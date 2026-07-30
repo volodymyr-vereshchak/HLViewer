@@ -19,6 +19,7 @@ from backend.db.dao.dpd_archive_dao import DpdArchiveDao
 from backend.services.dpd_client import DPDClient
 from backend.services.enterprise_mappings import get_devices_for_branch_db
 from backend.settings import backend_settings
+from backend.utils.dpd_units import normalize_press_unit
 
 logger = logging.getLogger(__name__)
 
@@ -27,15 +28,64 @@ logger = logging.getLogger(__name__)
 STALE_SECONDS = 1800
 
 
+_ENSURE_ROW = (
+    "INSERT INTO dpd_refresh_job (id, status) VALUES (1, 'idle') "
+    "ON CONFLICT (id) DO NOTHING"
+)
+
+
+def parse_refresh_times(raw) -> list[str]:
+    """Normalise a list (or comma-separated string) of HH:MM into a sorted,
+    deduplicated list. Anything unparseable is dropped, not guessed at."""
+    items = raw.split(",") if isinstance(raw, str) else list(raw or [])
+    times: set[str] = set()
+    for item in items:
+        parts = str(item).strip().split(":")
+        if len(parts) != 2:
+            continue
+        try:
+            hour, minute = int(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            times.add(f"{hour:02d}:{minute:02d}")
+    return sorted(times)
+
+
+async def read_refresh_times() -> list[str]:
+    """The schedule the DPD refresh runs on: what the admin panel stored, or
+    DPD_REFRESH_TIMES from the environment while nothing is stored."""
+    async with async_session_factory() as session:
+        stored = (await session.execute(sa.text(
+            "SELECT refresh_times FROM dpd_refresh_job WHERE id = 1"
+        ))).scalar()
+    return parse_refresh_times(stored) or parse_refresh_times(
+        backend_settings["DPD_REFRESH_TIMES"]
+    )
+
+
+async def write_refresh_times(times: list[str]) -> list[str]:
+    """Store the schedule. Empty (or all-invalid) input is rejected by the
+    caller: it would silently switch automatic DPD updates off."""
+    clean = parse_refresh_times(times)
+    if not clean:
+        raise ValueError("No valid times")
+    async with async_session_factory() as session:
+        await session.execute(sa.text(_ENSURE_ROW))
+        await session.execute(
+            sa.text("UPDATE dpd_refresh_job SET refresh_times = :t WHERE id = 1"),
+            {"t": ",".join(clean)},
+        )
+        await session.commit()
+    return clean
+
+
 async def acquire() -> bool:
     """Atomically claim the refresh job. False if one is already running."""
     async with async_session_factory() as session:
         # The singleton row is seeded by the migration, but survive a wiped
         # table (tests TRUNCATE everything; manual cleanups happen).
-        await session.execute(sa.text(
-            "INSERT INTO dpd_refresh_job (id, status) VALUES (1, 'idle') "
-            "ON CONFLICT (id) DO NOTHING"
-        ))
+        await session.execute(sa.text(_ENSURE_ROW))
         result = await session.execute(
             sa.text(
                 """
@@ -155,24 +205,30 @@ async def read_status() -> dict:
         row = (await session.execute(sa.text(
             """
             SELECT status, started_at, finished_at, error,
-                   progress_done, progress_total,
+                   progress_done, progress_total, refresh_times,
                    (status = 'running'
                     AND updated_at < now() - make_interval(secs => :stale)) AS is_stale
             FROM dpd_refresh_job WHERE id = 1
             """
         ), {"stale": STALE_SECONDS})).mappings().first()
+    # The schedule rides along on the same row the admin card already polls.
+    env_times = parse_refresh_times(backend_settings["DPD_REFRESH_TIMES"])
     if row is None:
         return {"status": "idle", "started_at": None, "finished_at": None,
-                "error": None, "progress_done": None, "progress_total": None}
+                "error": None, "progress_done": None, "progress_total": None,
+                "refresh_times": env_times}
+    times = parse_refresh_times(row["refresh_times"]) or env_times
     if row["is_stale"]:
         return {"status": "error", "started_at": row["started_at"],
                 "finished_at": row["finished_at"],
                 "error": "Оновлення перервано (процес зупинився)",
-                "progress_done": None, "progress_total": None}
+                "progress_done": None, "progress_total": None,
+                "refresh_times": times}
     return {"status": row["status"], "started_at": row["started_at"],
             "finished_at": row["finished_at"], "error": row["error"],
             "progress_done": row["progress_done"],
-            "progress_total": row["progress_total"]}
+            "progress_total": row["progress_total"],
+            "refresh_times": times}
 
 
 async def last_started_at() -> datetime | None:
@@ -246,7 +302,6 @@ async def _refresh_branch(
                     stamp = datetime.strptime(str(raw).split("T")[0], "%Y-%m-%d")
             except Exception:
                 continue
-            press_unit = record.get("pressUnit")
             rows[(ent_id, stamp)] = {
                 "enterprise_id": ent_id,
                 "stamp": stamp,
@@ -254,8 +309,7 @@ async def _refresh_branch(
                 "dvwrk_alwrk": record.get("dvwrkAlwrk"),
                 "press": record.get("press"),
                 "temper": record.get("temper"),
-                "press_unit": press_unit.strip() if isinstance(press_unit, str)
-                else press_unit,
+                "press_unit": normalize_press_unit(record.get("pressUnit")),
             }
         async with async_session_factory() as session:
             async with session.begin():

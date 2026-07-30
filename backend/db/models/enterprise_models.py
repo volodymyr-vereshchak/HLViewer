@@ -93,6 +93,16 @@ class EnterpriseVolumeError(BaseModel):
     details: Optional[str] = Field(None, description="Additional error details")
 
 
+class ArchiveSchedule(BaseModel):
+    """Local times the scheduler refreshes the DPD archive at."""
+
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"times": ["10:00", "16:00"]}}
+    )
+
+    times: List[str] = Field(description="Times of day as HH:MM, any number of them")
+
+
 class EnterpriseMapping(BaseModel):
     """Enterprise mapping data from Excel files."""
 

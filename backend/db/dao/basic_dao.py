@@ -207,14 +207,21 @@ class BasicDao:
         self,
         to_date: datetime = None,
         line_ids: list[int] = None,
+        from_date: datetime = None,
     ):
-        """Return the most recent record for each line_id in one query."""
+        """Return the most recent record for each line_id in one query.
+
+        With ``from_date`` the search is bounded on both sides: the answer is
+        the latest record INSIDE the range, and a line with nothing in it is
+        simply absent from the result."""
         subq = select(
             func.max(self.model.period).label("max_period"),
             self.model.line_id,
         )
         if line_ids:
             subq = subq.where(self.model.line_id.in_(line_ids))
+        if from_date:
+            subq = subq.where(self.model.period >= from_date)
         if to_date:
             subq = subq.where(self.model.period <= to_date)
         subq = subq.group_by(self.model.line_id).subquery()
