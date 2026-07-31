@@ -27,10 +27,8 @@ from backend.services.virtual_lines_config import (
 
 
 class BaseVirtualArchiveRouter:
-    def __init__(self, path: str, tag: str, archive_dao, max_days: int,
-                 period_type: str):
+    def __init__(self, path: str, tag: str, archive_dao, period_type: str):
         self.archive_dao = archive_dao
-        self.max_days = max_days
         # "daily" | "hourly" — which DPD-line archive feeds DPD ring members.
         self.period_type = period_type
         self.router = APIRouter(dependencies=[Depends(get_current_user)])
@@ -56,10 +54,9 @@ class BaseVirtualArchiveRouter:
         line_id: List[int] = Query(None, description="List of line IDs (virtual IDs supported)"),
         session: AsyncSession = Depends(get_session),
     ):
+        # Both ends required, no cap on the length — see BaseArchiveRouter.
         if not from_date or not to_date:
-            raise HTTPException(status_code=400, detail="from_date and to_date are required")
-        if (to_date - from_date).days > self.max_days:
-            raise HTTPException(status_code=400, detail=f"Date range exceeds {self.max_days} days")
+            raise HTTPException(status_code=400, detail="Вкажіть початок і кінець періоду")
 
         if not line_id:
             line_id = []

@@ -285,20 +285,16 @@ class DpdLineRouter:
     async def _get_archive(
         self,
         period_type: str,
-        max_days: int,
         from_date: datetime,
         to_date: datetime,
         line_id: Optional[List[int]],
         allowed_branches: Optional[list[int]],
         session: AsyncSession,
     ) -> List[dict]:
+        # Both ends required, no cap on the length — see BaseArchiveRouter.
         if not from_date or not to_date:
             raise HTTPException(
-                status_code=400, detail="from_date and to_date are required"
-            )
-        if (to_date - from_date).days > max_days:
-            raise HTTPException(
-                status_code=400, detail=f"Date range exceeds {max_days} days"
+                status_code=400, detail="Вкажіть початок і кінець періоду"
             )
         if not line_id:
             return []
@@ -341,7 +337,7 @@ class DpdLineRouter:
         session: AsyncSession = Depends(get_session),
     ) -> List[dict]:
         return await self._get_archive(
-            "daily", 400, from_date, to_date, line_id, allowed_branches, session
+            "daily", from_date, to_date, line_id, allowed_branches, session
         )
 
     async def get_hourly_archive(
@@ -353,8 +349,9 @@ class DpdLineRouter:
         session: AsyncSession = Depends(get_session),
     ) -> List[dict]:
         return await self._get_archive(
-            "hourly", 90, from_date, to_date, line_id, allowed_branches, session
+            "hourly", from_date, to_date, line_id, allowed_branches, session
         )
+
 
 
 dpd_line_router = DpdLineRouter().router

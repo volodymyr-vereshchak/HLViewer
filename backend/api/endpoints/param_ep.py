@@ -40,6 +40,9 @@ class ParamRouter(BaseArchiveRouter):
             return []
         archive_dao = self.archive_dao(session=session)
         if from_date and to_date:
+            # Dates are optional here (the overview asks without them), so the
+            # shared guard only applies to the ranged call.
+            self._check_dates(from_date, to_date)
             return await archive_dao.get_last_per_line_ids(
                 to_date, line_id, from_date=from_date
             )

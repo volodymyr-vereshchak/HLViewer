@@ -11,7 +11,6 @@ class HourlyVirtualRouter(BaseVirtualArchiveRouter):
             path="/hourly_virtual/",
             tag="hourly_virtual",
             archive_dao=HourlyArchiveDao,
-            max_days=90,
             period_type="hourly",
         )
 

@@ -4,6 +4,8 @@ importantly — viewer branch scoping through get_allowed_line_ids."""
 
 from datetime import date, datetime
 
+import pytest
+
 from backend.db.engine import async_session_factory
 from backend.db.models import (
     DailyArchive,
@@ -61,19 +63,32 @@ class TestDateValidation:
         resp = await admin_client.get("/hourly/")
         assert resp.status_code == 400
 
-    async def test_daily_range_limit_400_days(self, admin_client):
-        resp = await admin_client.get(
+    @pytest.mark.parametrize(
+        "path",
+        [
+            # No length cap anywhere. Every one of these used to be a 400 under
+            # the old per-endpoint limits (90 days hourly, 400 daily, 30 for
+            # sys/edit); how much to ask for is the client's call.
             "/daily/",
-            params={"from_date": "2020-01-01T00:00:00", "to_date": "2024-01-01T00:00:00"},
-        )
-        assert resp.status_code == 400
-
-    async def test_sys_range_limit_30_days(self, admin_client):
-        resp = await admin_client.get(
+            "/hourly/",
             "/sys/",
-            params={"from_date": "2024-01-01T00:00:00", "to_date": "2024-03-01T00:00:00"},
+            "/edit/",
+            "/param/",
+            "/daily_counts/",
+            "/hourly_counts/",
+        ],
+    )
+    async def test_no_range_is_too_long(self, admin_client, path):
+        resp = await admin_client.get(
+            path,
+            params={"from_date": "2000-01-01T00:00:00", "to_date": "2030-01-01T00:00:00"},
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 200
+
+    async def test_param_without_dates_still_works(self, admin_client):
+        """The overview reads min_dp/max_dp from this dateless call."""
+        resp = await admin_client.get("/param/")
+        assert resp.status_code == 200
 
 
 class TestHourlyArchive:

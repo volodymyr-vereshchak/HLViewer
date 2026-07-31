@@ -66,11 +66,17 @@ class TestDpdLineArchiveUnits:
         assert resp.status_code == 200
         assert resp.json()[0]["press_unit"] is None
 
-    async def test_range_cap_still_applies(self, admin_client, dpd_line):
+    async def test_no_range_is_too_long(self, admin_client, dpd_line):
+        """Used to stop at 400 days (daily) and 90 (hourly)."""
         start = datetime(2026, 1, 1)
-        resp = await admin_client.get("/daily_dpd/", params={
-            "line_id": [dpd_line],
-            "from_date": start.isoformat(),
-            "to_date": (start + timedelta(days=401)).isoformat(),
-        })
+        for path in ("/daily_dpd/", "/hourly_dpd/"):
+            resp = await admin_client.get(path, params={
+                "line_id": [dpd_line],
+                "from_date": start.isoformat(),
+                "to_date": (start + timedelta(days=3000)).isoformat(),
+            })
+            assert resp.status_code == 200
+
+    async def test_dates_are_still_required(self, admin_client, dpd_line):
+        resp = await admin_client.get("/daily_dpd/", params={"line_id": [dpd_line]})
         assert resp.status_code == 400

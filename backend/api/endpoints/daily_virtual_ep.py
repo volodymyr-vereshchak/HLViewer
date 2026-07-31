@@ -11,7 +11,6 @@ class DailyVirtualRouter(BaseVirtualArchiveRouter):
             path="/daily_virtual/",
             tag="daily_virtual",
             archive_dao=DailyArchiveDao,
-            max_days=400,
             period_type="daily",
         )
 

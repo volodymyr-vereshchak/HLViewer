@@ -8,10 +8,9 @@ from backend.db.engine import get_session
 
 
 class BaseArchiveRouter:
-    def __init__(self, path: str, archive_list_class, tags: list[str], archive_dao, max_days: int = 400):
+    def __init__(self, path: str, archive_list_class, tags: list[str], archive_dao):
         self.router = APIRouter()
         self.archive_dao = archive_dao
-        self.max_days = max_days
         self.router.add_api_route(
             path=path,
             endpoint=self.get_archive,
@@ -35,11 +34,17 @@ class BaseArchiveRouter:
             status_code=status.HTTP_200_OK,
         )
 
-    def _check_dates(self, from_date, to_date):
+    @staticmethod
+    def _check_dates(from_date, to_date):
+        """Both ends are required; the length is not capped.
+
+        There used to be a per-endpoint day limit (90 / 400 / 30, depending on
+        which router you happened to be in). It rejected periods that are
+        perfectly reasonable to ask for, and the client — which pages the table
+        and knows what it is about to draw — is the one that should decide what
+        is too much to request."""
         if not from_date or not to_date:
-            raise HTTPException(status_code=400, detail="from_date and to_date are required")
-        if (to_date - from_date).days > self.max_days:
-            raise HTTPException(status_code=400, detail=f"Date range exceeds {self.max_days} days")
+            raise HTTPException(status_code=400, detail="Вкажіть початок і кінець періоду")
 
     @staticmethod
     def _scope_line_ids(line_id, allowed_line_ids):
@@ -94,6 +99,10 @@ class BaseArchiveRouter:
         line_id: list[int] = Query(None),
         session: AsyncSession = Depends(get_session),
     ):
+        # The hourly view asks for the И/А counters over the same range as the
+        # archive, so it answers the same way when a date is missing instead of
+        # quietly counting the whole table.
+        self._check_dates(from_date, to_date)
         return await self.archive_dao(session=session).get_data_counts_by_hour(
             from_date=from_date, to_date=to_date, line_id=line_id
         )
