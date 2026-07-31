@@ -286,6 +286,30 @@ class TestParam:
         assert len(body) == 1
         assert body[0]["period"] == "2024-12-01T00:00:00"
 
+    async def test_to_date_alone_is_the_configuration_as_of_that_moment(
+        self, admin_client, seed_topology
+    ):
+        """The flow calculator recalculates past measurements, so it asks for
+        the configuration IN FORCE at a moment: the last record not later than
+        it, even when that record is older than any range would cover."""
+        line1 = seed_topology["line1"]
+        await _add(
+            Param(**dict(_PARAM_FLOATS, density=0.60), period=datetime(2024, 12, 1), line_id=line1),
+            Param(**dict(_PARAM_FLOATS, density=0.68), period=datetime(2024, 12, 20), line_id=line1),
+        )
+        resp = await admin_client.get(
+            "/param/", params={"line_id": [line1], "to_date": "2024-12-10T00:00:00"}
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body) == 1
+        assert body[0]["period"] == "2024-12-01T00:00:00"
+        assert body[0]["density"] == 0.60
+
+        # …and without dates it is still the current one.
+        latest = await admin_client.get("/param/", params={"line_id": [line1]})
+        assert latest.json()[0]["density"] == 0.68
+
     async def test_range_returns_latest_inside_it(self, admin_client, seed_topology):
         """With both dates the answer is the last snapshot IN the range — not
         the whole history of changes, and not a record from before it."""
