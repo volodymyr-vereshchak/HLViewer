@@ -58,6 +58,11 @@ class GasVolumeCalcList(GasVolumeCalcBase):
 class GasVolumeCalcCreate(GasVolumeCalcBase):
     lumg_id: int
     type_id: int | None = None
+    # The poll cycle is parsed out of the HostLib CFG but never propagated
+    # (config_reader drops it), so every row in the base carries this same 7 and
+    # nothing reads it back. Requiring it of a caller asked for a number that
+    # cannot be anything else — and rejected every create that left it out.
+    c_time: int = 7
 
 
 class GasVolumeCalcUpdate(GasVolumeCalcBase):
