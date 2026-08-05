@@ -16,7 +16,9 @@ from sqlalchemy import text
 from backend.api.endpoints.enterprise_ep import EnterpriseRouter
 from backend.db.dao.dpd_archive_dao import DpdArchiveDao
 from backend.db.engine import async_session_factory
-from backend.db.models.enterprise_model import Enterprise
+from backend.db.models.enterprise_model import (
+    DpdDevice, Enterprise, EnterpriseDevice, EPOCH_INSTALLED_FROM,
+)
 from backend.db.models.grmu_branch_model import GrmuBranch
 from backend.services import dpd_archive_refresh
 from backend.services.enterprise_volume_service import fetch_dpd_volumes
@@ -33,8 +35,12 @@ def as_dt(day: date) -> datetime:
 
 
 def daily_records(devices: list[dict], days: list[date]) -> list[dict]:
+    """What the DPD client hands back. `tag` is the assignment the caller
+    asked under, echoed onto every record — the real client copies it off the
+    device dict, so a mock standing in for it has to as well."""
     return [
         {
+            "tag": d.get("assignment_id"),
             "serNum": d["serNum"], "mfDev": d["mfDev"], "typeDev": d["typeDev"],
             "chNum": d["chNum"], "date": day.isoformat(), "dvstAlwrk": 10.0,
             "press": 101.3, "temper": 15.0,
@@ -59,22 +65,40 @@ async def branch_id(clean_db) -> int:
 
 @pytest_asyncio.fixture
 async def make_enterprise(branch_id):
-    """Factory: creates an Enterprise row and returns the device dict the
-    endpoints would build for it (id + quad + branch)."""
-    async def _make(ser_num: int) -> dict:
+    """Factory: creates a metering point with one corrector standing there
+    since forever, and returns the ASSIGNMENT dict the endpoints build.
+
+    `installed_from` defaults to the epoch, which is what every point migrated
+    from the pre-history schema looks like — so these tests exercise the same
+    shape production carries right after the upgrade."""
+    async def _make(ser_num: int, installed_from=None, removed_at=None) -> dict:
         async with async_session_factory() as session:
             ent = Enterprise(
-                enterprise_name=f"ent-{ser_num}", ser_num=ser_num,
-                mf_dev=1, type_dev=3, ch_num=0,
+                enterprise_name=f"ent-{ser_num}",
                 active=True, enabled=True, branch_id=branch_id, line_id=None,
             )
             session.add(ent)
+            await session.flush()
+            device = DpdDevice(ser_num=ser_num, mf_dev=1, type_dev=3, ch_num=0)
+            session.add(device)
+            await session.flush()
+            entry = EnterpriseDevice(
+                enterprise_id=ent.id, device_id=device.id,
+                installed_from=installed_from or EPOCH_INSTALLED_FROM,
+                removed_at=removed_at,
+            )
+            session.add(entry)
             await session.commit()
             await session.refresh(ent)
+            await session.refresh(device)
+            await session.refresh(entry)
         return {
-            "id": ent.id, "line_id": 1, "branch_id": branch_id,
+            "enterprise_id": ent.id, "assignment_id": entry.id,
+            "device_id": device.id,
+            "line_id": 1, "branch_id": branch_id,
             "serNum": ser_num, "mfDev": 1, "typeDev": 3, "chNum": 0,
             "enterprise_name": ent.enterprise_name,
+            "win_from": entry.installed_from, "win_to": removed_at,
         }
     return _make
 
@@ -98,28 +122,30 @@ async def seed_archive(device: dict, period_type: str, days: list[date],
         async with session.begin():
             dao = DpdArchiveDao(session)
             await dao.upsert_records(period_type, [
-                {"enterprise_id": device["id"], "stamp": as_dt(day),
+                {"device_id": device["device_id"], "stamp": as_dt(day),
                  "dvst_alwrk": 10.0, "dvwrk_alwrk": None,
                  "press": 101.3, "temper": 15.0, "press_unit": "kPa"}
                 for day in days
             ])
-            await dao.lower_loaded_from([device["id"]], period_type, loaded_from)
+            await dao.lower_loaded_from(
+                [device["device_id"]], period_type, loaded_from
+            )
 
 
 async def archive_rows(period_type: str) -> list:
     table = "dpd_daily_archive" if period_type == "daily" else "dpd_hourly_archive"
     async with async_session_factory() as session:
         return (await session.execute(
-            text(f"SELECT * FROM {table} ORDER BY enterprise_id")
+            text(f"SELECT * FROM {table} ORDER BY device_id")
         )).mappings().all()
 
 
-async def coverage_of(ent_id: int, period_type: str):
+async def coverage_of(device_id: int, period_type: str):
     async with async_session_factory() as session:
         return (await session.execute(
             text("SELECT loaded_from FROM dpd_device_coverage "
-                 "WHERE enterprise_id = :e AND period_type = :p"),
-            {"e": ent_id, "p": period_type},
+                 "WHERE device_id = :e AND period_type = :p"),
+            {"e": device_id, "p": period_type},
         )).scalar()
 
 
@@ -159,12 +185,12 @@ class TestArchiveReads:
             async with session.begin():
                 dao = DpdArchiveDao(session)
                 await dao.upsert_records("hourly", [
-                    {"enterprise_id": dev["id"], "stamp": s,
+                    {"device_id": dev["device_id"], "stamp": s,
                      "dvst_alwrk": 1.0, "dvwrk_alwrk": None,
                      "press": None, "temper": None, "press_unit": None}
                     for s in stamps
                 ])
-                await dao.lower_loaded_from([dev["id"]], "hourly", D_OLD10)
+                await dao.lower_loaded_from([dev["device_id"]], "hourly", D_OLD10)
 
         records = await fetch_dpd_volumes([dev], as_dt(D_OLD5), as_dt(D_OLD5), "hourly")
 
@@ -188,17 +214,21 @@ class TestBackfill:
         )
 
         dpd_mock.get_volumes.assert_awaited_once()
-        ranges = dpd_mock.get_volumes.await_args.kwargs["device_ranges"]
-        quad = (101, 1, 3, 0)
+        # The range rides on the device dict, not on a quad-keyed map: one
+        # corrector can be asked for twice in a request, once per window.
+        polled = dpd_mock.get_volumes.await_args.args[0]
+        assert len(polled) == 1
         # Only the uncovered head [requested .. loaded_from-1] is fetched.
-        assert ranges[quad] == (as_dt(D_OLD10), as_dt(D_OLD5 - timedelta(days=1)))
+        assert polled[0]["range"] == (
+            as_dt(D_OLD10), as_dt(D_OLD5 - timedelta(days=1))
+        )
         assert record_keys(records) == {
             (101, D_OLD8.isoformat()), (101, D_OLD5.isoformat()),
             (101, D_OLD3.isoformat()),
         }
         # Coverage lowered → the same range is DB-only from now on,
         # including the stretches DPD had nothing for.
-        assert await coverage_of(dev["id"], "daily") == D_OLD10
+        assert await coverage_of(dev["device_id"], "daily") == D_OLD10
         dpd_mock.get_volumes.reset_mock()
         again = await fetch_dpd_volumes(
             [dev], as_dt(D_OLD10), as_dt(D_OLD3), "daily"
@@ -217,8 +247,8 @@ class TestBackfill:
         )
 
         dpd_mock.get_volumes.assert_awaited_once()
-        ranges = dpd_mock.get_volumes.await_args.kwargs["device_ranges"]
-        assert ranges[(101, 1, 3, 0)] == (as_dt(D_OLD5), as_dt(D_OLD3))
+        polled = dpd_mock.get_volumes.await_args.args[0]
+        assert polled[0]["range"] == (as_dt(D_OLD5), as_dt(D_OLD3))
         assert record_keys(records) == {(101, D_OLD5.isoformat())}
 
     async def test_skeleton_records_not_stored(self, dpd_mock, make_enterprise):
@@ -326,7 +356,7 @@ class TestRetention:
         rows = await archive_rows("daily")
         assert [r["day"] for r in rows] == [recent]  # only the year-old one went
         # Coverage raised to the horizon → the range is backfillable again.
-        assert await coverage_of(dev["id"], "daily") == TODAY - timedelta(days=365)
+        assert await coverage_of(dev["device_id"], "daily") == TODAY - timedelta(days=365)
 
     async def test_recently_read_old_rows_survive(self, dpd_mock, make_enterprise):
         dev = await make_enterprise(101)
@@ -354,6 +384,7 @@ class TestRefreshJob:
             if type_request == "daily":
                 return daily_records(devices, [D_OLD5, D_OLD3])
             return [{
+                "tag": d.get("tag"),
                 "serNum": d["serNum"], "mfDev": d["mfDev"],
                 "typeDev": d["typeDev"], "chNum": d["chNum"],
                 "date": f"{D_OLD5.isoformat()}T{h:02d}:00:00", "dvstAlwrk": 1.0,
@@ -375,8 +406,8 @@ class TestRefreshJob:
         assert len(await archive_rows("daily")) == 2
         assert len(await archive_rows("hourly")) == 3
         window_from = TODAY - timedelta(days=30)
-        assert await coverage_of(dev["id"], "daily") == window_from
-        assert await coverage_of(dev["id"], "hourly") == window_from
+        assert await coverage_of(dev["device_id"], "daily") == window_from
+        assert await coverage_of(dev["device_id"], "hourly") == window_from
         status = await dpd_archive_refresh.read_status()
         assert status["status"] == "done"
 

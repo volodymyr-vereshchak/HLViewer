@@ -114,13 +114,21 @@ async def _ensure_database() -> None:
 async def _recreate_schema() -> None:
     """Drop and re-create all tables from the current SQLModel metadata.
 
+    The schema is dropped wholesale rather than through metadata.drop_all:
+    the test database outlives a checkout, so it can hold tables and foreign
+    keys the CURRENT metadata knows nothing about. drop_all then orders its
+    DROPs by today's dependency graph and trips over yesterday's constraints —
+    which is exactly what a column moving between tables produces.
+
     Uses a throwaway engine (own event loop via asyncio.run) so the app engine's
     pooled connections are never bound to a foreign loop.
     """
     engine = create_async_engine(_test_db_url())
     try:
         async with engine.begin() as conn:
-            await conn.run_sync(SQLModel.metadata.drop_all)
+            await conn.execute(text("DROP SCHEMA public CASCADE"))
+            await conn.execute(text("CREATE SCHEMA public"))
+        async with engine.begin() as conn:
             await conn.run_sync(SQLModel.metadata.create_all)
     finally:
         await engine.dispose()

@@ -6,7 +6,12 @@ from sqlmodel import Field, SQLModel
 
 
 class DpdDailyArchive(SQLModel, table=True):
-    """Daily DPD indication records, one row per enterprise device per day.
+    """Daily DPD indication records, one row per corrector per day.
+
+    Keyed by the DEVICE, not by the metering point it stood at: a corrector
+    keeps one continuous archive across every point it ever served, and a
+    point reads slices of it through its assignment windows
+    (enterprise_device). Moving a corrector needs no re-poll.
 
     The DB is the primary source: the scheduler refreshes the last
     DPD_ARCHIVE_WINDOW_DAYS twice a day, older ranges are backfilled on
@@ -17,15 +22,15 @@ class DpdDailyArchive(SQLModel, table=True):
 
     __tablename__ = "dpd_daily_archive"
     __table_args__ = (
-        UniqueConstraint("enterprise_id", "day", name="uq_dpd_daily_ent_day"),
+        UniqueConstraint("device_id", "day", name="uq_dpd_daily_dev_day"),
         Index("ix_dpd_daily_day", "day"),
     )
 
     id: Optional[int] = Field(default=None, primary_key=True, sa_type=BigInteger)
-    enterprise_id: int = Field(
+    device_id: int = Field(
         sa_column=Column(
             BigInteger,
-            ForeignKey("enterprise.id", ondelete="CASCADE"),
+            ForeignKey("dpd_device.id", ondelete="CASCADE"),
             nullable=False,
         )
     )
@@ -39,22 +44,22 @@ class DpdDailyArchive(SQLModel, table=True):
 
 
 class DpdHourlyArchive(SQLModel, table=True):
-    """Hourly DPD indication records, one row per enterprise device per hour.
+    """Hourly DPD indication records, one row per corrector per hour.
 
-    Same lifecycle as DpdDailyArchive (daily and hourly are independent DPD
-    endpoints); `stamp` is the record's date+time."""
+    Same lifecycle and same device keying as DpdDailyArchive (daily and hourly
+    are independent DPD endpoints); `stamp` is the record's date+time."""
 
     __tablename__ = "dpd_hourly_archive"
     __table_args__ = (
-        UniqueConstraint("enterprise_id", "stamp", name="uq_dpd_hourly_ent_stamp"),
+        UniqueConstraint("device_id", "stamp", name="uq_dpd_hourly_dev_stamp"),
         Index("ix_dpd_hourly_stamp", "stamp"),
     )
 
     id: Optional[int] = Field(default=None, primary_key=True, sa_type=BigInteger)
-    enterprise_id: int = Field(
+    device_id: int = Field(
         sa_column=Column(
             BigInteger,
-            ForeignKey("enterprise.id", ondelete="CASCADE"),
+            ForeignKey("dpd_device.id", ondelete="CASCADE"),
             nullable=False,
         )
     )
@@ -71,18 +76,21 @@ class DpdDeviceCoverage(SQLModel, table=True):
     """How far back a device's archive has ever been fetched from DPD.
 
     loaded_from = the earliest date ever requested from the API for this
-    enterprise+period_type. A request with from_date < loaded_from triggers
+    device+period_type. A request with from_date < loaded_from triggers
     an on-demand backfill of [from_date, loaded_from); everything at or
     after loaded_from is served from the DB only. The scheduler lowers it
     to today−window after each run; retention pruning RAISES it back to the
-    prune horizon so pruned ranges become backfillable again."""
+    prune horizon so pruned ranges become backfillable again.
+
+    Per DEVICE, so a corrector shared by two points over time is backfilled
+    once and the second point reads what the first already pulled."""
 
     __tablename__ = "dpd_device_coverage"
 
-    enterprise_id: int = Field(
+    device_id: int = Field(
         sa_column=Column(
             BigInteger,
-            ForeignKey("enterprise.id", ondelete="CASCADE"),
+            ForeignKey("dpd_device.id", ondelete="CASCADE"),
             primary_key=True,
         )
     )

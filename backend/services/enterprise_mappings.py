@@ -10,6 +10,8 @@ import logging
 import pandas as pd
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
+
+from backend.services import device_history
 from backend.settings import backend_settings
 
 logger = logging.getLogger(__name__)
@@ -276,20 +278,41 @@ def get_devices_for_lines(line_ids: List[int]) -> List[Dict]:
     return devices
 
 
-async def _query_devices_db(session, *where) -> list[dict]:
-    """Shared device-dict builder for the DB-backed lookups below.
+async def _query_assignments_db(
+    session, *where, range_from=None, range_to=None
+) -> list[dict]:
+    """Shared ASSIGNMENT-dict builder for the DB-backed lookups below.
 
-    Device codes are read THROUGH the corrector-type catalog when the enterprise
+    One dict per history entry, not per enterprise: a metering point that has
+    had two correctors contributes two, each carrying the window it was in
+    force for. Callers poll and read per window, which is what keeps a
+    replaced corrector's data out of the previous device's periods.
+
+    Device codes are read THROUGH the corrector-type catalog when the device
     is linked (so catalog edits propagate to DPD polling), falling back to the
     legacy mf_dev/type_dev columns for not-yet-linked rows.
+
+    With `range_from`/`range_to` (inclusive datetimes) only assignments that
+    overlap the range are returned. Their windows are NOT rewritten: `win_to`
+    stays the true, EXCLUSIVE end (None = still in force), because callers
+    test records against it with `covers()`. Clipping to the request is done
+    where an inclusive span is actually wanted — the archive read and the
+    poll range.
     """
     from sqlmodel import select
-    from backend.db.models.enterprise_model import Enterprise
+    from backend.db.models.enterprise_model import (
+        DpdDevice, Enterprise, EnterpriseDevice,
+    )
     from backend.db.models.device_catalog_model import CorectorType, Manufacturer
 
     stmt = (
-        select(Enterprise, CorectorType.type_dev, Manufacturer.mf_dev)
-        .outerjoin(CorectorType, Enterprise.corector_type_id == CorectorType.id)
+        select(
+            Enterprise, EnterpriseDevice, DpdDevice,
+            CorectorType.type_dev, Manufacturer.mf_dev,
+        )
+        .join(EnterpriseDevice, EnterpriseDevice.enterprise_id == Enterprise.id)
+        .join(DpdDevice, DpdDevice.id == EnterpriseDevice.device_id)
+        .outerjoin(CorectorType, DpdDevice.corector_type_id == CorectorType.id)
         .outerjoin(Manufacturer, CorectorType.manufacturer_id == Manufacturer.id)
         .where(Enterprise.active == True)  # noqa: E712
     )
@@ -297,51 +320,104 @@ async def _query_devices_db(session, *where) -> list[dict]:
         stmt = stmt.where(clause)
     rows = (await session.execute(stmt)).all()
 
-    devices = []
-    for e, ct_type_dev, mfr_mf_dev in rows:
-        linked = e.corector_type_id is not None
-        eff_mf = mfr_mf_dev if linked else e.mf_dev
-        eff_type = ct_type_dev if linked else e.type_dev
-        # No resolvable device identity (unlinked AND no legacy codes) → cannot poll.
-        if eff_mf is None or eff_type is None:
-            continue
-        devices.append({
-            "id": e.id,  # enterprise_id — archive tables key rows by it
-            # Effective line id: physical or DPD line (ids never collide —
-            # shared_line_id_seq), so consumers group by one key either way.
-            "line_id": e.line_id if e.line_id is not None else e.dpd_line_id,
-            "branch_id": e.branch_id,
-            "serNum": e.ser_num,
-            "mfDev": eff_mf,
-            "typeDev": eff_type,
-            "chNum": e.ch_num,
-            "enterprise_name": e.enterprise_name,
-        })
-    return devices
+    # Windows are derived per point, so the history of each has to be whole
+    # before any of it can be filtered by range.
+    by_enterprise: dict[int, list] = {}
+    context: dict[int, tuple] = {}
+    for ent, assignment, device, ct_type_dev, mfr_mf_dev in rows:
+        by_enterprise.setdefault(ent.id, []).append(assignment)
+        context[assignment.id] = (ent, device, ct_type_dev, mfr_mf_dev)
+
+    assignments = []
+    for ent_id, entries in by_enterprise.items():
+        for assignment, win_from, win_to in device_history.resolve_windows(entries):
+            ent, device, ct_type_dev, mfr_mf_dev = context[assignment.id]
+            linked = device.corector_type_id is not None
+            eff_mf = mfr_mf_dev if linked else device.mf_dev
+            eff_type = ct_type_dev if linked else device.type_dev
+            # No resolvable device identity (unlinked AND no legacy codes) →
+            # cannot be addressed on the DPD API at all.
+            if eff_mf is None or eff_type is None:
+                continue
+            if range_from is not None and device_history.clip(
+                win_from, win_to, range_from, range_to
+            ) is None:
+                continue
+            assignments.append({
+                "enterprise_id": ent_id,
+                "assignment_id": assignment.id,
+                "device_id": device.id,
+                # Effective line id: physical or DPD line (ids never collide —
+                # shared_line_id_seq), so consumers group by one key either way.
+                "line_id": ent.line_id if ent.line_id is not None else ent.dpd_line_id,
+                "branch_id": ent.branch_id,
+                "serNum": device.ser_num,
+                "mfDev": eff_mf,
+                "typeDev": eff_type,
+                "chNum": device.ch_num,
+                "enterprise_name": ent.enterprise_name,
+                "win_from": win_from,
+                "win_to": win_to,
+            })
+    return assignments
 
 
-async def get_devices_for_lines_db(line_ids: list[int], session) -> list[dict]:
-    """DB-backed replacement for get_devices_for_lines(): active enterprises
-    of the given lines (physical or DPD) as device dicts (serNum, mfDev,
-    typeDev, chNum, ...)."""
+async def get_devices_for_lines_db(
+    line_ids: list[int], session, range_from=None, range_to=None
+) -> list[dict]:
+    """Assignments of the active enterprises on the given lines (physical or
+    DPD), optionally narrowed and clipped to a datetime range."""
     from sqlalchemy import or_
     from backend.db.models.enterprise_model import Enterprise
 
-    return await _query_devices_db(
+    return await _query_assignments_db(
         session,
         or_(
             Enterprise.line_id.in_(line_ids),
             Enterprise.dpd_line_id.in_(line_ids),
         ),
+        range_from=range_from,
+        range_to=range_to,
     )
 
 
-async def get_devices_for_branch_db(branch_id: int, session) -> list[dict]:
-    """All active enterprises of a branch — the scheduler refresh works
-    branch-by-branch (DPD credentials are per branch)."""
+async def get_assignments_for_device_db(
+    ser_num: int, mf_dev: int, type_dev: int, ch_num: int, session,
+    range_from=None, range_to=None,
+) -> list[dict]:
+    """Assignments of one corrector, addressed the way the DPD API addresses
+    it. A device that moved has several — narrow with a range to get the
+    point(s) it actually served then."""
+    from sqlalchemy import or_
+    from backend.db.models.enterprise_model import DpdDevice
+    from backend.db.models.device_catalog_model import CorectorType, Manufacturer
+
+    return await _query_assignments_db(
+        session,
+        DpdDevice.ser_num == ser_num,
+        DpdDevice.ch_num == ch_num,
+        # Effective codes: the catalog when linked, the legacy columns
+        # otherwise — the same rule the poll resolves identity by.
+        or_(Manufacturer.mf_dev == mf_dev, DpdDevice.mf_dev == mf_dev),
+        or_(CorectorType.type_dev == type_dev, DpdDevice.type_dev == type_dev),
+        range_from=range_from,
+        range_to=range_to,
+    )
+
+
+async def get_devices_for_branch_db(
+    branch_id: int, session, range_from=None, range_to=None
+) -> list[dict]:
+    """All assignments of a branch's active enterprises — the scheduler
+    refresh works branch-by-branch (DPD credentials are per branch)."""
     from backend.db.models.enterprise_model import Enterprise
 
-    return await _query_devices_db(session, Enterprise.branch_id == branch_id)
+    return await _query_assignments_db(
+        session,
+        Enterprise.branch_id == branch_id,
+        range_from=range_from,
+        range_to=range_to,
+    )
 
 
 def validate_mappings() -> Dict[str, any]:

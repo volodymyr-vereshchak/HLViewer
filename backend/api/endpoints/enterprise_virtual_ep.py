@@ -19,6 +19,7 @@ from backend.services.enterprise_volume_service import (
     aggregate_volumes,
     fetch_dpd_volumes,
     parse_date_range,
+    request_window,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 
 async def resolve_virtual_devices(
-    line_id: List[int], session: AsyncSession
+    line_id: List[int], session: AsyncSession, range_from=None, range_to=None,
 ) -> tuple[List[dict], dict]:
     """Resolve a mixed virtual/physical line list to enterprise devices.
 
@@ -64,7 +65,9 @@ async def resolve_virtual_devices(
         f"{len(all_physical_ids)} physical lines "
         f"({len(virtual_line_ids)} virtual, {len(physical_line_ids)} physical)"
     )
-    devices = await get_devices_for_lines_db(all_physical_ids, session)
+    devices = await get_devices_for_lines_db(
+        all_physical_ids, session, range_from=range_from, range_to=range_to,
+    )
     return devices, physical_to_original
 
 
@@ -178,8 +181,9 @@ class EnterpriseVirtualRouter:
 
         # Resolve virtual lines and load device mappings (shared helper)
         try:
+            win = request_window(date_from, date_to, period_type)
             devices, physical_to_original = await resolve_virtual_devices(
-                line_id, session
+                line_id, session, *win,
             )
         except Exception as e:
             logger.error(f"Error resolving virtual lines / mappings: {e}")

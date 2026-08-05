@@ -231,6 +231,13 @@ class DPDClient:
                         record["mfDev"] = device["mfDev"]
                         record["typeDev"] = device["typeDev"]
                         record["chNum"] = device["chNum"]
+                        # Caller's opaque handle, echoed back so records can be
+                        # attributed without a reverse lookup by identity. The
+                        # quadruple is no longer unique per caller-side row:
+                        # one corrector can be requested twice in a request,
+                        # once per metering point it served.
+                        if "tag" in device:
+                            record["tag"] = device["tag"]
 
                     logger.debug(
                         f"Device {device['serNum']}: {len(result)} records "
@@ -315,6 +322,11 @@ class DPDClient:
                 keyed by (serNum, mfDev, typeDev, chNum). A device missing only
                 one cached day then downloads that day, not the whole range.
                 Devices absent from the dict use the date_from/date_to args.
+                A device dict may instead carry its own ("range": (from, to)),
+                which takes precedence — the quadruple cannot distinguish two
+                entries of one corrector, e.g. the same device polled for two
+                metering points over different windows. Such a dict may also
+                carry a "tag", echoed onto every record it produces.
             progress_cb: Optional SYNCHRONOUS callable invoked as
                 progress_cb(done, total) after each device request completes.
                 It must be non-blocking (fire-and-forget) — it runs on the
@@ -374,7 +386,10 @@ class DPDClient:
 
             tasks = []
             for device in devices:
-                dev_from, dev_to = device_ranges.get(
+                # A device's own range wins: device_ranges is keyed by the
+                # identity quadruple, which cannot tell two entries of the
+                # same corrector apart (two metering points, two windows).
+                dev_from, dev_to = device.get("range") or device_ranges.get(
                     (device["serNum"], device["mfDev"], device["typeDev"], device["chNum"]),
                     (date_from, date_to),
                 )

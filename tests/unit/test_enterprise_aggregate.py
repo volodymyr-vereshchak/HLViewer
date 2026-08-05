@@ -8,17 +8,23 @@ tabs showed GS volumes with nothing subtracted)."""
 from backend.services.enterprise_volume_service import aggregate_volumes
 
 DEVICE_A = {  # on physical line 10, also a member of virtual 208
+    "assignment_id": 1, "device_id": 101, "enterprise_id": 1,
     "serNum": 101, "mfDev": 1, "typeDev": 3, "chNum": 0,
     "line_id": 10, "branch_id": 1, "enterprise_name": "ent-a",
 }
 DEVICE_B = {  # on physical line 11, member of virtual 208 only
+    "assignment_id": 2, "device_id": 102, "enterprise_id": 2,
     "serNum": 102, "mfDev": 1, "typeDev": 3, "chNum": 0,
     "line_id": 11, "branch_id": 1, "enterprise_name": "ent-b",
 }
 
 
 def record(device, volume):
+    # `tag` is the assignment the record belongs to: the identity quadruple no
+    # longer identifies a caller-side row, since one corrector can serve two
+    # metering points over time.
     return {
+        "tag": device["assignment_id"],
         "serNum": device["serNum"], "mfDev": device["mfDev"],
         "typeDev": device["typeDev"], "chNum": device["chNum"],
         "date": "2026-07-10", "dvstAlwrk": volume,

@@ -16,6 +16,7 @@ import sqlalchemy as sa
 
 from backend.db.engine import async_session_factory
 from backend.db.dao.dpd_archive_dao import DpdArchiveDao
+from backend.services import device_history
 from backend.services.dpd_client import DPDClient
 from backend.services.enterprise_mappings import get_devices_for_branch_db
 from backend.settings import backend_settings
@@ -147,6 +148,16 @@ class _ProgressWriter:
         self.done = self._offset
         self._maybe_write()
 
+    def skip(self, count: int) -> None:
+        """Account for devices this segment will not poll after all — an
+        assignment whose window does not reach the refresh span. Without it
+        the bar counts them in the total and stops short of 100%."""
+        if count <= 0:
+            return
+        self._offset += count
+        self.done = self._offset
+        self._maybe_write()
+
     def _maybe_write(self) -> None:
         now = time.monotonic()
         if self._task is not None and not self._task.done():
@@ -267,10 +278,12 @@ async def _refresh_branch(
         client = await DPDClient.for_branch(branch_id, session)
 
     contract_hour = backend_settings.get("CONTRACT_HOUR", 7)
-    ent_by_quad = {
-        (d["serNum"], d["mfDev"], d["typeDev"], d["chNum"]): d["id"]
-        for d in devices if d.get("id") is not None
-    }
+    # `devices` are ASSIGNMENTS (one per history entry), already clipped to the
+    # refresh window by get_devices_for_branch_db. Records come back tagged
+    # with the assignment, so a corrector that served two points inside the
+    # window is stored once per window rather than once per identity.
+    by_assignment = {d["assignment_id"]: d for d in devices}
+    device_ids = sorted({d["device_id"] for d in devices})
     for period_type in ("daily", "hourly"):
         if period_type == "hourly":
             span = (
@@ -284,18 +297,28 @@ async def _refresh_branch(
                 datetime.combine(window_from, datetime.min.time()),
                 datetime.combine(today, datetime.min.time()),
             )
+        poll_devices = []
+        for assignment_id, a in by_assignment.items():
+            clipped = device_history.clip(
+                a["win_from"], a["win_to"], span[0], span[1]
+            )
+            if clipped is None:
+                continue
+            poll_devices.append({**a, "tag": assignment_id, "range": clipped})
+        progress.skip(len(by_assignment) - len(poll_devices))
+        if not poll_devices:
+            continue
         # get_volumes builds and closes its own HTTP pool per call.
         records = await client.get_volumes(
-            devices, span[0], span[1], type_request=period_type,
-            progress_cb=progress.segment_cb(len(devices)),
+            poll_devices, span[0], span[1], type_request=period_type,
+            progress_cb=progress.segment_cb(len(poll_devices)),
         )
         rows = {}
         for record in records:
             if record.get("dvstAlwrk") is None and record.get("dvwrkAlwrk") is None:
                 continue  # skeleton — no data yet
-            ent_id = ent_by_quad.get((record["serNum"], record["mfDev"],
-                                      record["typeDev"], record["chNum"]))
-            if ent_id is None:
+            assignment = by_assignment.get(record.get("tag"))
+            if assignment is None:
                 continue
             raw = record.get("date") or record.get("period")
             try:
@@ -309,8 +332,16 @@ async def _refresh_branch(
                     stamp = datetime.strptime(str(raw).split("T")[0], "%Y-%m-%d")
             except Exception:
                 continue
-            rows[(ent_id, stamp)] = {
-                "enterprise_id": ent_id,
+            # DPD pads to whole dates; hours outside the assignment's window
+            # belong to whatever stood there before.
+            at = device_history.attribution_stamp(stamp, period_type)
+            if not device_history.covers(
+                assignment["win_from"], assignment["win_to"], at
+            ):
+                continue
+            device_id = assignment["device_id"]
+            rows[(device_id, stamp)] = {
+                "device_id": device_id,
                 "stamp": stamp,
                 "dvst_alwrk": record.get("dvstAlwrk"),
                 "dvwrk_alwrk": record.get("dvwrkAlwrk"),
@@ -323,7 +354,7 @@ async def _refresh_branch(
                 dao = DpdArchiveDao(session)
                 await dao.upsert_records(period_type, list(rows.values()))
                 await dao.lower_loaded_from(
-                    list(ent_by_quad.values()), period_type, window_from
+                    device_ids, period_type, window_from
                 )
         logger.info(
             f"DPD refresh: branch {branch_id} {period_type} — "
@@ -344,11 +375,18 @@ async def execute_locked() -> None:
         # Load device lists up-front so the total device count (×2: daily +
         # hourly) is known before polling — that is the progress bar's 100%.
         branch_devices: dict[int, list] = {}
+        # Widest span the two period types can ask for, so assignments that
+        # ended before the refresh window are dropped before they are counted.
+        contract_hour = backend_settings.get("CONTRACT_HOUR", 7)
+        span_from = datetime.combine(window_from, datetime.min.time())
+        span_to = datetime.combine(today, datetime.min.time()) + timedelta(
+            days=1, hours=contract_hour - 1
+        )
         async with async_session_factory() as session:
             for branch_id in branch_ids:
                 try:
                     branch_devices[branch_id] = await get_devices_for_branch_db(
-                        branch_id, session
+                        branch_id, session, range_from=span_from, range_to=span_to,
                     )
                 except Exception:
                     logger.exception(

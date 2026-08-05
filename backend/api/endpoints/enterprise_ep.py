@@ -22,7 +22,15 @@ from backend.db.engine import get_session
 from backend.db.dao.dpd_archive_dao import DpdArchiveDao
 from backend.db.dao.enterprise_dao import EnterpriseDao
 from backend.services import dpd_archive_refresh
-from backend.db.models.enterprise_model import EnterpriseRead, EnterpriseCreate, EnterpriseUpdate
+from backend.db.models.enterprise_model import (
+    Enterprise,
+    EnterpriseCreate,
+    EnterpriseDeviceIn,
+    EnterpriseDeviceRead,
+    EnterpriseRead,
+    EnterpriseUpdate,
+)
+from backend.services import device_history
 from backend.db.models.enterprise_models import (
     ArchiveSchedule,
     EnterpriseVolumeResponse,
@@ -30,11 +38,16 @@ from backend.db.models.enterprise_models import (
     EnterpriseMapping
 )
 from backend.services import enterprise_excel
-from backend.services.enterprise_mappings import get_devices_for_lines_db, load_mappings
+from backend.services.enterprise_mappings import (
+    get_assignments_for_device_db,
+    get_devices_for_lines_db,
+    load_mappings,
+)
 from backend.services.enterprise_volume_service import (
     aggregate_volumes,
     fetch_dpd_volumes,
     parse_date_range,
+    request_window,
 )
 
 logger = logging.getLogger(__name__)
@@ -211,6 +224,9 @@ class EnterpriseRouter:
 
         # Devices are resolved before the stream starts so validation and DB
         # problems still surface as ordinary HTTP errors, not 200 + error event.
+        # Assignments are narrowed by the SAME window the read uses, not by the
+        # bare dates — an hourly request runs past midnight of the last day.
+        win = request_window(date_from, date_to, period_type)
         line_remap = None
         none_volume_as_zero = False
         try:
@@ -220,24 +236,21 @@ class EnterpriseRouter:
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="line_id is required with virtual=true"
                     )
-                devices, line_remap = await resolve_virtual_devices(line_id, session)
+                devices, line_remap = await resolve_virtual_devices(
+                    line_id, session, *win,
+                )
                 none_volume_as_zero = True
             elif line_id:
-                devices = await get_devices_for_lines_db(line_id, session)
+                devices = await get_devices_for_lines_db(
+                    line_id, session, range_from=win[0], range_to=win[1],
+                )
                 if serNum is not None and chNum is not None:
                     devices = [d for d in devices if d["serNum"] == serNum and d["chNum"] == chNum]
             elif None not in (serNum, mfDev, typeDev, chNum):
-                ent = await EnterpriseDao(session).get_by_device(serNum, mfDev, typeDev, chNum)
-                devices = [] if not ent else [{
-                    "id": ent.id,
-                    "line_id": ent.line_id if ent.line_id is not None else ent.dpd_line_id,
-                    "branch_id": ent.branch_id,
-                    "serNum": ent.ser_num,
-                    "mfDev": ent.mf_dev,
-                    "typeDev": ent.type_dev,
-                    "chNum": ent.ch_num,
-                    "enterprise_name": ent.enterprise_name,
-                }]
+                devices = await get_assignments_for_device_db(
+                    serNum, mfDev, typeDev, chNum, session,
+                    range_from=win[0], range_to=win[1],
+                )
             else:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -441,27 +454,25 @@ class EnterpriseRouter:
                 detail="Provide line_id or serNum+chNum"
             )
 
+        win = request_window(date_from, date_to, period_type)
         try:
             if line_id:
-                devices = await get_devices_for_lines_db(line_id, session)
+                devices = await get_devices_for_lines_db(
+                    line_id, session, range_from=win[0], range_to=win[1],
+                )
                 if serNum is not None and chNum is not None:
                     devices = [d for d in devices if d["serNum"] == serNum and d["chNum"] == chNum]
             else:
-                # No line_id — lookup by full device identity
-                ent = await EnterpriseDao(session).get_by_device(serNum, mfDev, typeDev, chNum)
-                if not ent:
+                # No line_id — lookup by full device identity. A corrector that
+                # moved has one assignment per point it served, so the range
+                # decides which of them answer.
+                devices = await get_assignments_for_device_db(
+                    serNum, mfDev, typeDev, chNum, session,
+                    range_from=win[0], range_to=win[1],
+                )
+                if not devices:
                     logger.warning(f"No enterprise found: serNum={serNum} mfDev={mfDev} typeDev={typeDev} chNum={chNum}")
                     return []
-                devices = [{
-                    "id": ent.id,
-                    "line_id": ent.line_id if ent.line_id is not None else ent.dpd_line_id,
-                    "branch_id": ent.branch_id,
-                    "serNum": ent.ser_num,
-                    "mfDev": ent.mf_dev,
-                    "typeDev": ent.type_dev,
-                    "chNum": ent.ch_num,
-                    "enterprise_name": ent.enterprise_name,
-                }]
         except Exception as e:
             logger.error(f"Error loading enterprise mappings from DB: {e}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
@@ -562,39 +573,59 @@ async def list_enterprises(
 ):
     from sqlalchemy import asc
     from backend.db.models.enterprise_model import Enterprise
-    from backend.db.models.device_catalog_model import CorectorType, Manufacturer
 
-    stmt = (
-        select(
-            Enterprise,
-            CorectorType.type_dev,
-            CorectorType.model_name,
-            Manufacturer.mf_dev,
-            Manufacturer.short_name,
-        )
-        .outerjoin(CorectorType, Enterprise.corector_type_id == CorectorType.id)
-        .outerjoin(Manufacturer, CorectorType.manufacturer_id == Manufacturer.id)
-        .order_by(
-            asc(Enterprise.line_id.is_(None)),
-            asc(Enterprise.line_id),
-            asc(Enterprise.enterprise_name),
-        )
+    stmt = select(Enterprise).order_by(
+        asc(Enterprise.line_id.is_(None)),
+        asc(Enterprise.line_id),
+        asc(Enterprise.enterprise_name),
     )
     if branch_ids is not None:
         stmt = stmt.where(Enterprise.branch_id.in_(branch_ids))
 
-    rows = (await session.execute(stmt)).all()
+    dao = EnterpriseDao(session=session)
     result = []
-    for ent, ct_type_dev, ct_model, mfr_mf_dev, mfr_short in rows:
-        linked = ent.corector_type_id is not None
-        data = ent.model_dump()
-        # Surface EFFECTIVE device codes (catalog when linked, else legacy).
-        data["mf_dev"] = mfr_mf_dev if linked else ent.mf_dev
-        data["type_dev"] = ct_type_dev if linked else ent.type_dev
-        data["model_name"] = ct_model
-        data["manufacturer_short_name"] = mfr_short
-        result.append(EnterpriseRead(**data))
+    for ent in (await session.execute(stmt)).scalars().all():
+        result.append(EnterpriseRead(
+            **ent.model_dump(),
+            devices=[
+                EnterpriseDeviceRead(**d)
+                for d in await dao.get_history_resolved(ent.id)
+            ],
+        ))
     return result
+
+
+async def _validate_history(
+    dao: EnterpriseDao, enterprise_id: int, devices: List[EnterpriseDeviceIn]
+) -> None:
+    """Reject a history that cannot describe reality, with a message that says
+    what to fix rather than a raw constraint violation."""
+    try:
+        device_history.validate_point(
+            [{"installed_from": d.installed_from, "removed_at": d.removed_at}
+             for d in devices]
+        )
+    except device_history.HistoryError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    clashes = await dao.clashing_points(enterprise_id, devices)
+    if clashes:
+        names = ", ".join(f"«{name}»" for _id, name in clashes)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Прилад у цей самий час рахується за іншою точкою обліку: "
+                f"{names}. Вкажіть дату зняття, щоб періоди не перетиналися"
+            ),
+        )
+
+
+def _check_single_line(data) -> None:
+    if data.line_id is not None and data.dpd_line_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Вкажіть або фізичну лінію, або ДПД-лінію — не обидві",
+        )
 
 
 @_crud_router.post(
@@ -604,13 +635,20 @@ async def list_enterprises(
     summary="Create enterprise (DB)",
 )
 async def create_enterprise(data: EnterpriseCreate, session: AsyncSession = Depends(get_session)):
-    if data.line_id is not None and data.dpd_line_id is not None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Вкажіть або фізичну лінію, або ДПД-лінію — не обидві",
-        )
+    _check_single_line(data)
     dao = EnterpriseDao(session=session)
-    return await dao.create(data)
+    ent = Enterprise(**data.model_dump(exclude={"devices"}))
+    session.add(ent)
+    await session.flush()
+    await _validate_history(dao, ent.id, data.devices)
+    await dao.replace_history(ent.id, data.devices)
+    await session.commit()
+    return EnterpriseRead(
+        **ent.model_dump(),
+        devices=[
+            EnterpriseDeviceRead(**d) for d in await dao.get_history_resolved(ent.id)
+        ],
+    )
 
 
 @_crud_router.patch(
@@ -621,16 +659,29 @@ async def create_enterprise(data: EnterpriseCreate, session: AsyncSession = Depe
 async def update_enterprise(
     enterprise_id: int, data: EnterpriseUpdate, session: AsyncSession = Depends(get_session)
 ):
-    if data.line_id is not None and data.dpd_line_id is not None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Вкажіть або фізичну лінію, або ДПД-лінію — не обидві",
-        )
+    _check_single_line(data)
     dao = EnterpriseDao(session=session)
-    item = await dao.update(enterprise_id, data)
-    if not item:
+    ent = await dao.get_by_id(enterprise_id)
+    if not ent:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Enterprise not found")
-    return item
+
+    for field, value in data.model_dump(
+        exclude={"devices"}, exclude_unset=True
+    ).items():
+        setattr(ent, field, value)
+    # Absent `devices` leaves the history alone: a toggle of «Активний» must
+    # not rewrite when correctors stood where.
+    if data.devices is not None:
+        await _validate_history(dao, enterprise_id, data.devices)
+        await dao.replace_history(enterprise_id, data.devices)
+    await session.commit()
+    await session.refresh(ent)
+    return EnterpriseRead(
+        **ent.model_dump(),
+        devices=[
+            EnterpriseDeviceRead(**d) for d in await dao.get_history_resolved(ent.id)
+        ],
+    )
 
 
 @_crud_router.delete(
@@ -694,7 +745,8 @@ async def upload_enterprises(file: UploadFile = File(...), branch_id: Optional[i
     if not records:
         return {"imported": 0, "warnings": len(errors), "errors": errors}
 
-    returned_ids = await enterprise_excel.upsert_enterprises(records)
+    returned_ids, skipped = await enterprise_excel.upsert_enterprises(records)
+    errors = errors + skipped
     logger.info(
         f"Upserted {len(returned_ids)} enterprise records from Excel ({len(errors)} warnings)"
     )

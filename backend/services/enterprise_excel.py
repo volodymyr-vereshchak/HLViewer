@@ -11,9 +11,11 @@ import io
 import logging
 import re
 from collections import defaultdict
+from datetime import date, datetime
 from typing import Optional
 
 import openpyxl
+from openpyxl.comments import Comment
 from openpyxl.styles import Alignment, Font, PatternFill, Protection
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
@@ -23,14 +25,27 @@ from backend.db.dao.device_catalog_dao import CorectorTypeDao, ManufacturerDao
 from backend.db.dao.enterprise_dao import EnterpriseDao
 from backend.db.dao.line_dao import LineDao
 from backend.db.engine import async_session_factory
-from backend.db.models.enterprise_model import Enterprise
+from backend.db.models.enterprise_model import (
+    Enterprise, EnterpriseDevice, EPOCH_INSTALLED_FROM,
+)
+from backend.settings import backend_settings
 
 logger = logging.getLogger(__name__)
 
+# The two install columns are APPENDED, not slotted in next to the device
+# columns where they belong: the parser reads by position, so inserting them
+# mid-row would make every workbook exported before this change import its
+# «Так» into the date column. Old files simply leave them empty.
 COLUMNS = ["Підприємство", "Серійний номер", "Виробник", "Модель коректора",
            "Канал (0-based)", "Активний", "Увімкнений", "ID лінії (авто)",
-           "Лінія (вибір зі списку)"]
-COL_WIDTHS = [40, 18, 16, 24, 16, 12, 14, 14, 60]
+           "Лінія (вибір зі списку)", "Дата встановлення", "Година"]
+COL_WIDTHS = [40, 18, 16, 24, 16, 12, 14, 14, 60, 20, 12]
+
+# Column indices (1-based) that carry meaning outside the plain read loop.
+_COL_LINE_ID = 8
+_COL_LINE_LABEL = 9
+_COL_INSTALLED = 10
+_COL_HOUR = 11
 
 _HDR_FILL = "2E7D32"
 _HINT_FILL = "1B5E20"
@@ -213,6 +228,10 @@ def _add_dropdown_validations(ws, n_mfrs: int, n_models: int, n_lines: int):
         dv(f"'Довідник'!$J$2:$J${1 + n_lines}").add(f"I3:I{_DV_MAX_ROW}")
     dv('"Так,Ні"').add(f"F3:F{_DV_MAX_ROW}")
     dv('"Так,Ні"').add(f"G3:G{_DV_MAX_ROW}")
+    # The hour is its own column rather than a time inside the date cell:
+    # Excel hands datetimes back as a datetime here and a string there, while
+    # a plain 0–23 list is unambiguous however the sheet was filled in.
+    dv('"' + ",".join(str(h) for h in range(24)) + '"').add(f"K3:K{_DV_MAX_ROW}")
 
 
 def _add_line_id_formulas_and_protection(ws, n_lines: int):
@@ -222,13 +241,14 @@ def _add_line_id_formulas_and_protection(ws, n_lines: int):
     so the id column physically cannot be edited (user request: the id must
     not be selectable — pick the line by name, the id follows)."""
     unlocked = Protection(locked=False)
+    entry_cols = [c for c in range(1, len(COLUMNS) + 1) if c != _COL_LINE_ID]
     for row in range(3, _DV_MAX_ROW + 1):
         if n_lines:
-            ws.cell(row=row, column=8).value = (
+            ws.cell(row=row, column=_COL_LINE_ID).value = (
                 f"=IFERROR(INDEX('Довідник'!$D$2:$D${1 + n_lines},"
                 f"MATCH(I{row},'Довідник'!$J$2:$J${1 + n_lines},0)),\"\")"
             )
-        for col in (1, 2, 3, 4, 5, 6, 7, 9):  # everything except H
+        for col in entry_cols:  # everything except the derived line id
             ws.cell(row=row, column=col).protection = unlocked
     ws.protection.sheet = True
 
@@ -254,9 +274,11 @@ async def build_template_workbook() -> openpyxl.Workbook:
         "Так / Ні",
         "Заповнюється автоматично за вибраною лінією",
         "Оберіть лінію зі списку (або залиште порожньо)",
+        "Порожньо = від початку (весь архів на цьому приладі)",
+        "Порожньо = початок комерційної доби",
     ])
 
-    # example row (H is filled by the shared formula below)
+    # example row (the line id is filled by the shared formula below)
     ex_mfr = manufacturers[0].short_name if manufacturers else "РадмирТех"
     ex_model = corector_types[0].model_name if corector_types else "ВЕГА-1.01"
     ex_label = _line_label(*lines_ctx[0]) if lines_ctx else ""
@@ -279,9 +301,16 @@ async def build_export_workbook() -> openpyxl.Workbook:
     """Export the current enterprise table; device codes resolved through the
     corrector-type catalog when linked, legacy columns otherwise. Carries the
     same reference sheet and strict dropdowns as the template — exports are
-    routinely edited and re-imported."""
+    routinely edited and re-imported.
+
+    One row per POINT, carrying the corrector in force now. A point whose
+    history holds several correctors is marked in the hint column, so it is
+    visible that the file is not the whole story — replacements are entered in
+    the admin panel, and re-importing this file leaves them alone."""
     async with async_session_factory() as session:
-        enterprises = await EnterpriseDao(session).get_all()
+        dao = EnterpriseDao(session)
+        enterprises = await dao.get_all()
+        histories = {e.id: await dao.get_history_resolved(e.id) for e in enterprises}
         manufacturers = await ManufacturerDao(session).get_all()
         corector_types = await CorectorTypeDao(session).get_all()
         lines_ctx = await _lines_with_context(session)
@@ -306,31 +335,56 @@ async def build_export_workbook() -> openpyxl.Workbook:
         "Назва точки обліку", "Серійний номер", "Скорочена назва",
         "Модель з довідника", "0, 1, 2…", "Так / Ні", "Так / Ні",
         "ID лінії (ключ для імпорту)", "Назва лінії (довідково)",
+        "Порожньо = від початку", "Година встановлення",
     ])
 
-    for row_idx, ent in enumerate(enterprises, start=3):
+    row_idx = 2
+    for ent in enterprises:
+        row_idx += 1
+        history = histories.get(ent.id) or []
+        # The corrector in force now is the last entry of the history.
+        current = history[-1] if history else None
         # Prefer the corrector-type catalog (source of truth); fall back to the
-        # legacy mf_dev/type_dev codes for rows that aren't linked yet.
-        if ent.corector_type_id is not None and ent.corector_type_id in ct_by_id:
-            ct = ct_by_id[ent.corector_type_id]
+        # legacy mf_dev/type_dev codes for devices that aren't linked yet.
+        ct_id = current["corector_type_id"] if current else None
+        if ct_id is not None and ct_id in ct_by_id:
+            ct = ct_by_id[ct_id]
             model_name = ct.model_name
             mfr = mfr_by_id.get(ct.manufacturer_id)
             mfr_short = mfr.short_name if mfr else ""
+        elif current is not None:
+            mf_dev = current["mf_dev"]
+            mfr_short = mfr_by_mfdev.get(mf_dev, str(mf_dev) if mf_dev is not None else "")
+            mfr_id = mfr_id_by_mfdev.get(mf_dev)
+            model_name = ct_model.get((mfr_id, current["type_dev"]), "") if mfr_id else ""
         else:
-            mfr_short = mfr_by_mfdev.get(ent.mf_dev, str(ent.mf_dev) if ent.mf_dev is not None else "")
-            mfr_id = mfr_id_by_mfdev.get(ent.mf_dev)
-            model_name = ct_model.get((mfr_id, ent.type_dev), "") if mfr_id else ""
+            mfr_short, model_name = "", ""
         eff_line_id = ent.line_id if ent.line_id is not None else ent.dpd_line_id
         line_label = label_by_id.get(eff_line_id, "") if eff_line_id else ""
         ws.cell(row=row_idx, column=1, value=ent.enterprise_name)
-        ws.cell(row=row_idx, column=2, value=ent.ser_num)
+        ws.cell(row=row_idx, column=2, value=current["ser_num"] if current else None)
         ws.cell(row=row_idx, column=3, value=mfr_short)
         ws.cell(row=row_idx, column=4, value=model_name)
-        ws.cell(row=row_idx, column=5, value=ent.ch_num)
+        ws.cell(row=row_idx, column=5, value=current["ch_num"] if current else None)
         ws.cell(row=row_idx, column=6, value="Так" if ent.active else "Ні")
         ws.cell(row=row_idx, column=7, value="Так" if ent.enabled else "Ні")
-        # H is written by the shared formula pass; the label drives the id.
-        ws.cell(row=row_idx, column=9, value=line_label)
+        # The line id is written by the shared formula pass; the label drives it.
+        ws.cell(row=row_idx, column=_COL_LINE_LABEL, value=line_label)
+        if current is not None and current["installed_from"] > EPOCH_INSTALLED_FROM:
+            # A point that has always had this corrector exports a blank date —
+            # which is exactly what re-importing it should mean.
+            ws.cell(row=row_idx, column=_COL_INSTALLED,
+                    value=current["installed_from"].strftime("%d.%m.%Y"))
+            ws.cell(row=row_idx, column=_COL_HOUR,
+                    value=current["installed_from"].hour)
+        if len(history) > 1:
+            cell = ws.cell(row=row_idx, column=1)
+            cell.comment = Comment(
+                f"Історія з {len(history)} приладів — тут показано лише "
+                f"поточний. Заміни редагуються в адмінці; повторний імпорт "
+                f"цього файлу історію не змінює.",
+                "HLViewer",
+            )
 
     n_mfrs, n_models, n_lines = _build_reference_sheet(
         wb, manufacturers, corector_types, lines_ctx
@@ -352,6 +406,58 @@ def _parse_bool(val, default=True) -> bool:
     if val is None:
         return default
     return str(val).strip().lower() not in ("ні", "нет", "no", "false", "0", "н")
+
+
+_DATE_FORMATS = ("%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y", "%d.%m.%y")
+
+
+def _parse_installed_from(date_cell, hour_cell):
+    """(installed_from, error) for the install columns.
+
+    An empty date means "since forever": the point's whole archive belongs to
+    this corrector, which is exactly how every row behaved before the history
+    existed — that is what keeps older workbooks importing unchanged.
+
+    An empty hour means the start of the commercial day, NOT midnight. With
+    00:00 the hourly records from midnight to CONTRACT_HOUR of that date —
+    which belong to the PREVIOUS commercial day, and so to whatever stood
+    there before — would be handed to the new corrector.
+    """
+    if date_cell is None or not str(date_cell).strip():
+        return EPOCH_INSTALLED_FROM, None
+
+    if isinstance(date_cell, datetime):
+        parsed = date_cell
+    elif isinstance(date_cell, date):
+        parsed = datetime.combine(date_cell, datetime.min.time())
+    else:
+        raw = str(date_cell).strip().split(" ")[0]
+        parsed = None
+        for fmt in _DATE_FORMATS:
+            try:
+                parsed = datetime.strptime(raw, fmt)
+                break
+            except ValueError:
+                continue
+        if parsed is None:
+            return None, f"некоректна дата встановлення '{date_cell}'"
+
+    if hour_cell is not None and str(hour_cell).strip():
+        try:
+            hour = int(float(str(hour_cell).strip()))
+        except (TypeError, ValueError):
+            return None, f"некоректна година встановлення '{hour_cell}'"
+        if not 0 <= hour <= 23:
+            return None, f"година встановлення поза межами 0–23: '{hour_cell}'"
+    elif parsed.hour or parsed.minute:
+        # The date cell carried a time of its own and no hour was given.
+        hour = parsed.hour
+    else:
+        hour = backend_settings.get("CONTRACT_HOUR", 7)
+
+    # Hour precision: DPD's hourly records land on the hour, so a replacement
+    # cannot be lined up any finer.
+    return parsed.replace(hour=hour, minute=0, second=0, microsecond=0), None
 
 
 async def parse_upload(content: bytes, branch_id: Optional[int]) -> tuple[list[dict], list[str]]:
@@ -395,9 +501,10 @@ async def parse_upload(content: bytes, branch_id: Optional[int]) -> tuple[list[d
         if not row or not any(row):
             continue
 
-        row_padded = (list(row) + [None] * 9)[:9]
+        row_padded = (list(row) + [None] * len(COLUMNS))[:len(COLUMNS)]
         (enterprise_name, ser_num, mfr_str, model_str, ch_num,
-         active_str, enabled_str, line_key, _line_name_info) = row_padded
+         active_str, enabled_str, line_key, _line_name_info,
+         installed_cell, hour_cell) = row_padded
 
         if not enterprise_name:
             errors.append(f"Рядок {row_idx}: порожня назва — пропущено")
@@ -466,10 +573,18 @@ async def parse_upload(content: bytes, branch_id: Optional[int]) -> tuple[list[d
                 else:
                     errors.append(f"Рядок {row_idx}: лінія '{key}' не знайдена — line_id=null")
 
+        installed_from, install_error = _parse_installed_from(
+            installed_cell, hour_cell
+        )
+        if install_error:
+            errors.append(f"Рядок {row_idx}: {install_error}")
+            continue
+
         # The resolved id may be a physical or a DPD line (shared id space) —
         # route it into the matching column; the other one stays NULL.
         is_dpd = line_id in dpd_ids
         records.append({
+            "row": row_idx,
             "enterprise_name": str(enterprise_name).strip(),
             "branch_id": branch_id,
             "ser_num": ser_num_int,
@@ -477,6 +592,7 @@ async def parse_upload(content: bytes, branch_id: Optional[int]) -> tuple[list[d
             # (the resolved CorectorType) instead of the raw mf_dev/type_dev codes.
             "corector_type_id": ct.id,
             "ch_num": ch_num_int,
+            "installed_from": installed_from,
             "active": _parse_bool(active_str),
             "enabled": _parse_bool(enabled_str),
             "line_id": None if is_dpd else line_id,
@@ -486,25 +602,90 @@ async def parse_upload(content: bytes, branch_id: Optional[int]) -> tuple[list[d
     return records, errors
 
 
-async def upsert_enterprises(records: list[dict]) -> list[int]:
-    """Bulk upsert parsed records by device identity (uq_enterprise_device_ct).
-    Returns the ids of the affected rows."""
-    from sqlalchemy.dialects.postgresql import insert as pg_insert
+async def upsert_enterprises(records: list[dict]) -> tuple[list[int], list[str]]:
+    """Write parsed rows into points and their device history.
+
+    The point is found BY ITS DEVICE, through the history — the same key the
+    old ON CONFLICT (uq_enterprise_device_ct) used, only now one indirection
+    deeper. So "export, edit, import back" keeps working, and a file is still
+    matched without needing an id column nobody has when starting from zero.
+
+    A row never rewrites history it does not describe:
+      - device known → the point's fields and THAT entry's install moment are
+        updated, other entries are left alone, so a replacement entered in the
+        admin panel survives a re-import of an older file;
+      - device unknown but the branch already has a point with this name → the
+        row is skipped with an explanation. Silently creating a second point
+        would split the same consumer's archive in two;
+      - nothing matches → a new point with a single history entry.
+
+    Returns (affected ids, warnings).
+    """
+    from sqlalchemy import func
+
+    ids: list[int] = []
+    warnings: list[str] = []
 
     async with async_session_factory() as session:
-        stmt = pg_insert(Enterprise).values(records)
-        stmt = stmt.on_conflict_do_update(
-            constraint='uq_enterprise_device_ct',
-            set_={
-                'enterprise_name': stmt.excluded.enterprise_name,
-                'branch_id': stmt.excluded.branch_id,
-                'line_id': stmt.excluded.line_id,
-                'dpd_line_id': stmt.excluded.dpd_line_id,
-                'active': stmt.excluded.active,
-                'enabled': stmt.excluded.enabled,
-            }
-        ).returning(Enterprise.id)
+        dao = EnterpriseDao(session)
+        for rec in records:
+            row_no = rec.get("row")
+            device = await dao.find_device(
+                rec["ser_num"], rec["corector_type_id"], rec["ch_num"]
+            )
+            entry = None
+            if device is not None:
+                entry = (await session.execute(
+                    select(EnterpriseDevice)
+                    .where(EnterpriseDevice.device_id == device.id)
+                    .order_by(EnterpriseDevice.installed_from.desc())
+                    .limit(1)
+                )).scalars().first()
 
-        result = await session.execute(stmt)
+            fields = {k: rec[k] for k in (
+                "enterprise_name", "branch_id", "line_id", "dpd_line_id",
+                "active", "enabled",
+            )}
+
+            if entry is not None:
+                ent = await dao.get_by_id(entry.enterprise_id)
+                for key, value in fields.items():
+                    setattr(ent, key, value)
+                entry.installed_from = rec["installed_from"]
+                ids.append(ent.id)
+                continue
+
+            # No such device anywhere. If the branch already knows a point by
+            # this name, the row is describing a corrector swap — and a swap
+            # needs a date and a decision about the old device, which only the
+            # admin panel can express.
+            name = rec["enterprise_name"]
+            existing = (await session.execute(
+                select(Enterprise)
+                .where(func.lower(Enterprise.enterprise_name) == name.lower())
+                .where(Enterprise.branch_id == rec["branch_id"])
+            )).scalars().first()
+            if existing is not None:
+                warnings.append(
+                    f"Рядок {row_no}: прилад №{rec['ser_num']} не збігається з "
+                    f"жодним приладом точки «{name}» — додайте заміну з датою "
+                    f"в адмінці. Рядок пропущено"
+                )
+                continue
+
+            ent = Enterprise(**fields)
+            session.add(ent)
+            await session.flush()
+            device = await dao.get_or_create_device(
+                rec["ser_num"], rec["corector_type_id"], rec["ch_num"]
+            )
+            session.add(EnterpriseDevice(
+                enterprise_id=ent.id,
+                device_id=device.id,
+                installed_from=rec["installed_from"],
+            ))
+            await session.flush()
+            ids.append(ent.id)
+
         await session.commit()
-        return [row[0] for row in result]
+    return ids, warnings

@@ -275,8 +275,15 @@ class BasicDao:
     async def delete_item(self, item_id: int):
         db_item = await self.get_by_id(item_id)
         if db_item:
-            await self.session.delete(db_item)
-            await self.session.commit()
+            try:
+                await self.session.delete(db_item)
+                await self.session.commit()
+            except IntegrityError as e:
+                # A row something else still points at (ON DELETE RESTRICT).
+                # Surfaced like the create/update conflicts so the caller can
+                # answer with a reason instead of a Postgres traceback.
+                await self.session.rollback()
+                raise DatabaseIntegrityError(str(e.orig)) from e
             return True
         return False
 

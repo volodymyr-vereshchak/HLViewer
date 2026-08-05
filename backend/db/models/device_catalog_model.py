@@ -3,12 +3,23 @@ Device catalog: manufacturers and corrector models (previously hardcoded in ente
 """
 from typing import Optional
 from sqlalchemy import BigInteger
-from sqlmodel import SQLModel, Field
+from sqlmodel import SQLModel, Field, UniqueConstraint
 
 
 class Manufacturer(SQLModel, table=True):
     """Завод-виробник коректора. mf_dev — код у системі DPD."""
     __tablename__ = "manufacturer"
+    # Names match the constraints the migration created — the endpoint reports
+    # a conflict by looking for them in the error text, and alembic must not
+    # see these as new. Declared here so a schema built from the models (which
+    # is what the tests do) also enforces them: a second manufacturer with the
+    # same mf_dev would make device addressing ambiguous, since (mf_dev,
+    # type_dev) is exactly what DPD is asked by.
+    __table_args__ = (
+        UniqueConstraint("short_name", name="uq_manufacturer_short_name"),
+        UniqueConstraint("full_name", name="uq_manufacturer_full_name"),
+        UniqueConstraint("mf_dev", name="uq_manufacturer_mf_dev"),
+    )
 
     id: Optional[int] = Field(default=None, primary_key=True, sa_type=BigInteger)
     short_name: str = Field(index=True)   # display name: РадмирТех, Укргазтех…
@@ -40,6 +51,11 @@ class ManufacturerUpdate(SQLModel):
 class CorectorType(SQLModel, table=True):
     """Тип/модель коректора. type_dev — код у системі DPD."""
     __tablename__ = "corector_type"
+    __table_args__ = (
+        UniqueConstraint(
+            "manufacturer_id", "model_name", name="uq_corector_type_mfr_model"
+        ),
+    )
 
     id: Optional[int] = Field(default=None, primary_key=True, sa_type=BigInteger)
     manufacturer_id: int = Field(

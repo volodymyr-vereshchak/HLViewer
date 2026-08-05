@@ -4,6 +4,7 @@ CRUD endpoints for device manufacturers and corrector model types.
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 from backend.db.dao.custom_exceptions import DatabaseIntegrityError
@@ -17,7 +18,9 @@ from backend.db.models.device_catalog_model import (
 )
 from backend.api.endpoints.auth_ep import get_current_user, require_admin
 from backend.db.models.app_user_model import AppUser
-from backend.db.preload_db.preload_device_catalog import preload as _preload_catalog
+from backend.db.preload_db.preload_device_catalog import (
+    CatalogSync, preload as _preload_catalog,
+)
 from backend.db.preload_db.export_device_catalog import export as _export_catalog
 
 router = APIRouter(prefix="/device-catalog", tags=["device_catalog"], dependencies=[Depends(get_current_user)])
@@ -66,7 +69,16 @@ async def update_manufacturer(
 
 @router.delete("/manufacturers/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_manufacturer(item_id: int, session: AsyncSession = Depends(get_session)):
-    ok = await ManufacturerDao(session).delete(item_id)
+    try:
+        ok = await ManufacturerDao(session).delete(item_id)
+    except DatabaseIntegrityError:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Виробника не можна видалити: на його моделі посилаються "
+                "прилади. Спершу приберіть або переназначте ці моделі"
+            ),
+        )
     if not ok:
         raise HTTPException(status_code=404, detail="Manufacturer not found")
 
@@ -106,7 +118,19 @@ async def update_corector_type(
 
 @router.delete("/corector-types/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_corector_type(item_id: int, session: AsyncSession = Depends(get_session)):
-    ok = await CorectorTypeDao(session).delete(item_id)
+    try:
+        ok = await CorectorTypeDao(session).delete(item_id)
+    except DatabaseIntegrityError:
+        # dpd_device and dpd_line_device reference the type with RESTRICT: it
+        # is the identity a corrector is polled by, so dropping it would leave
+        # devices unaddressable and their archives orphaned.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Модель не можна видалити: на неї посилаються прилади "
+                "підприємств або ліній ДПД"
+            ),
+        )
     if not ok:
         raise HTTPException(status_code=404, detail="Corector type not found")
 
@@ -125,16 +149,55 @@ async def export_preload_json(
     }}
 
 
+def _sync_message(report: CatalogSync) -> str:
+    if not report.changed:
+        return "Каталог уже збігається з файлом — змін немає"
+    parts = []
+    if report.added_manufacturers:
+        parts.append(f"додано виробників: {report.added_manufacturers}")
+    if report.renamed_manufacturers:
+        parts.append(f"перейменовано виробників: {report.renamed_manufacturers}")
+    if report.added_models:
+        parts.append(f"додано моделей: {report.added_models}")
+    return "Каталог оновлено — " + ", ".join(parts)
+
+
 @router.post("/preload", status_code=status.HTTP_200_OK)
 async def preload_device_catalog(force: bool = False, session: AsyncSession = Depends(get_session)):
     if force:
-        # Clear existing data before reload
-        existing_types = await session.execute(select(CorectorType))
-        for ct in existing_types.scalars().all():
-            await session.delete(ct)
-        existing_mfr = await session.execute(select(Manufacturer))
-        for mfr in existing_mfr.scalars().all():
-            await session.delete(mfr)
-        await session.commit()
-    await _preload_catalog(session)
-    return {"message": "Каталог передзавантажено" if force else "Каталог оновлено (додано відсутні записи, наявні збережено)"}
+        # Clear existing data before reload. The whole block is guarded, not
+        # just the commit: deleting the types makes the next SELECT autoflush,
+        # so the violation surfaces before any commit is reached.
+        try:
+            existing_types = await session.execute(select(CorectorType))
+            for ct in existing_types.scalars().all():
+                await session.delete(ct)
+            existing_mfr = await session.execute(select(Manufacturer))
+            for mfr in existing_mfr.scalars().all():
+                await session.delete(mfr)
+            await session.commit()
+        except IntegrityError:
+            # Models are referenced by dpd_device / dpd_line_device with
+            # RESTRICT. Wiping the catalog would orphan real devices, so the
+            # DB refuses — say why instead of returning a 500. The normal
+            # merge below handles renames anyway (viz. mf_dev), so a wipe is
+            # almost never what the admin actually needs.
+            await session.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Каталог не можна перезаписати: на його моделі посилаються "
+                    "прилади підприємств або ліній ДПД. Зніміть позначку "
+                    "«перезаписати» — злиття оновить назви виробників за кодом "
+                    "mf_dev і додасть відсутні моделі"
+                ),
+            )
+    report = await _preload_catalog(session)
+    message = "Каталог передзавантажено" if force else _sync_message(report)
+    return {
+        "message": message,
+        "added_manufacturers": report.added_manufacturers,
+        "renamed_manufacturers": report.renamed_manufacturers,
+        "added_models": report.added_models,
+        "warnings": report.warnings,
+    }

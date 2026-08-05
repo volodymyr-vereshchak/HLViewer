@@ -18,11 +18,18 @@ refreshes the last DPD_ARCHIVE_WINDOW_DAYS twice a day (dpd_archive_refresh);
 reads inside that window never touch the DPD API. Ranges older than a device's
 coverage (dpd_device_coverage.loaded_from) are backfilled from DPD on demand,
 per device, then served from the DB like everything else.
+
+v5 (device history): the archive is keyed by the CORRECTOR, not by the
+metering point. Everything here works in ASSIGNMENTS — "device D stood at
+point E from … to …" — one per history entry. Polling, storing and reading all
+happen per window, so a replaced corrector's data can never land in the
+previous device's periods, and a corrector moved to another point is polled
+once and read by both.
 """
 
 import logging
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from time import perf_counter
 from typing import Callable, Dict, List, Optional
 
@@ -31,6 +38,7 @@ from sqlalchemy import text
 from backend.db.engine import async_session_factory
 from backend.db.dao.dpd_archive_dao import DpdArchiveDao
 from backend.db.models.enterprise_models import DeviceVolume, EnterpriseVolumeResponse
+from backend.services import device_history
 from backend.services.dpd_client import DPDClient
 from backend.services.enterprise_mappings import volume_field_for_device
 from backend.settings import backend_settings
@@ -54,11 +62,15 @@ def pick_branch_id(devices: List[Dict]) -> Optional[int]:
     return next((d["branch_id"] for d in devices if d.get("branch_id")), None)
 
 
-def _request_window(date_from: datetime, date_to: datetime, period_type: str):
+def request_window(date_from: datetime, date_to: datetime, period_type: str):
     """The stamp window a from/to date range denotes. Both our endpoint and
     DPD take bare dates; for hourly data a date is a commercial day, so
     from=D1&to=D2 means [D1 CONTRACT_HOUR .. D2+1 CONTRACT_HOUR-1h] — exactly
-    what DPD returns for that range. Daily: calendar days D1..D2."""
+    what DPD returns for that range. Daily: calendar days D1..D2.
+
+    Public because callers must narrow device assignments by the SAME window
+    the read uses: filtering by the bare dates would drop a corrector
+    installed at 14:00 on the last requested day."""
     if period_type == "hourly":
         contract_hour = backend_settings.get("CONTRACT_HOUR", 7)
         start = datetime.combine(date_from.date(), datetime.min.time())
@@ -77,10 +89,6 @@ def _has_data(record: Dict) -> bool:
     """False for DPD's skeleton records: a stamp with both volume fields null
     carries no data (yet). Skeletons are never stored in the archive."""
     return record.get("dvstAlwrk") is not None or record.get("dvwrkAlwrk") is not None
-
-
-def _device_key(device: Dict) -> tuple:
-    return (device["serNum"], device["mfDev"], device["typeDev"], device["chNum"])
 
 
 def _record_stamp(record: Dict, period_type: str):
@@ -121,18 +129,24 @@ async def fetch_dpd_volumes(
     branch_id, ValueError when the branch has no/incomplete credentials
     (DPDClient.for_branch), and whatever the HTTP client raises when the DPD
     API is unreachable mid-backfill."""
-    window_from, window_to = _request_window(date_from, date_to, period_type)
+    window_from, window_to = request_window(date_from, date_to, period_type)
     requested_from = date_from.date()
-    ent_by_id: Dict[int, Dict] = {
-        d["id"]: d for d in devices if d.get("id") is not None
+    # Assignments, keyed by history entry: the same corrector may appear twice
+    # (two metering points, two windows), so the identity quadruple cannot key
+    # anything here.
+    by_assignment: Dict[int, Dict] = {
+        d["assignment_id"]: d for d in devices if d.get("assignment_id") is not None
     }
-    if len(ent_by_id) < len(devices):
+    if len(by_assignment) < len(devices):
         logger.warning(
-            f"{len(devices) - len(ent_by_id)} device(s) without enterprise id "
-            f"skipped in fetch_dpd_volumes"
+            f"{len(devices) - len(by_assignment)} device(s) without an "
+            f"assignment id skipped in fetch_dpd_volumes"
         )
-    if not ent_by_id:
+    if not by_assignment:
         return []
+    # Coverage and backfill are per DEVICE — a corrector shared by two points
+    # over time is fetched once and read by both.
+    device_ids = sorted({d["device_id"] for d in by_assignment.values()})
 
     async with async_session_factory() as session:
         async with session.begin():
@@ -148,18 +162,18 @@ async def fetch_dpd_volumes(
                 # Fresh poll of the full range for every device; the archive
                 # both caches the result and covers devices that failed.
                 spans = {
-                    ent_id: (requested_from, date_to.date())
-                    for ent_id in ent_by_id
+                    device_id: (requested_from, date_to.date())
+                    for device_id in device_ids
                 }
                 if events_cb is not None:
                     events_cb({"type": "progress", "done": 0,
-                               "total": len(spans)})
+                               "total": len(by_assignment)})
                     events_cb({"type": "status", "phase": "waiting"})
                 await _lock_backfill(session, spans, period_type)
                 try:
                     await _run_backfill(
-                        session, dao, ent_by_id, spans, period_type,
-                        requested_from, events_cb,
+                        session, dao, by_assignment, spans, period_type,
+                        requested_from, date_to, events_cb,
                     )
                 except Exception:
                     logger.exception(
@@ -167,7 +181,7 @@ async def fetch_dpd_volumes(
                     )
             else:
                 backfill = await _plan_backfill(
-                    dao, ent_by_id, period_type, requested_from, date_to
+                    dao, device_ids, period_type, requested_from, date_to
                 )
                 if events_cb is not None:
                     events_cb({"type": "progress", "done": 0, "total": len(backfill)})
@@ -177,32 +191,43 @@ async def fetch_dpd_volumes(
                     await _lock_backfill(session, backfill, period_type)
                     # A concurrent request may have backfilled while we waited.
                     backfill = await _plan_backfill(
-                        dao, {e: ent_by_id[e] for e in backfill}, period_type,
-                        requested_from, date_to,
+                        dao, list(backfill), period_type, requested_from, date_to,
                     )
                     if backfill:
                         await _run_backfill(
-                            session, dao, ent_by_id, backfill, period_type,
-                            requested_from, events_cb,
+                            session, dao, by_assignment, backfill, period_type,
+                            requested_from, date_to, events_cb,
                         )
             if events_cb is not None:
                 events_cb({"type": "status", "phase": "aggregating"})
 
-            # The DB is the sole source for the response.
-            rows = await dao.load_range(
-                list(ent_by_id), period_type, window_from, window_to
-            )
-            await dao.touch_accessed(
-                list(ent_by_id), period_type, window_from, window_to
-            )
+            # The DB is the sole source for the response. Each assignment reads
+            # its own device's archive clipped to the window it was in force
+            # for, so a stretch no device covered simply yields nothing.
+            read_windows = []
+            for assignment_id, a in by_assignment.items():
+                span = _read_window(a, window_from, window_to, period_type)
+                if span is None:
+                    continue
+                read_windows.append({
+                    "tag": assignment_id, "device_id": a["device_id"],
+                    "win_from": span[0], "win_to": span[1],
+                })
+            rows = await dao.load_windows(period_type, read_windows)
+            await dao.touch_windows(period_type, read_windows)
 
     records: List[Dict] = []
     for row in rows:
-        device = ent_by_id.get(row["enterprise_id"])
+        device = by_assignment.get(row["tag"])
         if device is None:
             continue
         stamp = row["stamp"]
         records.append({
+            # The assignment the record belongs to. Consumers resolve the
+            # device (and therefore the volume field) through it, so a point
+            # whose corrector changed mid-range reads each stretch with the
+            # model that actually measured it.
+            "tag": row["tag"],
             "serNum": device["serNum"],
             "mfDev": device["mfDev"],
             "typeDev": device["typeDev"],
@@ -219,25 +244,56 @@ async def fetch_dpd_volumes(
     return records
 
 
+def _read_window(assignment: Dict, window_from, window_to, period_type):
+    """The stamp span an assignment contributes to a request, or None.
+
+    Hourly rows carry the moment they describe, so the window applies as is.
+
+    Daily rows are stored at midnight but describe the commercial day that
+    OPENS at CONTRACT_HOUR, so the overlap is worked out in attribution space
+    and mapped back onto the stored stamps afterwards.
+    """
+    win_from, win_to = assignment["win_from"], assignment["win_to"]
+    if period_type == "hourly":
+        return device_history.clip(win_from, win_to, window_from, window_to)
+
+    shift = timedelta(hours=backend_settings.get("CONTRACT_HOUR", 7))
+    span = device_history.clip(
+        win_from, win_to, window_from + shift, window_to + shift
+    )
+    if span is None:
+        return None
+    start, end = span[0] - shift, span[1] - shift
+    # A corrector fitted part-way through a commercial day does not own that
+    # day: it had already opened under the previous device, which is what the
+    # attribution rule says and what the write path stores. Rounding the start
+    # up is what keeps the changeover day from being counted at both devices.
+    if start.time() != time.min:
+        start = datetime.combine(start.date() + timedelta(days=1), time.min)
+        if start > end:
+            return None
+    return start, end
+
+
 async def _plan_backfill(
     dao: DpdArchiveDao,
-    ent_by_id: Dict[int, Dict],
+    device_ids: List[int],
     period_type: str,
     requested_from: date,
     date_to: datetime,
 ) -> Dict[int, tuple]:
-    """enterprise_id -> (span_from_date, span_to_date) for devices whose
+    """device_id -> (span_from_date, span_to_date) for devices whose
     coverage does not reach requested_from. Never-fetched devices (added
     after the last scheduler run, or after a cache wipe) backfill the whole
     requested range; covered devices only the missing head."""
-    coverage = await dao.get_coverage(list(ent_by_id), period_type)
+    coverage = await dao.get_coverage(list(device_ids), period_type)
     spans: Dict[int, tuple] = {}
-    for ent_id in ent_by_id:
-        loaded_from = coverage.get(ent_id)
+    for device_id in device_ids:
+        loaded_from = coverage.get(device_id)
         if loaded_from is None:
-            spans[ent_id] = (requested_from, date_to.date())
+            spans[device_id] = (requested_from, date_to.date())
         elif requested_from < loaded_from:
-            spans[ent_id] = (requested_from, loaded_from - timedelta(days=1))
+            spans[device_id] = (requested_from, loaded_from - timedelta(days=1))
     return spans
 
 
@@ -246,7 +302,7 @@ async def _lock_backfill(session, backfill: Dict[int, tuple], period_type: str):
     same devices serialize (the follower then finds coverage already lowered
     and skips), disjoint ones run in parallel. Backfills are rare — no
     registry needed."""
-    keys = sorted(f"dpd-backfill-{ent_id}-{period_type}" for ent_id in backfill)
+    keys = sorted(f"dpd-backfill-{device_id}-{period_type}" for device_id in backfill)
     await session.execute(
         text(
             "SELECT pg_advisory_xact_lock(hashtextextended(k, 0)) "
@@ -259,17 +315,21 @@ async def _lock_backfill(session, backfill: Dict[int, tuple], period_type: str):
 async def _run_backfill(
     session,
     dao: DpdArchiveDao,
-    ent_by_id: Dict[int, Dict],
+    by_assignment: Dict[int, Dict],
     backfill: Dict[int, tuple],
     period_type: str,
     requested_from: date,
+    date_to: datetime,
     events_cb: Optional[Callable[[Dict], None]],
 ) -> None:
-    poll_devices = [ent_by_id[ent_id] for ent_id in backfill]
-    branch_id = pick_branch_id(poll_devices)
-    if branch_id is None:
-        raise LookupError("Could not determine branch for requested lines")
+    """Poll DPD for the devices in `backfill` and store what comes back.
 
+    One request per ASSIGNMENT, not per device: a corrector is asked only for
+    the stretch it stood at the point being served, so a device fetched for
+    two points fetches each window separately. Records are attributed by the
+    tag the client echoes back — the identity quadruple can no longer tell two
+    windows of the same corrector apart.
+    """
     contract_hour = backend_settings.get("CONTRACT_HOUR", 7)
 
     def span_bounds(span_from: date, span_to: date):
@@ -288,14 +348,35 @@ async def _run_backfill(
             datetime.combine(span_to, datetime.min.time()),
         )
 
-    device_ranges = {
-        _device_key(ent_by_id[ent_id]): span_bounds(*span)
-        for ent_id, span in backfill.items()
-    }
-    poll_from = min(r[0] for r in device_ranges.values())
-    poll_to = max(r[1] for r in device_ranges.values())
+    poll_devices = []
+    for assignment_id, a in by_assignment.items():
+        span = backfill.get(a["device_id"])
+        if span is None:
+            continue
+        # Intersect the device's missing span with the window this assignment
+        # was in force for: asking outside it would pull another point's gas.
+        dev_from, dev_to = span_bounds(*span)
+        clipped = device_history.clip(
+            a["win_from"], a["win_to"], dev_from, dev_to
+        )
+        if clipped is None:
+            continue
+        poll_devices.append({**a, "tag": assignment_id, "range": clipped})
+
+    if not poll_devices:
+        # Nothing overlaps — still record that the span was asked for, so the
+        # empty stretch is not re-planned on every request.
+        await dao.lower_loaded_from(list(backfill), period_type, requested_from)
+        return
+
+    branch_id = pick_branch_id(poll_devices)
+    if branch_id is None:
+        raise LookupError("Could not determine branch for requested lines")
+
+    poll_from = min(d["range"][0] for d in poll_devices)
+    poll_to = max(d["range"][1] for d in poll_devices)
     logger.info(
-        f"DPD archive: backfilling {len(poll_devices)} devices within "
+        f"DPD archive: backfilling {len(poll_devices)} device windows within "
         f"{poll_from}..{poll_to} ({period_type})"
     )
 
@@ -311,12 +392,10 @@ async def _run_backfill(
         poll_from,
         poll_to,
         type_request=period_type,
-        device_ranges=device_ranges,
         progress_cb=progress_cb,
     )
     poll_secs = perf_counter() - t_poll
 
-    ent_by_quad = {_device_key(d): ent_id for ent_id, d in ent_by_id.items()}
     rows = []
     for record in fresh_records:
         if not _has_data(record):
@@ -324,22 +403,32 @@ async def _run_backfill(
         stamp = _record_stamp(record, period_type)
         if stamp is None:
             continue
-        ent_id = ent_by_quad.get((record["serNum"], record["mfDev"],
-                                  record["typeDev"], record["chNum"]))
-        if ent_id is None:
+        assignment = by_assignment.get(record.get("tag"))
+        if assignment is None:
+            continue
+        stamp_dt = (
+            stamp if isinstance(stamp, datetime)
+            else datetime.combine(stamp, datetime.min.time())
+        )
+        # DPD pads its answer to whole dates, so a window that opens mid-day
+        # comes back with hours that belong to the previous device. Drop them.
+        at = device_history.attribution_stamp(stamp_dt, period_type)
+        if not device_history.covers(
+            assignment["win_from"], assignment["win_to"], at
+        ):
             continue
         rows.append({
-            "enterprise_id": ent_id,
-            "stamp": stamp if isinstance(stamp, datetime)
-            else datetime.combine(stamp, datetime.min.time()),
+            "device_id": assignment["device_id"],
+            "stamp": stamp_dt,
             "dvst_alwrk": record.get("dvstAlwrk"),
             "dvwrk_alwrk": record.get("dvwrkAlwrk"),
             "press": record.get("press"),
             "temper": record.get("temper"),
             "press_unit": normalize_press_unit(record.get("pressUnit")),
         })
-    # Deduplicate by (enterprise, stamp) — DPD can repeat a record.
-    unique = {(r["enterprise_id"], r["stamp"]): r for r in rows}
+    # Deduplicate by (device, stamp) — DPD can repeat a record, and two
+    # assignments of one corrector can overlap at a window boundary.
+    unique = {(r["device_id"], r["stamp"]): r for r in rows}
     await dao.upsert_records(period_type, list(unique.values()))
     # The whole span was ASKED, even where DPD had nothing: coverage lowers
     # to the requested start so the empty stretches are not re-asked forever.
@@ -386,21 +475,17 @@ def aggregate_volumes(
 ) -> List[EnterpriseVolumeResponse]:
     """Group raw DPD records into per-(line_id, period) responses."""
     t_start = perf_counter()
+    # Keyed by assignment: a record's device is whichever one was in force at
+    # its stamp, which is also what decides the volume field below.
     device_map = {
-        (d["serNum"], d["mfDev"], d["typeDev"], d["chNum"]): d for d in devices
+        d["assignment_id"]: d for d in devices if d.get("assignment_id") is not None
     }
     aggregated = defaultdict(lambda: {"total": 0.0, "devices": []})
 
     for record in volumes_data:
-        device_key = (
-            record.get("serNum"),
-            record.get("mfDev"),
-            record.get("typeDev"),
-            record.get("chNum"),
-        )
-        device_info = device_map.get(device_key)
+        device_info = device_map.get(record.get("tag"))
         if not device_info:
-            logger.warning(f"Device not found in mappings: {device_key}")
+            logger.warning(f"Record with unknown assignment: {record.get('tag')}")
             continue
 
         # A physical line reports to every requested line it belongs to:

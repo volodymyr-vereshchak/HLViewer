@@ -1,8 +1,8 @@
 {
   "manufacturers": [
     {
-      "short_name": "РадмирТех",
-      "full_name": "РадмирТех ТОВ СП, м. Харків",
+      "short_name": "Радміртех",
+      "full_name": "Радміртех ТОВ СП, м. Харків",
       "mf_dev": 1,
       "models": [
         {
@@ -97,6 +97,10 @@
         {
           "model_name": "ТАНДЕМ-ТР",
           "type_dev": 1
+        },
+        {
+          "model_name": " Тандем-Т",
+          "type_dev": 2
         },
         {
           "model_name": "ТАНДЕМ-Т",

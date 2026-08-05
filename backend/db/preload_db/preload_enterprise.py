@@ -11,8 +11,11 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from backend.db.dao.enterprise_dao import EnterpriseDao
 from backend.db.engine import async_session_factory
-from backend.db.models.enterprise_model import Enterprise, EnterpriseCreate
+from backend.db.models.enterprise_model import (
+    Enterprise, EnterpriseDevice, EPOCH_INSTALLED_FROM,
+)
 from backend.services.enterprise_mappings import load_mappings
 
 logging.basicConfig(level=logging.INFO)
@@ -33,26 +36,41 @@ async def preload(session: AsyncSession) -> None:
         logger.warning("No enterprise mappings found in Excel — nothing to preload")
         return
 
-    records: list[Enterprise] = []
-    for _, row in df.iterrows():
-        import pandas as pd
-        line_id = None if pd.isna(row["line_id"]) else int(row["line_id"])
-        records.append(
-            Enterprise(
-                enterprise_name=str(row["enterprise_name"]),
-                line_id=line_id,
-                ser_num=int(row["serNum"]),
-                mf_dev=int(row["mfDev"]),
-                type_dev=int(row["typeDev"]),
-                ch_num=int(row["chNum"]),
-                active=bool(row["active"]),
-                enabled=bool(row["enabled"]),
-            )
-        )
+    import pandas as pd
 
-    session.add_all(records)
+    dao = EnterpriseDao(session)
+    count = 0
+    for _, row in df.iterrows():
+        line_id = None if pd.isna(row["line_id"]) else int(row["line_id"])
+        ent = Enterprise(
+            enterprise_name=str(row["enterprise_name"]),
+            line_id=line_id,
+            active=bool(row["active"]),
+            enabled=bool(row["enabled"]),
+        )
+        session.add(ent)
+        await session.flush()
+        # The Excel carries raw DPD codes, not catalog ids, so the device is
+        # created on the legacy mf_dev/type_dev fallback — the same state the
+        # catalog backfill migration leaves unmatched rows in.
+        device = await dao.get_or_create_device(
+            ser_num=int(row["serNum"]),
+            corector_type_id=None,
+            ch_num=int(row["chNum"]),
+            mf_dev=int(row["mfDev"]),
+            type_dev=int(row["typeDev"]),
+        )
+        # No install date in this source: the point has always had this
+        # corrector, which is what the epoch means.
+        session.add(EnterpriseDevice(
+            enterprise_id=ent.id,
+            device_id=device.id,
+            installed_from=EPOCH_INSTALLED_FROM,
+        ))
+        count += 1
+
     await session.commit()
-    logger.info(f"Inserted {len(records)} enterprise records into DB")
+    logger.info(f"Inserted {count} enterprise records into DB")
 
 
 async def main() -> None:

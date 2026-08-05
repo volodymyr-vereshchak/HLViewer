@@ -25,9 +25,9 @@ import sqlalchemy as sa
 from backend.db.engine import async_session_factory
 from backend.db.dao.dpd_line_dao import DpdLineArchiveDao, DpdLineDao
 from backend.db.models.dpd_line_model import DpdLine
+from backend.services import device_history
 from backend.services.dpd_client import DPDClient
 from backend.services.enterprise_mappings import volume_field_for_device
-from backend.settings import backend_settings
 from backend.utils.dpd_units import normalize_press_unit
 
 logger = logging.getLogger(__name__)
@@ -46,13 +46,11 @@ def device_windows(
     devices: list[dict],
 ) -> list[tuple[dict, datetime, datetime | None]]:
     """(device, win_from, win_to) per history entry, ordered by installed_from.
-    win_to is the next device's installed_from; None = open-ended (current)."""
-    ordered = sorted(devices, key=lambda d: d["installed_from"])
-    result = []
-    for i, dev in enumerate(ordered):
-        win_to = ordered[i + 1]["installed_from"] if i + 1 < len(ordered) else None
-        result.append((dev, dev["installed_from"], win_to))
-    return result
+    win_to is the next device's installed_from; None = open-ended (current).
+
+    Thin wrapper over the shared resolver: DPD-line entries never carry a
+    `removed_at`, so this is pure chaining."""
+    return device_history.resolve_windows(devices)
 
 
 def _parse_stamp(raw, period_type: str) -> datetime | None:
@@ -68,16 +66,7 @@ def _parse_stamp(raw, period_type: str) -> datetime | None:
         return None
 
 
-def _attribution_stamp(stamp: datetime, period_type: str) -> datetime:
-    """The moment a record is attributed at for window filtering.
-
-    Hourly records use their exact stamp. A daily record for date d covers
-    the commercial day d CONTRACT_HOUR:00 → d+1 CONTRACT_HOUR:00 and is
-    attributed to the device whose window covers the commercial-day start."""
-    if period_type == "hourly":
-        return stamp
-    contract_hour = backend_settings.get("CONTRACT_HOUR", 7)
-    return stamp + timedelta(hours=contract_hour)
+_attribution_stamp = device_history.attribution_stamp
 
 
 def _records_to_rows(

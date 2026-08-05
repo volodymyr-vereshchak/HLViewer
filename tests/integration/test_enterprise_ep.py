@@ -10,6 +10,27 @@ import pytest_asyncio
 
 from backend.db.engine import async_session_factory
 from backend.db.models.device_catalog_model import CorectorType, Manufacturer
+from backend.db.models.enterprise_model import EPOCH_INSTALLED_FROM
+
+
+def tagging_get_volumes(records: list[dict]):
+    """A stand-in for DPDClient.get_volumes that echoes the caller's `tag`.
+
+    The real client copies it off each device dict onto every record it
+    produces, and the pipeline attributes records by it — the identity
+    quadruple no longer identifies a caller-side row, since one corrector can
+    serve two metering points over time. A mock that skips this returns
+    records nothing can be attributed to.
+    """
+    async def _get(devices, *args, **kwargs):
+        out = []
+        for device in devices:
+            for rec in records:
+                if (rec["serNum"] == device["serNum"]
+                        and rec.get("chNum", 0) == device["chNum"]):
+                    out.append({**rec, "tag": device.get("tag")})
+        return out
+    return _get
 
 
 async def read_stream_events(client, params) -> list[dict]:
@@ -41,16 +62,27 @@ async def device_catalog(clean_db) -> dict:
 
 
 def _enterprise_payload(seed_topology, **overrides) -> dict:
+    """A point with one corrector standing there since forever — the shape
+    every point migrated from the pre-history schema has."""
+    device = {
+        "ser_num": 123456,
+        "ch_num": 0,
+        "installed_from": EPOCH_INSTALLED_FROM.isoformat(),
+        # Unlinked device: raw DPD codes stand in for the catalog, as they do
+        # for rows the catalog backfill could not match.
+        "mf_dev": 1,
+        "type_dev": 3,
+    }
+    for key in ("ser_num", "ch_num", "corector_type_id", "mf_dev", "type_dev"):
+        if key in overrides:
+            device[key] = overrides.pop(key)
     payload = {
         "enterprise_name": "ТОВ Завод №1",
         "branch_id": seed_topology["branch"],
         "line_id": seed_topology["line1"],
-        "ser_num": 123456,
-        "mf_dev": 1,
-        "type_dev": 3,
-        "ch_num": 0,
         "active": True,
         "enabled": True,
+        "devices": [device],
     }
     payload.update(overrides)
     return payload
@@ -90,10 +122,13 @@ class TestEnterpriseCrud:
                     "enterprise_name": f"Підприємство {n}",
                     "branch_id": seed_two_branches[f"branch{n}"],
                     "line_id": seed_two_branches[f"line{n}"],
-                    "ser_num": 1000 + n,
-                    "mf_dev": 1,
-                    "type_dev": 3,
-                    "ch_num": 0,
+                    "devices": [{
+                        "ser_num": 1000 + n,
+                        "ch_num": 0,
+                        "mf_dev": 1,
+                        "type_dev": 3,
+                        "installed_from": EPOCH_INSTALLED_FROM.isoformat(),
+                    }],
                 },
             )
             assert resp.status_code == 201
@@ -236,12 +271,18 @@ class TestExcelImport:
         listed = (await admin_client.get("/enterprise-mappings/")).json()
         assert len(listed) == 1
         ent = listed[0]
-        assert ent["ser_num"] == 555001
         assert ent["line_id"] == seed_topology["line1"]
-        assert ent["corector_type_id"] == device_catalog["corector_type"]
+        # One corrector, standing there since forever: a file without the
+        # install column says "the whole archive belongs to this device",
+        # which is exactly how every row behaved before the history existed.
+        assert len(ent["devices"]) == 1
+        device = ent["devices"][0]
+        assert device["ser_num"] == 555001
+        assert device["corector_type_id"] == device_catalog["corector_type"]
+        assert device["installed_from"] == EPOCH_INSTALLED_FROM.isoformat()
         # effective device codes resolved through the catalog
-        assert ent["mf_dev"] == device_catalog["mf_dev"]
-        assert ent["type_dev"] == device_catalog["type_dev"]
+        assert device["mf_dev"] == device_catalog["mf_dev"]
+        assert device["type_dev"] == device_catalog["type_dev"]
 
     async def test_import_recovers_line_id_from_label(
         self, admin_client, device_catalog, seed_topology
@@ -294,6 +335,159 @@ class TestExcelImport:
         resp = await self._upload(admin_client, b"not an xlsx at all")
         assert resp.status_code == 400
 
+    # ── Install date and hour ────────────────────────────────────────────────
+
+    async def _one_device(self, client) -> dict:
+        listed = (await client.get("/enterprise-mappings/")).json()
+        assert len(listed) == 1
+        assert len(listed[0]["devices"]) == 1
+        return listed[0]["devices"][0]
+
+    async def test_install_date_without_hour_uses_the_contract_hour(
+        self, admin_client, device_catalog, seed_topology
+    ):
+        """NOT midnight: the hours before the commercial day opens belong to
+        the previous day, and so to whatever corrector stood there before."""
+        content = self._workbook_bytes([
+            ["ТОВ Імпорт", 555001, "РадмирТех", "ВЕГА-1.01", 0, "Так", "Так",
+             seed_topology["line1"], "l1", "15.03.2026", None],
+        ])
+        resp = await self._upload(
+            admin_client, content, branch_id=seed_topology["branch"]
+        )
+        assert resp.status_code == 200, resp.text
+        device = await self._one_device(admin_client)
+        assert device["installed_from"] == "2026-03-15T07:00:00"
+
+    async def test_install_hour_is_taken_as_given(
+        self, admin_client, device_catalog, seed_topology
+    ):
+        content = self._workbook_bytes([
+            ["ТОВ Імпорт", 555001, "РадмирТех", "ВЕГА-1.01", 0, "Так", "Так",
+             seed_topology["line1"], "l1", "15.03.2026", 14],
+        ])
+        await self._upload(admin_client, content, branch_id=seed_topology["branch"])
+        device = await self._one_device(admin_client)
+        assert device["installed_from"] == "2026-03-15T14:00:00"
+
+    async def test_bad_install_date_is_a_row_error(
+        self, admin_client, device_catalog, seed_topology
+    ):
+        content = self._workbook_bytes([
+            ["ТОВ Імпорт", 555001, "РадмирТех", "ВЕГА-1.01", 0, "Так", "Так",
+             seed_topology["line1"], "l1", "позавчора", None],
+        ])
+        resp = await self._upload(
+            admin_client, content, branch_id=seed_topology["branch"]
+        )
+        assert resp.json()["imported"] == 0
+        assert any("дата встановлення" in e for e in resp.json()["errors"])
+
+    async def test_reimport_keeps_a_replacement_entered_in_the_admin_panel(
+        self, admin_client, device_catalog, seed_topology
+    ):
+        """The file only ever carries the corrector fitted now. Re-importing
+        an older one must not wipe the history somebody entered by hand."""
+        content = self._workbook_bytes([
+            ["ТОВ Імпорт", 555001, "РадмирТех", "ВЕГА-1.01", 0, "Так", "Так",
+             seed_topology["line1"], "l1", None, None],
+        ])
+        await self._upload(admin_client, content, branch_id=seed_topology["branch"])
+        ent = (await admin_client.get("/enterprise-mappings/")).json()[0]
+
+        # A replacement is fitted and recorded in the admin panel.
+        patched = await admin_client.patch(
+            f"/enterprise-mappings/{ent['id']}",
+            json={"devices": [
+                {"ser_num": 555001, "ch_num": 0,
+                 "corector_type_id": device_catalog["corector_type"],
+                 "installed_from": EPOCH_INSTALLED_FROM.isoformat()},
+                {"ser_num": 555002, "ch_num": 0,
+                 "corector_type_id": device_catalog["corector_type"],
+                 "installed_from": "2026-03-15T07:00:00"},
+            ]},
+        )
+        assert patched.status_code == 200, patched.text
+
+        # The same old file is uploaded again.
+        again = await self._upload(
+            admin_client, content, branch_id=seed_topology["branch"]
+        )
+        assert again.status_code == 200
+        listed = (await admin_client.get("/enterprise-mappings/")).json()
+        assert len(listed) == 1, "the point must not be duplicated"
+        assert [d["ser_num"] for d in listed[0]["devices"]] == [555001, 555002]
+
+    async def test_unknown_device_on_a_known_name_is_skipped(
+        self, admin_client, device_catalog, seed_topology
+    ):
+        """A serial the point never had means a swap, and a swap needs a date.
+        Creating a second point silently would split the consumer's archive."""
+        first = self._workbook_bytes([
+            ["ТОВ Імпорт", 555001, "РадмирТех", "ВЕГА-1.01", 0, "Так", "Так",
+             seed_topology["line1"], "l1", None, None],
+        ])
+        await self._upload(admin_client, first, branch_id=seed_topology["branch"])
+
+        swapped = self._workbook_bytes([
+            ["ТОВ Імпорт", 999999, "РадмирТех", "ВЕГА-1.01", 0, "Так", "Так",
+             seed_topology["line1"], "l1", None, None],
+        ])
+        resp = await self._upload(
+            admin_client, swapped, branch_id=seed_topology["branch"]
+        )
+        assert resp.json()["imported"] == 0
+        assert any("адмінці" in e for e in resp.json()["errors"])
+        listed = (await admin_client.get("/enterprise-mappings/")).json()
+        assert len(listed) == 1
+        assert [d["ser_num"] for d in listed[0]["devices"]] == [555001]
+
+    async def test_export_writes_the_current_device_and_its_date(
+        self, admin_client, device_catalog, seed_topology
+    ):
+        created = await admin_client.post(
+            "/enterprise-mappings/",
+            json={
+                "enterprise_name": "ТОВ Експорт",
+                "branch_id": seed_topology["branch"],
+                "line_id": seed_topology["line1"],
+                "devices": [
+                    {"ser_num": 1, "ch_num": 0,
+                     "corector_type_id": device_catalog["corector_type"],
+                     "installed_from": EPOCH_INSTALLED_FROM.isoformat()},
+                    {"ser_num": 2, "ch_num": 0,
+                     "corector_type_id": device_catalog["corector_type"],
+                     "installed_from": "2026-03-15T14:00:00"},
+                ],
+            },
+        )
+        assert created.status_code == 201, created.text
+
+        resp = await admin_client.get("/enterprise-mappings/export")
+        ws = openpyxl.load_workbook(io.BytesIO(resp.content))["Дані"]
+        assert ws.cell(row=3, column=2).value == 2       # the one fitted now
+        assert ws.cell(row=3, column=10).value == "15.03.2026"
+        assert ws.cell(row=3, column=11).value == 14
+        # Points with a longer history are flagged so the file is not mistaken
+        # for the whole story.
+        assert ws.cell(row=3, column=1).comment is not None
+
+    async def test_export_leaves_the_date_blank_for_an_original_device(
+        self, admin_client, device_catalog, seed_topology
+    ):
+        """«Від початку» must export as an empty cell — re-importing it has to
+        mean the same thing, not invent an install date."""
+        await admin_client.post(
+            "/enterprise-mappings/",
+            json=_enterprise_payload(
+                seed_topology, corector_type_id=device_catalog["corector_type"]
+            ),
+        )
+        resp = await admin_client.get("/enterprise-mappings/export")
+        ws = openpyxl.load_workbook(io.BytesIO(resp.content))["Дані"]
+        assert ws.cell(row=3, column=10).value is None
+        assert ws.cell(row=3, column=11).value is None
+
 
 class TestEnterpriseVolumes:
     async def test_volumes_with_mocked_dpd(
@@ -311,13 +505,13 @@ class TestEnterpriseVolumes:
 
         # two devices on the same line & date → volumes are summed
         mock_client = mocker.AsyncMock()
-        mock_client.get_volumes.return_value = [
+        mock_client.get_volumes = mocker.AsyncMock(side_effect=tagging_get_volumes([
             {"serNum": 123456, "mfDev": 1, "typeDev": 3, "chNum": 0,
              "date": "2024-12-25", "dvstAlwrk": 100.5, "temper": 18.0,
              "press": 101.3, "pressUnit": "kPa"},
             {"serNum": 123457, "mfDev": 1, "typeDev": 3, "chNum": 0,
              "date": "2024-12-25", "dvstAlwrk": 49.5},
-        ]
+        ]))
         mocker.patch(
             "backend.services.enterprise_volume_service.DPDClient.for_branch",
             mocker.AsyncMock(return_value=mock_client),
@@ -385,9 +579,10 @@ class TestEnterpriseVolumes:
                 for i in range(1, len(devices) + 1):
                     progress_cb(i, len(devices))
             return [{
+                "tag": d.get("tag"),
                 "serNum": 123456, "mfDev": 1, "typeDev": 3, "chNum": 0,
                 "date": "2024-12-25", "dvstAlwrk": 100.5,
-            }]
+            } for d in devices]
 
         mock_client.get_volumes = fake_get_volumes
         mocker.patch(
@@ -418,10 +613,10 @@ class TestEnterpriseVolumes:
             "/enterprise-mappings/", json=_enterprise_payload(seed_topology)
         )
         mock_client = mocker.AsyncMock()
-        mock_client.get_volumes.return_value = [{
+        mock_client.get_volumes = mocker.AsyncMock(side_effect=tagging_get_volumes([{
             "serNum": 123456, "mfDev": 1, "typeDev": 3, "chNum": 0,
             "date": "2024-12-25", "dvstAlwrk": 100.5,
-        }]
+        }]))
         mocker.patch(
             "backend.services.enterprise_volume_service.DPDClient.for_branch",
             mocker.AsyncMock(return_value=mock_client),
@@ -490,10 +685,10 @@ class TestEnterpriseVolumes:
             "/enterprise-mappings/", json=_enterprise_payload(seed_topology)
         )
         mock_client = mocker.AsyncMock()
-        mock_client.get_volumes.return_value = [{
+        mock_client.get_volumes = mocker.AsyncMock(side_effect=tagging_get_volumes([{
             "serNum": 123456, "mfDev": 1, "typeDev": 3, "chNum": 0,
             "date": "2024-12-25", "dvstAlwrk": 100.5,
-        }]
+        }]))
         mocker.patch(
             "backend.services.enterprise_volume_service.DPDClient.for_branch",
             mocker.AsyncMock(return_value=mock_client),
