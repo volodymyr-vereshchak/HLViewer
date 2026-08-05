@@ -20,11 +20,15 @@ coverage (dpd_device_coverage.loaded_from) are backfilled from DPD on demand,
 per device, then served from the DB like everything else.
 
 v5 (device history): the archive is keyed by the CORRECTOR, not by the
-metering point. Everything here works in ASSIGNMENTS — "device D stood at
-point E from … to …" — one per history entry. Polling, storing and reading all
-happen per window, so a replaced corrector's data can never land in the
-previous device's periods, and a corrector moved to another point is polled
-once and read by both.
+metering point. Reads work in ASSIGNMENTS — "device D stood at point E from …
+to …", one per history entry — and each reads only its own window, so a
+replaced corrector's data can never land in the previous device's periods.
+
+Polling deliberately ignores those windows: a device is asked for the whole
+requested range, once, and everything it answers with is stored under it. The
+data is the corrector's own wherever it stood, so keeping all of it costs one
+request instead of several and leaves the archive ready for the next point the
+device is moved to. Windows are a reading rule, not a fetching one.
 """
 
 import logging
@@ -324,11 +328,15 @@ async def _run_backfill(
 ) -> None:
     """Poll DPD for the devices in `backfill` and store what comes back.
 
-    One request per ASSIGNMENT, not per device: a corrector is asked only for
-    the stretch it stood at the point being served, so a device fetched for
-    two points fetches each window separately. Records are attributed by the
-    tag the client echoes back — the identity quadruple can no longer tell two
-    windows of the same corrector apart.
+    One request per DEVICE over the whole missing span — install windows are
+    deliberately NOT applied here. The archive belongs to the corrector, so
+    everything it answers with is its own data and worth keeping: a device that
+    later turns up at another point is already loaded, and a window edited
+    afterwards only moves the boundary of what the point reads. Narrowing the
+    poll to windows would buy nothing and split one request into several.
+
+    Which stretch of that data any point sees is decided on the way out, in
+    `_read_window`.
     """
     contract_hour = backend_settings.get("CONTRACT_HOUR", 7)
 
@@ -348,23 +356,19 @@ async def _run_backfill(
             datetime.combine(span_to, datetime.min.time()),
         )
 
+    # One entry per device. Two assignments of the same corrector carry the
+    # same identity quadruple, so either serves as the request; the tag is the
+    # device, which is also what the archive is keyed by.
     poll_devices = []
-    for assignment_id, a in by_assignment.items():
-        span = backfill.get(a["device_id"])
-        if span is None:
+    for a in by_assignment.values():
+        device_id = a["device_id"]
+        span = backfill.get(device_id)
+        if span is None or any(d["tag"] == device_id for d in poll_devices):
             continue
-        # Intersect the device's missing span with the window this assignment
-        # was in force for: asking outside it would pull another point's gas.
-        dev_from, dev_to = span_bounds(*span)
-        clipped = device_history.clip(
-            a["win_from"], a["win_to"], dev_from, dev_to
-        )
-        if clipped is None:
-            continue
-        poll_devices.append({**a, "tag": assignment_id, "range": clipped})
+        poll_devices.append({**a, "tag": device_id, "range": span_bounds(*span)})
 
     if not poll_devices:
-        # Nothing overlaps — still record that the span was asked for, so the
+        # Nothing to ask — still record that the span was asked for, so the
         # empty stretch is not re-planned on every request.
         await dao.lower_loaded_from(list(backfill), period_type, requested_from)
         return
@@ -376,7 +380,7 @@ async def _run_backfill(
     poll_from = min(d["range"][0] for d in poll_devices)
     poll_to = max(d["range"][1] for d in poll_devices)
     logger.info(
-        f"DPD archive: backfilling {len(poll_devices)} device windows within "
+        f"DPD archive: backfilling {len(poll_devices)} devices within "
         f"{poll_from}..{poll_to} ({period_type})"
     )
 
@@ -396,6 +400,7 @@ async def _run_backfill(
     )
     poll_secs = perf_counter() - t_poll
 
+    polled_ids = {d["tag"] for d in poll_devices}
     rows = []
     for record in fresh_records:
         if not _has_data(record):
@@ -403,22 +408,16 @@ async def _run_backfill(
         stamp = _record_stamp(record, period_type)
         if stamp is None:
             continue
-        assignment = by_assignment.get(record.get("tag"))
-        if assignment is None:
+        # The tag is the device the record was asked for.
+        device_id = record.get("tag")
+        if device_id not in polled_ids:
             continue
         stamp_dt = (
             stamp if isinstance(stamp, datetime)
             else datetime.combine(stamp, datetime.min.time())
         )
-        # DPD pads its answer to whole dates, so a window that opens mid-day
-        # comes back with hours that belong to the previous device. Drop them.
-        at = device_history.attribution_stamp(stamp_dt, period_type)
-        if not device_history.covers(
-            assignment["win_from"], assignment["win_to"], at
-        ):
-            continue
         rows.append({
-            "device_id": assignment["device_id"],
+            "device_id": device_id,
             "stamp": stamp_dt,
             "dvst_alwrk": record.get("dvstAlwrk"),
             "dvwrk_alwrk": record.get("dvwrkAlwrk"),
@@ -426,8 +425,7 @@ async def _run_backfill(
             "temper": record.get("temper"),
             "press_unit": normalize_press_unit(record.get("pressUnit")),
         })
-    # Deduplicate by (device, stamp) — DPD can repeat a record, and two
-    # assignments of one corrector can overlap at a window boundary.
+    # Deduplicate by (device, stamp) — DPD can repeat a record.
     unique = {(r["device_id"], r["stamp"]): r for r in rows}
     await dao.upsert_records(period_type, list(unique.values()))
     # The whole span was ASKED, even where DPD had nothing: coverage lowers

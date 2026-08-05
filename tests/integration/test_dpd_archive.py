@@ -35,12 +35,15 @@ def as_dt(day: date) -> datetime:
 
 
 def daily_records(devices: list[dict], days: list[date]) -> list[dict]:
-    """What the DPD client hands back. `tag` is the assignment the caller
-    asked under, echoed onto every record — the real client copies it off the
-    device dict, so a mock standing in for it has to as well."""
+    """What the DPD client hands back.
+
+    `tag` is copied straight off the device dict the client was handed — that
+    is exactly what the real client does, and it is the only faithful mock:
+    reading the tag from any other field would quietly decide for the code
+    under test what it tags its requests with."""
     return [
         {
-            "tag": d.get("assignment_id"),
+            "tag": d.get("tag"),
             "serNum": d["serNum"], "mfDev": d["mfDev"], "typeDev": d["typeDev"],
             "chNum": d["chNum"], "date": day.isoformat(), "dvstAlwrk": 10.0,
             "press": 101.3, "temper": 15.0,
@@ -48,6 +51,25 @@ def daily_records(devices: list[dict], days: list[date]) -> list[dict]:
         for d in devices
         for day in days
     ]
+
+
+def daily_reply(days: list[date], blank: list[date] = ()):
+    """`get_volumes` side effect: answer with `days` for whichever devices were
+    actually polled.
+
+    A side effect rather than a return_value on purpose. The records have to be
+    built from the device dicts the client was handed, or the mock would supply
+    the tag itself and the test could no longer tell whether the code tags its
+    requests correctly. `blank` lists days answered as skeletons (a stamp with
+    no readings yet), which DPD does send and the archive must not store."""
+    async def _reply(devices, date_from, date_to, **kwargs):
+        records = daily_records(devices, list(days) + list(blank))
+        for record in records:
+            if date.fromisoformat(record["date"]) in blank:
+                record["dvstAlwrk"] = None
+        return records
+
+    return _reply
 
 
 def record_keys(records: list[dict]) -> set[tuple]:
@@ -70,7 +92,18 @@ async def make_enterprise(branch_id):
 
     `installed_from` defaults to the epoch, which is what every point migrated
     from the pre-history schema looks like — so these tests exercise the same
-    shape production carries right after the upgrade."""
+    shape production carries right after the upgrade.
+
+    The id sequences are pushed apart first. In a truncated database the first
+    enterprise, device and assignment would all be id 1, and a test could not
+    tell "tagged by device" from "tagged by assignment" — both would pass."""
+    async with async_session_factory() as session:
+        await session.execute(text("ALTER SEQUENCE dpd_device_id_seq RESTART WITH 1000"))
+        await session.execute(
+            text("ALTER SEQUENCE enterprise_device_id_seq RESTART WITH 500")
+        )
+        await session.commit()
+
     async def _make(ser_num: int, installed_from=None, removed_at=None) -> dict:
         async with async_session_factory() as session:
             ent = Enterprise(
@@ -207,15 +240,15 @@ class TestBackfill:
     ):
         dev = await make_enterprise(101)
         await seed_archive(dev, "daily", [D_OLD5, D_OLD3], loaded_from=D_OLD5)
-        dpd_mock.get_volumes.return_value = daily_records([dev], [D_OLD8])
+        dpd_mock.get_volumes.side_effect = daily_reply([D_OLD8])
 
         records = await fetch_dpd_volumes(
             [dev], as_dt(D_OLD10), as_dt(D_OLD3), "daily"
         )
 
         dpd_mock.get_volumes.assert_awaited_once()
-        # The range rides on the device dict, not on a quad-keyed map: one
-        # corrector can be asked for twice in a request, once per window.
+        # The range rides on the device dict, not on the quad-keyed map: the
+        # backfill works in device ids and each device has its own missing head.
         polled = dpd_mock.get_volumes.await_args.args[0]
         assert len(polled) == 1
         # Only the uncovered head [requested .. loaded_from-1] is fetched.
@@ -240,7 +273,7 @@ class TestBackfill:
         self, dpd_mock, make_enterprise
     ):
         dev = await make_enterprise(101)  # no coverage row at all
-        dpd_mock.get_volumes.return_value = daily_records([dev], [D_OLD5])
+        dpd_mock.get_volumes.side_effect = daily_reply([D_OLD5])
 
         records = await fetch_dpd_volumes(
             [dev], as_dt(D_OLD5), as_dt(D_OLD3), "daily"
@@ -253,9 +286,7 @@ class TestBackfill:
 
     async def test_skeleton_records_not_stored(self, dpd_mock, make_enterprise):
         dev = await make_enterprise(101)
-        recs = daily_records([dev], [D_OLD5, D_OLD3])
-        recs[1]["dvstAlwrk"] = None  # skeleton: no data for D_OLD3
-        dpd_mock.get_volumes.return_value = recs
+        dpd_mock.get_volumes.side_effect = daily_reply([D_OLD5], blank=[D_OLD3])
 
         await fetch_dpd_volumes([dev], as_dt(D_OLD5), as_dt(D_OLD3), "daily")
 
@@ -267,7 +298,7 @@ class TestBackfill:
         dev_a = await make_enterprise(101)
         dev_b = await make_enterprise(102)
         await seed_archive(dev_a, "daily", [D_OLD8, D_OLD5], loaded_from=D_OLD10)
-        dpd_mock.get_volumes.return_value = daily_records([dev_b], [D_OLD5])
+        dpd_mock.get_volumes.side_effect = daily_reply([D_OLD5])
 
         await fetch_dpd_volumes(
             [dev_a, dev_b], as_dt(D_OLD10), as_dt(D_OLD5), "daily"
@@ -281,7 +312,7 @@ class TestBackfill:
         self, dpd_mock, make_enterprise
     ):
         dev = await make_enterprise(101)
-        dpd_mock.get_volumes.return_value = daily_records([dev], [D_OLD5])
+        dpd_mock.get_volumes.side_effect = daily_reply([D_OLD5])
         events = []
 
         await fetch_dpd_volumes([dev], as_dt(D_OLD5), as_dt(D_OLD5), "daily",
@@ -410,6 +441,56 @@ class TestRefreshJob:
         assert await coverage_of(dev["device_id"], "hourly") == window_from
         status = await dpd_archive_refresh.read_status()
         assert status["status"] == "done"
+
+    async def test_shared_corrector_is_polled_once_for_the_whole_window(
+        self, mocker, make_enterprise, branch_id
+    ):
+        """A corrector moved between two points inside the refresh window is
+        one device with one archive: one request per period type, for the whole
+        window. Which point reads which stretch is settled on the read, so the
+        refresh has no reason to know about the windows at all."""
+        first = await make_enterprise(101, removed_at=as_dt(D_OLD5))
+        async with async_session_factory() as session:
+            second = Enterprise(
+                enterprise_name="ent-101-moved", active=True, enabled=True,
+                branch_id=branch_id, line_id=None,
+            )
+            session.add(second)
+            await session.flush()
+            session.add(EnterpriseDevice(
+                enterprise_id=second.id, device_id=first["device_id"],
+                installed_from=as_dt(D_OLD5),
+            ))
+            await session.commit()
+
+        calls = []
+        client = mocker.AsyncMock()
+
+        async def get_volumes(devices, date_from, date_to, *, type_request, **kw):
+            calls.append((type_request, [d["tag"] for d in devices],
+                          date_from, date_to))
+            return daily_records(devices, [D_OLD3]) if type_request == "daily" else []
+
+        client.get_volumes = get_volumes
+        mocker.patch(
+            "backend.services.dpd_archive_refresh.DPDClient.for_branch",
+            mocker.AsyncMock(return_value=client),
+        )
+        mocker.patch(
+            "backend.services.dpd_archive_refresh._branch_ids_with_credentials",
+            mocker.AsyncMock(return_value=[branch_id]),
+        )
+
+        assert await dpd_archive_refresh.run_refresh() is True
+
+        daily = [c for c in calls if c[0] == "daily"]
+        assert len(daily) == 1
+        assert daily[0][1] == [first["device_id"]]  # once, as a device
+        assert daily[0][2] == as_dt(TODAY - timedelta(days=30))
+        # One row for one device, not one per point it served.
+        assert len(await archive_rows("daily")) == 1
+        status = await dpd_archive_refresh.read_status()
+        assert status["progress_total"] is None  # cleared on finish
 
     async def test_refresh_reports_progress(
         self, mocker, make_enterprise, branch_id

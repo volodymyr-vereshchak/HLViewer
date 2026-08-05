@@ -52,6 +52,16 @@ async def topology(branch_id):
     call and read the consequence."""
     state = {"branch_id": branch_id, "line_id": 1}
 
+    # Push the id sequences apart. In a truncated database the first point,
+    # device and assignment would all be id 1, and "tagged by device" would be
+    # indistinguishable from "tagged by assignment" — both would pass.
+    async with async_session_factory() as session:
+        await session.execute(text("ALTER SEQUENCE dpd_device_id_seq RESTART WITH 1000"))
+        await session.execute(
+            text("ALTER SEQUENCE enterprise_device_id_seq RESTART WITH 500")
+        )
+        await session.commit()
+
     async def make_point(name: str) -> int:
         async with async_session_factory() as session:
             ent = Enterprise(
@@ -150,6 +160,32 @@ async def read_days(topology, point_ids, period_from, period_to) -> dict:
     return by_point, result
 
 
+def daily_reply(days: list[date]):
+    """`get_volumes` side effect: `days` for whichever devices were polled,
+    each record tagged off the device dict — exactly what the real client
+    does, so the test can see what the poll actually asked under."""
+    async def _reply(devices, date_from, date_to, **kwargs):
+        return [
+            {"tag": device.get("tag"), "serNum": device["serNum"],
+             "mfDev": device["mfDev"], "typeDev": device["typeDev"],
+             "chNum": device["chNum"],
+             "date": day.isoformat(), "dvstAlwrk": 5.0}
+            for device in devices
+            for day in days
+        ]
+
+    return _reply
+
+
+async def archived_days(device_id: int) -> list[date]:
+    async with async_session_factory() as session:
+        return list((await session.execute(
+            text("SELECT day FROM dpd_daily_archive WHERE device_id = :d "
+                 "ORDER BY day"),
+            {"d": device_id},
+        )).scalars().all())
+
+
 async def _assignments_for(session, point_ids, range_from, range_to):
     from backend.services.enterprise_mappings import _query_assignments_db
     return await _query_assignments_db(
@@ -199,6 +235,74 @@ class TestMovedCorrector:
                      "WHERE period_type = 'daily'")
             )).scalars().all()
         assert rows == [device]
+
+
+class TestPollingIgnoresWindows:
+    """Windows are a reading rule, not a fetching one.
+
+    A corrector is asked for the whole requested range in one request, and
+    everything it answers with is stored under it. Splitting the poll along
+    install dates would buy nothing: the data is the device's own wherever it
+    stood, and the point's slice is taken on the way out anyway."""
+
+    async def test_device_is_asked_for_the_whole_range(self, dpd_mock, topology):
+        point = await topology["make_point"]("Точка А")
+        device = await topology["make_device"](7)
+        await topology["assign"](point, device, dt(10, 7))
+        dpd_mock.get_volumes.side_effect = daily_reply([])
+
+        async with async_session_factory() as session:
+            assignments = await _assignments_for(session, [point], dt(1), dt(20))
+        await fetch_dpd_volumes(assignments, dt(1), dt(20), "daily")
+
+        polled = dpd_mock.get_volumes.await_args.args[0]
+        assert len(polled) == 1
+        # Not (10 March .. 20 March), which the install window would have given.
+        assert polled[0]["range"] == (dt(1), dt(20))
+        # And it is asked for as a device, since that is what the archive keys.
+        assert polled[0]["tag"] == device
+
+    async def test_data_before_the_install_is_kept_but_not_reported(
+        self, dpd_mock, topology
+    ):
+        """The corrector was measuring elsewhere before the 10th. Those days
+        are its own archive — worth keeping, since the point it came from
+        reads them — but this point must not report them."""
+        point = await topology["make_point"]("Точка А")
+        device = await topology["make_device"](7)
+        await topology["assign"](point, device, dt(10, 7))
+        dpd_mock.get_volumes.side_effect = daily_reply([d(day) for day in range(5, 16)])
+
+        by_point, _ = await read_days(topology, [point], dt(1), dt(20))
+
+        assert await archived_days(device) == [d(day) for day in range(5, 16)]
+        assert sorted(by_point["Точка А"]) == [
+            f"2026-03-{day:02d}" for day in range(10, 16)
+        ]
+
+    async def test_one_poll_feeds_both_points_of_a_moved_corrector(
+        self, dpd_mock, topology
+    ):
+        """#7 measured point A until the 10th and point B after. One request
+        covers both, and each point still reads only its own stretch."""
+        a = await topology["make_point"]("Точка А")
+        b = await topology["make_point"]("Точка Б")
+        device = await topology["make_device"](7)
+        await topology["assign"](a, device, EPOCH_INSTALLED_FROM, removed_at=dt(10, 7))
+        await topology["assign"](b, device, dt(10, 7))
+        dpd_mock.get_volumes.side_effect = daily_reply([d(day) for day in range(8, 13)])
+
+        by_point, _ = await read_days(topology, [a, b], dt(1), dt(20))
+
+        assert dpd_mock.get_volumes.await_count == 1
+        # One entry in that call, not one per assignment: the request is the
+        # device's, and both points read the single answer.
+        polled = dpd_mock.get_volumes.await_args.args[0]
+        assert [p["tag"] for p in polled] == [device]
+        assert sorted(by_point["Точка А"]) == ["2026-03-08", "2026-03-09"]
+        assert sorted(by_point["Точка Б"]) == [
+            "2026-03-10", "2026-03-11", "2026-03-12",
+        ]
 
 
 class TestGap:

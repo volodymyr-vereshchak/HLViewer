@@ -285,8 +285,9 @@ async def _query_assignments_db(
 
     One dict per history entry, not per enterprise: a metering point that has
     had two correctors contributes two, each carrying the window it was in
-    force for. Callers poll and read per window, which is what keeps a
-    replaced corrector's data out of the previous device's periods.
+    force for. Callers READ per window, which is what keeps a replaced
+    corrector's data out of the previous device's periods; polling collapses
+    the list to distinct devices and ignores the windows entirely.
 
     Device codes are read THROUGH the corrector-type catalog when the device
     is linked (so catalog edits propagate to DPD polling), falling back to the
@@ -296,8 +297,7 @@ async def _query_assignments_db(
     overlap the range are returned. Their windows are NOT rewritten: `win_to`
     stays the true, EXCLUSIVE end (None = still in force), because callers
     test records against it with `covers()`. Clipping to the request is done
-    where an inclusive span is actually wanted — the archive read and the
-    poll range.
+    where an inclusive span is actually wanted — the archive read.
     """
     from sqlmodel import select
     from backend.db.models.enterprise_model import (

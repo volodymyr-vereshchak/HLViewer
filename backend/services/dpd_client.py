@@ -387,8 +387,9 @@ class DPDClient:
             tasks = []
             for device in devices:
                 # A device's own range wins: device_ranges is keyed by the
-                # identity quadruple, which cannot tell two entries of the
-                # same corrector apart (two metering points, two windows).
+                # identity quadruple, which the enterprise backfill cannot
+                # rely on — it works in device ids and carries the span on the
+                # device dict instead.
                 dev_from, dev_to = device.get("range") or device_ranges.get(
                     (device["serNum"], device["mfDev"], device["typeDev"], device["chNum"]),
                     (date_from, date_to),
