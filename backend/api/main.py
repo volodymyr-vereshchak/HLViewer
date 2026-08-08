@@ -24,6 +24,7 @@ from backend.api.endpoints import (
     enterprise_ep,
     enterprise_virtual_ep,
     virtual_lines_ep,
+    gas_route_ep,
     hourly_virtual_ep,
     daily_virtual_ep,
     dpd_line_ep,
@@ -342,6 +343,7 @@ app.include_router(param_ep.param_router)
 app.include_router(enterprise_ep.enterprise_router)
 app.include_router(enterprise_virtual_ep.enterprise_virtual_router)
 app.include_router(virtual_lines_ep.virtual_lines_router)
+app.include_router(gas_route_ep.gas_route_router)
 app.include_router(dpd_line_ep.dpd_line_router)
 app.include_router(hourly_virtual_ep.hourly_virtual_router)
 app.include_router(daily_virtual_ep.daily_virtual_router)

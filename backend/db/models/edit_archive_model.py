@@ -35,6 +35,10 @@ class EditArchive(EditArchiveBase, table=True):
         # Индекс для поиска по edit_type_id
         Index("idx_edit_type_period", "edit_type_id", "period"),
         Index("idx_edit_line_type", "line_id", "edit_type_id"),
+        # «Звірка ФХП» reads one line's history of ONE quantity over a range,
+        # and probes backwards for the value in force before it. Without the
+        # period in the key both queries read every edit type of the line.
+        Index("idx_edit_line_type_period", "line_id", "edit_type_id", "period"),
         # Индекс для агрегации по часам
         Index("idx_edit_period_hour", "period"),
     )

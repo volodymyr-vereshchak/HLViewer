@@ -103,6 +103,16 @@ from .enterprise_model import (
     EPOCH_INSTALLED_FROM,
 )
 
+from .gas_route_model import (
+    GasRoute,
+    GasRouteMember,
+    GasRouteMemberIn,
+    GasRouteMemberOut,
+    GasRouteRead,
+    GasRouteWrite,
+    FreeLine,
+)
+
 from .device_catalog_model import (
     Manufacturer, ManufacturerRead, ManufacturerCreate, ManufacturerUpdate,
     CorectorType, CorectorTypeRead, CorectorTypeCreate, CorectorTypeUpdate,
