@@ -20,6 +20,10 @@ DENSITY = 1
 CO2 = 2
 N2 = 3
 
+# The archive keeps pressure in the line's own unit — кгс/см² by default. The
+# volume numbers below are pinned at 3.2357 MPa, which is this many кгс/см².
+KGF_3_2357_MPA = 3.2357e6 / 98066.5
+
 
 def dt(day: int, hour: int = 0, minute: int = 0) -> datetime:
     return datetime(2026, 5, day, hour, minute)
@@ -496,7 +500,7 @@ class TestFhpReport:
             for stamp in (dt(1, 7), dt(1, 8)):
                 session.add(HourlyArchive(
                     line_id=manual, period=stamp, volume=1000.0, w_volume_dp=100.0,
-                    pressure=3.2357, temperature=0.2565, density=0.7424,
+                    pressure=KGF_3_2357_MPA, temperature=0.2565, density=0.7424,
                 ))
             await session.commit()
 
@@ -551,7 +555,7 @@ class TestFhpReport:
         async with async_session_factory() as session:
             session.add(HourlyArchive(
                 line_id=manual, period=dt(1, 9), volume=0.0, w_volume_dp=0.0,
-                pressure=3.2357, temperature=0.2565, density=0.7424,
+                pressure=KGF_3_2357_MPA, temperature=0.2565, density=0.7424,
             ))
             await session.commit()
 

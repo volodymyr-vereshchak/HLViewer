@@ -32,6 +32,7 @@ from backend.db.models.gas_volume_calc_model import GasVolumeCalc
 from backend.db.models.line_model import Line
 from backend.services import commercial_day, fhp_series
 from backend.services.edit_value_codec import decode_float, is_plausible
+from backend.services.pressure_units import to_mpa
 from backend.services.volume_delta import GasState, volume_delta
 
 
@@ -74,12 +75,18 @@ class RouteMemberInfo:
     # Лічильник vs діафрагма — the two convert a volume differently, so a wrong
     # composition costs them different amounts.
     is_meter: bool
+    # The unit the ARCHIVE stores this line's pressure in. Nothing in the rows
+    # marks it, so it has to be carried from the line's configuration.
+    pressure_unit: Optional[str]
 
 
 async def load_members(session: AsyncSession, route_id: int) -> list[RouteMemberInfo]:
     """Route members with their line and ГРС names, in display order."""
     stmt = (
-        select(GasRouteMember, Line.name, GasVolumeCalc.name, Line.meter)
+        select(
+            GasRouteMember, Line.name, GasVolumeCalc.name, Line.meter,
+            Line.pressure_unit,
+        )
         .join(Line, Line.id == GasRouteMember.line_id)
         .outerjoin(GasVolumeCalc, GasVolumeCalc.id == Line.gas_volume_calc_id)
         .where(GasRouteMember.route_id == route_id)
@@ -95,8 +102,9 @@ async def load_members(session: AsyncSession, route_id: int) -> list[RouteMember
             is_reference=m.is_reference,
             sort_order=m.sort_order,
             is_meter=bool(meter),
+            pressure_unit=pressure_unit,
         )
-        for m, line_name, calc_name, meter in rows
+        for m, line_name, calc_name, meter, pressure_unit in rows
     ]
 
 
@@ -279,11 +287,19 @@ async def _build_volume_block(
             reference = _reference_at(reference_by_param, stamp)
             if entered is None or reference is None:
                 continue
+            # The archive keeps pressure in the line's own unit — usually
+            # кгс/см², where 41.9 means 4.1 MPa. Handing that number to the
+            # equation of state unconverted put every high-pressure line past
+            # the limit of ГОСТ 30319.2 and reported the hour as unreadable.
+            p_mpa = to_mpa(float(row["pressure"]), member.pressure_unit)
+            if p_mpa is None:
+                unreadable += 1
+                continue
             delta = volume_delta(
                 float(volume),
                 entered,
                 reference,
-                float(row["pressure"]),
+                p_mpa,
                 float(row["temperature"]),
                 is_meter=member.is_meter,
             )

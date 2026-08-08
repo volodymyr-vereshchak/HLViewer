@@ -11,6 +11,7 @@ import math
 import pytest
 
 from backend.services.gost30319 import compressibility_ratio, z_gerg91, z_std
+from backend.services.pressure_units import to_mpa
 from backend.services.volume_delta import GasState, volume_delta, volume_ratio
 
 # (rho, N2 %, CO2 %, P MPa, t °C, Zc, Z) straight from the oracle.
@@ -115,3 +116,42 @@ class TestVolumeDelta:
         # too (checked against the oracle), so an unreadable hour is inherited
         # behaviour, not something this port introduced.
         assert volume_delta(1000.0, ENTERED, REF, 12.0, 0.2565, False) is None
+
+
+class TestPressureUnits:
+    """The archive stores pressure in the LINE's unit, and nothing in the rows
+    says which. Reading it as MPa is out by a factor of ten and puts every
+    high-pressure line past the limit of ГОСТ 30319.2."""
+
+    def test_converts_the_archive_default(self):
+        # 41.86 кгс/см² is 4.1 MPa — an ordinary ГРС inlet.
+        assert to_mpa(41.8569, "кгс/см²") == pytest.approx(4.1048, abs=1e-4)
+
+    @pytest.mark.parametrize(
+        "value,unit,expected",
+        [(1.0, "МПа", 1.0), (1000.0, "кПа", 1.0), (10.0, "бар", 1.0),
+         (1e6, "Па", 1.0)],
+    )
+    def test_other_units(self, value, unit, expected):
+        assert to_mpa(value, unit) == pytest.approx(expected)
+
+    def test_missing_unit_falls_back_to_the_archive_default(self):
+        assert to_mpa(41.8569, None) == pytest.approx(4.1048, abs=1e-4)
+
+    @pytest.mark.parametrize("blank", ["", "  ", "None", "null", "—"])
+    def test_a_blank_unit_means_the_default_not_an_unknown_one(self, blank):
+        # A line left without a unit is reporting in the archive default; only
+        # a unit we genuinely do not recognise blanks the hour.
+        assert to_mpa(41.8569, blank) == pytest.approx(4.1048, abs=1e-4)
+
+    def test_unknown_unit_is_none_rather_than_a_guess(self):
+        # Better an unreadable hour than a plausible Z for a pressure the line
+        # never saw.
+        assert to_mpa(10.0, "фунти") is None
+
+    def test_a_high_pressure_line_is_inside_the_domain_once_converted(self):
+        raw = 41.8569  # кгс/см², as stored
+        assert compressibility_ratio(0.7467, 0.613, 1.9546, raw, 273.4) is None
+        p_mpa = to_mpa(raw, "кгс/см²")
+        k = compressibility_ratio(0.7467, 0.613, 1.9546, p_mpa, 273.4)
+        assert k is not None and 0.85 < k < 1.0
