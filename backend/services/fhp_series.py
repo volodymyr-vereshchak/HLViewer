@@ -159,7 +159,7 @@ def reference_series(
     and how many of them backed it.
 
     The count is part of the answer, not diagnostics: when one of two
-    chromatographs falls silent the reference jumps, and a report that hid
+    reference lines falls silent the reference jumps, and a report that hid
     that would blame the jump on the compared line.
     """
     totals: dict[K, float] = {}
@@ -251,7 +251,7 @@ def spread_series(
 ) -> dict[K, tuple[float, float, float, int]]:
     """period → (min, max, max - min, how many lines had a value).
 
-    This is what a route with no chromatograph shows: nothing is the reference,
+    This is what a route with no reference shows: nothing is the reference,
     but the lines still have to agree with each other.
     """
     buckets: dict[K, list[float]] = {}
@@ -269,7 +269,7 @@ def staleness(
 ) -> set[datetime]:
     """The periods whose value in force is older than `max_age_hours`.
 
-    A step function never expires by itself, so a chromatograph that died on
+    A step function never expires by itself, so a reference line that died on
     the 10th keeps "reporting" until the end of the range. We keep holding the
     value — that is genuinely the last thing the device said, and a manually
     entered line legitimately holds for days — but the report has to show that

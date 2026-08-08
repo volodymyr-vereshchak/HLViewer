@@ -1,4 +1,4 @@
-"""«Звірка ФХП»: comparing a route's gas composition against its chromatographs.
+"""«Звірка ФХП»: comparing a route's lines against its reference composition.
 
 Unlike the other reports in this project — accidents, ГРС trends, night flows —
 this one is computed on the BACKEND rather than in the browser. That is
@@ -495,7 +495,8 @@ def _build_block(
     ref_ids = [m.line_id for m in members if m.is_reference]
     compared_ids = [m.line_id for m in members if not m.is_reference]
     # Nothing to compare against unless there is a reference AND something that
-    # is not one: an all-chromatograph route reads like a route with none.
+    # is not one: a route where every line is the reference has nothing to
+    # compare, and reads like a route with no reference at all.
     has_reference = bool(ref_ids) and bool(compared_ids)
 
     reference, ref_counts = (

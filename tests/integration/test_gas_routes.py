@@ -10,7 +10,10 @@ from datetime import datetime
 import pytest
 
 from backend.db.engine import async_session_factory
+from sqlalchemy import delete as sa_delete
+
 from backend.db.models import EditArchive, GasVolumeCalc, HourlyArchive, Line
+from backend.db.models.gas_route_model import GasRouteMember
 from backend.services.edit_value_codec import encode_float
 
 DENSITY = 1
@@ -55,6 +58,11 @@ async def add_line(calc_id: int, number: int, name: str) -> int:
         session.add(line)
         await session.commit()
         return line.id
+
+
+def one_reference(seed_topology) -> list[dict]:
+    """The smallest route the API will accept: one line, marked reference."""
+    return [{"line_id": seed_topology["line1"], "is_reference": True}]
 
 
 async def create_route(client, seed_topology, members, number="301", **overrides):
@@ -122,7 +130,9 @@ class TestRouteCrud:
         ]
 
     async def test_delete(self, admin_client, seed_topology):
-        route = (await create_route(admin_client, seed_topology, [])).json()
+        route = (await create_route(
+            admin_client, seed_topology, one_reference(seed_topology)
+        )).json()
         assert (await admin_client.delete(f"/gas_routes/{route['id']}")).status_code == 204
         assert (await admin_client.get("/gas_routes/")).json() == []
 
@@ -132,8 +142,11 @@ class TestRouteCrud:
     async def test_duplicate_number_in_the_same_branch_is_409(
         self, admin_client, seed_topology
     ):
-        await create_route(admin_client, seed_topology, [])
-        resp = await create_route(admin_client, seed_topology, [])
+        await create_route(admin_client, seed_topology, one_reference(seed_topology))
+        resp = await create_route(
+            admin_client, seed_topology,
+            [{"line_id": seed_topology["line2"], "is_reference": True}],
+        )
         assert resp.status_code == 409
         assert "301" in resp.json()["detail"]
 
@@ -143,16 +156,19 @@ class TestRouteCrud:
         for n in (1, 2):
             resp = await admin_client.post("/gas_routes/", json={
                 "number": "301", "branch_id": seed_two_branches[f"branch{n}"],
-                "active": True, "members": [],
+                "active": True,
+                "members": [
+                    {"line_id": seed_two_branches[f"line{n}"], "is_reference": True}
+                ],
             })
             assert resp.status_code == 201, resp.text
 
     async def test_a_line_cannot_be_in_two_routes(self, admin_client, seed_topology):
         await create_route(admin_client, seed_topology, [
-            {"line_id": seed_topology["line1"], "is_reference": False},
+            {"line_id": seed_topology["line1"], "is_reference": True},
         ])
         resp = await create_route(admin_client, seed_topology, [
-            {"line_id": seed_topology["line1"], "is_reference": False},
+            {"line_id": seed_topology["line1"], "is_reference": True},
         ], number="302")
         assert resp.status_code == 400
         assert "301" in resp.json()["detail"]
@@ -170,20 +186,22 @@ class TestRouteCrud:
         resp = await admin_client.post("/gas_routes/", json={
             "number": "301", "branch_id": seed_two_branches["branch1"],
             "active": True,
-            "members": [{"line_id": seed_two_branches["line2"], "is_reference": False}],
+            "members": [{"line_id": seed_two_branches["line2"], "is_reference": True}],
         })
         assert resp.status_code == 400
         assert "філії" in resp.json()["detail"]
 
     async def test_empty_number_is_rejected(self, admin_client, seed_topology):
-        resp = await create_route(admin_client, seed_topology, [], number="   ")
+        resp = await create_route(
+            admin_client, seed_topology, one_reference(seed_topology), number="   "
+        )
         assert resp.status_code == 400
 
     async def test_free_lines_excludes_lines_of_other_routes(
         self, admin_client, seed_topology
     ):
         await create_route(admin_client, seed_topology, [
-            {"line_id": seed_topology["line1"], "is_reference": False},
+            {"line_id": seed_topology["line1"], "is_reference": True},
         ])
         free = (await admin_client.get(
             "/gas_routes/free_lines/", params={"branch_id": seed_topology["branch"]}
@@ -194,7 +212,7 @@ class TestRouteCrud:
         self, admin_client, seed_topology
     ):
         route = (await create_route(admin_client, seed_topology, [
-            {"line_id": seed_topology["line1"], "is_reference": False},
+            {"line_id": seed_topology["line1"], "is_reference": True},
         ])).json()
         free = (await admin_client.get("/gas_routes/free_lines/", params={
             "branch_id": seed_topology["branch"], "route_id": route["id"],
@@ -211,7 +229,10 @@ class TestBranchScoping:
         for n in (1, 2):
             await admin_client.post("/gas_routes/", json={
                 "number": f"30{n}", "branch_id": seed_two_branches[f"branch{n}"],
-                "active": True, "members": [],
+                "active": True,
+                "members": [
+                    {"line_id": seed_two_branches[f"line{n}"], "is_reference": True}
+                ],
             })
         listed = (await scoped_viewer_client.get("/gas_routes/")).json()
         assert [r["number"] for r in listed] == ["301"]
@@ -221,7 +242,8 @@ class TestBranchScoping:
     ):
         other = (await admin_client.post("/gas_routes/", json={
             "number": "302", "branch_id": seed_two_branches["branch2"],
-            "active": True, "members": [],
+            "active": True,
+            "members": [{"line_id": seed_two_branches["line2"], "is_reference": True}],
         })).json()
         assert (await scoped_viewer_client.get(
             f"/gas_routes/{other['id']}"
@@ -234,7 +256,8 @@ class TestBranchScoping:
     async def test_viewer_cannot_write(self, scoped_viewer_client, seed_two_branches):
         resp = await scoped_viewer_client.post("/gas_routes/", json={
             "number": "999", "branch_id": seed_two_branches["branch1"],
-            "active": True, "members": [],
+            "active": True,
+            "members": [{"line_id": seed_two_branches["line1"], "is_reference": True}],
         })
         assert resp.status_code == 403
 
@@ -283,7 +306,7 @@ class TestFhpReport:
         # The only change is three days before the range opens.
         await add_changes(line, [(dt(1, 0), 0.60, 0.7467)])
         route = (await create_route(admin_client, seed_topology, [
-            {"line_id": line, "is_reference": False},
+            {"line_id": line, "is_reference": True},
         ])).json()
 
         blk = block(await self.report(
@@ -300,34 +323,14 @@ class TestFhpReport:
         # replaced, and that value must hold the earlier hours.
         await add_changes(line, [(dt(1, 12), 0.7000, 0.8000)])
         route = (await create_route(admin_client, seed_topology, [
-            {"line_id": line, "is_reference": False},
+            {"line_id": line, "is_reference": True},
         ])).json()
 
         blk = block(await self.report(admin_client, route["id"]))
         assert blk["lines"][0]["values"][at(blk, dt(1, 7).isoformat())] == pytest.approx(0.70)
         assert blk["lines"][0]["values"][at(blk, dt(1, 13).isoformat())] == pytest.approx(0.80)
 
-    async def test_route_without_a_chromatograph_shows_the_spread(
-        self, admin_client, seed_topology
-    ):
-        a, b = seed_topology["line1"], seed_topology["line2"]
-        await add_changes(a, [(dt(1, 6), 0.60, 0.74)])
-        await add_changes(b, [(dt(1, 6), 0.60, 0.76)])
-        route = (await create_route(admin_client, seed_topology, [
-            {"line_id": a, "is_reference": False},
-            {"line_id": b, "is_reference": False},
-        ])).json()
-
-        blk = block(await self.report(admin_client, route["id"]))
-        assert blk["has_reference"] is False
-        assert blk["reference"] is None
-        i = at(blk, dt(1, 7).isoformat())
-        assert blk["spread_min"][i] == pytest.approx(0.74)
-        assert blk["spread_max"][i] == pytest.approx(0.76)
-        assert blk["spread"][i] == pytest.approx(0.02)
-        assert all(line["deltas"] is None for line in blk["lines"])
-
-    async def test_all_reference_route_reads_like_one_with_none(
+    async def test_all_reference_route_shows_the_spread(
         self, admin_client, seed_topology
     ):
         a, b = seed_topology["line1"], seed_topology["line2"]
@@ -339,8 +342,14 @@ class TestFhpReport:
         ])).json()
 
         blk = block(await self.report(admin_client, route["id"]))
+        # Nothing to compare against: every line IS the reference.
         assert blk["has_reference"] is False
-        assert blk["spread"][at(blk, dt(1, 7).isoformat())] == pytest.approx(0.02)
+        assert blk["reference"] is None
+        i = at(blk, dt(1, 7).isoformat())
+        assert blk["spread_min"][i] == pytest.approx(0.74)
+        assert blk["spread_max"][i] == pytest.approx(0.76)
+        assert blk["spread"][i] == pytest.approx(0.02)
+        assert all(line["deltas"] is None for line in blk["lines"])
 
     async def test_a_line_without_changes_is_no_data(self, admin_client, seed_topology):
         ref, silent = seed_topology["line1"], seed_topology["line2"]
@@ -368,7 +377,7 @@ class TestFhpReport:
             (dt(1, 8), 0.7467, 1e30),
         ])
         route = (await create_route(admin_client, seed_topology, [
-            {"line_id": line, "is_reference": False},
+            {"line_id": line, "is_reference": True},
         ])).json()
 
         body = await self.report(admin_client, route["id"])
@@ -382,7 +391,7 @@ class TestFhpReport:
         line = seed_topology["line1"]
         await add_changes(line, [(dt(1, 0), 0.60, 0.74)])
         route = (await create_route(admin_client, seed_topology, [
-            {"line_id": line, "is_reference": False},
+            {"line_id": line, "is_reference": True},
         ])).json()
 
         blk = block(await self.report(admin_client, route["id"], granularity="daily"))
@@ -396,7 +405,7 @@ class TestFhpReport:
         await add_changes(line, [(dt(1, 6), 0.50, 0.6130)], edit_type_id=CO2)
         await add_changes(line, [(dt(1, 6), 1.80, 1.9546)], edit_type_id=N2)
         route = (await create_route(admin_client, seed_topology, [
-            {"line_id": line, "is_reference": False},
+            {"line_id": line, "is_reference": True},
         ])).json()
 
         body = await self.report(admin_client, route["id"])
@@ -409,7 +418,7 @@ class TestFhpReport:
         line = seed_topology["line1"]
         await add_changes(line, [(dt(1, 6), 0.60, 0.74)])
         route = (await create_route(admin_client, seed_topology, [
-            {"line_id": line, "is_reference": False},
+            {"line_id": line, "is_reference": True},
         ])).json()
 
         blk = block(await self.report(
@@ -427,7 +436,7 @@ class TestFhpReport:
         await add_changes(line, [(dt(1, 6), 0.60, 0.74)])
         await add_hourly(line, [dt(1, 12), dt(1, 13)])
         route = (await create_route(admin_client, seed_topology, [
-            {"line_id": line, "is_reference": False},
+            {"line_id": line, "is_reference": True},
         ])).json()
 
         body = await self.report(
@@ -450,7 +459,7 @@ class TestFhpReport:
         await add_changes(line, [(dt(1, 6), 0.60, 0.74)])
         await add_hourly(line, [dt(1, 12)])
         route = (await create_route(admin_client, seed_topology, [
-            {"line_id": line, "is_reference": False},
+            {"line_id": line, "is_reference": True},
         ])).json()
 
         resp = await admin_client.get(f"/gas_routes/{route['id']}/fhp_report", params={
@@ -463,7 +472,7 @@ class TestFhpReport:
         line = seed_topology["line1"]
         await add_hourly(line, [dt(1, 12), dt(2, 5)])
         route = (await create_route(admin_client, seed_topology, [
-            {"line_id": line, "is_reference": False},
+            {"line_id": line, "is_reference": True},
         ])).json()
 
         resp = await admin_client.get(f"/gas_routes/{route['id']}/data_until")
@@ -573,14 +582,26 @@ class TestFhpReport:
         await add_changes(a, [(dt(1, 6), 0.60, 0.74)])
         await add_changes(b, [(dt(1, 6), 0.60, 0.76)])
         route = (await create_route(admin_client, seed_topology, [
-            {"line_id": a, "is_reference": False},
-            {"line_id": b, "is_reference": False},
+            {"line_id": a, "is_reference": True},
+            {"line_id": b, "is_reference": True},
         ])).json()
         body = await self.report(admin_client, route["id"])
         assert body["volume"] is None
 
     async def test_route_without_lines_is_400(self, admin_client, seed_topology):
-        route = (await create_route(admin_client, seed_topology, [])).json()
+        # Unreachable through the API now — a route is saved with a reference
+        # line — but a member still disappears when its line is deleted, and
+        # the report must say so rather than crash.
+        route = (await create_route(
+            admin_client, seed_topology, one_reference(seed_topology)
+        )).json()
+        async with async_session_factory() as session:
+            await session.execute(
+                sa_delete(GasRouteMember).where(
+                    GasRouteMember.route_id == route["id"]
+                )
+            )
+            await session.commit()
         resp = await admin_client.get(f"/gas_routes/{route['id']}/fhp_report", params={
             "date_from": "2026-05-01", "date_to": "2026-05-02",
         })
@@ -588,10 +609,45 @@ class TestFhpReport:
         assert "не містить ліній" in resp.json()["detail"]
 
     async def test_reversed_dates_are_400(self, admin_client, seed_topology):
-        route = (await create_route(admin_client, seed_topology, [
-            {"line_id": seed_topology["line1"], "is_reference": False},
-        ])).json()
+        route = (await create_route(
+            admin_client, seed_topology, one_reference(seed_topology)
+        )).json()
         resp = await admin_client.get(f"/gas_routes/{route['id']}/fhp_report", params={
             "date_from": "2026-05-05", "date_to": "2026-05-01",
         })
         assert resp.status_code == 400
+
+
+class TestReferenceIsRequired:
+    """A route exists to compare its lines against a reference composition, so
+    one has to be marked. It is not necessarily the chromatograph line — a route
+    without a chromatograph still takes some line's ФХП as correct."""
+
+    async def test_no_reference_is_rejected(self, admin_client, seed_topology):
+        resp = await create_route(admin_client, seed_topology, [
+            {"line_id": seed_topology["line1"], "is_reference": False},
+            {"line_id": seed_topology["line2"], "is_reference": False},
+        ])
+        assert resp.status_code == 400
+        assert "еталон" in resp.json()["detail"].lower()
+
+    async def test_a_route_without_lines_is_rejected(self, admin_client, seed_topology):
+        resp = await create_route(admin_client, seed_topology, [])
+        assert resp.status_code == 400
+
+    async def test_the_reference_cannot_be_removed_by_an_update(
+        self, admin_client, seed_topology
+    ):
+        route = (await create_route(
+            admin_client, seed_topology, one_reference(seed_topology)
+        )).json()
+        resp = await admin_client.patch(f"/gas_routes/{route['id']}", json={
+            "number": route["number"],
+            "branch_id": seed_topology["branch"],
+            "active": True,
+            "members": [{"line_id": seed_topology["line1"], "is_reference": False}],
+        })
+        assert resp.status_code == 400
+        # The stored route is untouched.
+        stored = (await admin_client.get(f"/gas_routes/{route['id']}")).json()
+        assert stored["members"][0]["is_reference"] is True

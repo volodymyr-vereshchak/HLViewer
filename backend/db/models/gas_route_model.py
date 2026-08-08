@@ -1,10 +1,12 @@
 """Gas transport routes: a set of lines carrying the SAME gas.
 
 Along a route the physical-chemical properties (ФХП) must be identical, so a
-route is the unit the «Звірка ФХП» report compares within. Some ГРС have a
-stream chromatograph feeding the composition automatically; on the rest it is
-typed in by hand, sometimes not at all over a weekend. The chromatograph lines
-of a route are its reference.
+route is the unit the «Звірка ФХП» report compares within. One or more of its
+lines are marked as the REFERENCE — the composition the rest are checked
+against. Usually that is a line with a stream chromatograph, which updates the
+composition by itself while the others are typed in by hand; but a route
+without a chromatograph still needs a reference, so the flag says "this is the
+reference", not "this has a chromatograph".
 
 A line belongs to at most ONE route — `uq_gas_route_member_line` — which is the
 deliberate difference from `VirtualLineMember` (a line may sit in several
@@ -68,10 +70,11 @@ class GasRouteMember(HlBaseModel, table=True):
     line_id: int = Field(
         foreign_key="gas_volume_line.id", ondelete="CASCADE", sa_type=BigInteger,
     )
-    # "This line has a stream chromatograph", i.e. it is a reference for the
-    # route. It lives here rather than on `gas_volume_line` because it is an
-    # editorial decision made inside the route editor, and because the flag is
-    # meaningless for the lines that belong to no route at all.
+    # "This line's ФХП is the reference for the route." Lives here rather than
+    # on `gas_volume_line` because it is a decision about THIS route — the same
+    # line could be the reference in one context and the compared one in
+    # another — and because the flag is meaningless for a line in no route.
+    # A route must have at least one; the endpoint refuses to save otherwise.
     is_reference: bool = Field(default=False)
     sort_order: int = Field(default=0)
 

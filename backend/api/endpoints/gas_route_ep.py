@@ -325,7 +325,19 @@ async def _check_members(
             status.HTTP_400_BAD_REQUEST, "Одна й та сама лінія вказана двічі"
         )
     if not line_ids:
-        return
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "Додайте лінії до маршруту"
+        )
+    # A route exists to compare its lines against a reference, so a route
+    # without one has nothing to say. The reference line is not necessarily
+    # the one with a stream chromatograph — it is whichever line's ФХП is
+    # taken as correct for this route.
+    if not any(m.is_reference for m in data.members):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Позначте хоча б одну лінію як еталонну — без еталона немає з чим "
+            "порівнювати",
+        )
 
     # Every member must belong to the route's own branch: the route is the unit
     # access is granted on, and a line from elsewhere would be readable through it.

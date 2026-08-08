@@ -51,7 +51,7 @@ class FhpParamBlock(BaseModel):
     # Daily granularity only: fewer than 24 means the day is incomplete.
     hours_present: Optional[list[int]] = None
     reference: Optional[list[Optional[float]]] = None
-    # How many chromatograph lines backed the reference at each period. Not
+    # How many reference lines backed the reference at each period. Not
     # diagnostics: when it changes mid-range the reference itself jumps.
     reference_count: Optional[list[int]] = None
     spread_min: list[Optional[float]] = []
@@ -100,8 +100,8 @@ class FhpVolumeLine(BaseModel):
 
 class FhpVolumeBlock(BaseModel):
     """ΔV = V_reference − V_reported. Negative means the reported volume was
-    overstated. Absent when the route has no chromatograph — without a
-    reference there is nothing to correct towards."""
+    overstated. Absent when the route has no reference line — without one
+    there is nothing to correct towards."""
 
     periods: list[str] = []
     lines: list[FhpVolumeLine] = []
