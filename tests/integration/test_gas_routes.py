@@ -456,6 +456,25 @@ class TestFhpReport:
         # no CO₂ data", are unrelated and still expected.)
         assert not any("обмежено" in w for w in body["warnings"])
 
+    async def test_daily_axis_stops_at_the_data_too(self, admin_client, seed_topology):
+        """The hourly axis walks the clipped range, so it stopped by itself; the
+        daily one was built from the REQUESTED dates and padded the table and
+        the chart with empty rows for days the archive has not reached."""
+        line = seed_topology["line1"]
+        await add_changes(line, [(dt(1, 6), 0.60, 0.74)])
+        await add_hourly(line, [dt(1, 12), dt(2, 12)])
+        route = (await create_route(admin_client, seed_topology, [
+            {"line_id": line, "is_reference": True},
+        ])).json()
+
+        body = await self.report(
+            admin_client, route["id"],
+            date_from="2026-05-01", date_to="2026-05-10", granularity="daily",
+        )
+        blk = block(body)
+        # Data reaches 02.05 12:00, so the axis ends on the 2nd — not the 10th.
+        assert blk["periods"] == ["2026-05-01", "2026-05-02"]
+
     async def test_a_period_entirely_past_the_data_is_400(
         self, admin_client, seed_topology
     ):

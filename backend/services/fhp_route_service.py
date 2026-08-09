@@ -164,7 +164,12 @@ async def build_route_report(
     changes = await dao.changes_in_range(line_ids, edit_type_ids, range_from, range_to)
     seeds = await dao.seed_changes(line_ids, edit_type_ids, range_from)
 
-    days = commercial_day.days_in_range(date_from, date_to)
+    # Days come from the CLIPPED range, not the requested one. The hourly axis
+    # already stopped at the horizon because it walks range_from → range_to, but
+    # the daily one used to run to the picker's end date and pad the table and
+    # the chart with empty rows for days the archive has not reached.
+    last_day = commercial_day.day_of(range_to - timedelta(hours=1), hour)
+    days = commercial_day.days_in_range(date_from, min(date_to, last_day))
     warnings: list[str] = []
 
     # Built once for every quantity — the displayed blocks fold these, and the
