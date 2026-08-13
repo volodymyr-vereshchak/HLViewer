@@ -1,10 +1,6 @@
-import json
-from pathlib import Path
-
 from fastapi import APIRouter, Depends, status, HTTPException
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import select
 
 from backend.api.endpoints.auth_ep import get_current_user, require_admin
 from backend.db.dao.custom_exceptions import DatabaseIntegrityError
@@ -12,9 +8,8 @@ from backend.db.dao.gas_volume_calc_type_dao import GasVolumeCalcTypeDao
 from backend.db.engine import get_session
 from backend.db.models import GasVolumeCalcTypeCreate, GasVolumeCalcTypeList
 from backend.db.models.gas_volume_calc_type_model import GasVolumeCalcType, GasVolumeCalcTypeUpdate
-from backend.db.models.sys_type_model import SysType
-from backend.db.models.edit_type_model import EditType
 from backend.db.models.app_user_model import AppUser
+from backend.db.preload_db.event_types_json import export_event_types, import_event_types
 
 
 class GasVolumeCalcTypeRouter:
@@ -56,6 +51,13 @@ class GasVolumeCalcTypeRouter:
             path="/gas-volume-calc-types/export-preload",
             tags=["Gas volume types"],
             endpoint=self.export_preload_json,
+            methods=["POST"],
+            status_code=status.HTTP_200_OK,
+        )
+        self.router.add_api_route(
+            path="/gas-volume-calc-types/preload",
+            tags=["Gas volume types"],
+            endpoint=self.preload_json,
             methods=["POST"],
             status_code=status.HTTP_200_OK,
         )
@@ -108,29 +110,30 @@ class GasVolumeCalcTypeRouter:
         user: AppUser = Depends(require_admin),
         session: AsyncSession = Depends(get_session),
     ):
-        calc_types = (await session.execute(
-            select(GasVolumeCalcType).order_by(GasVolumeCalcType.type_id)
-        )).scalars().all()
-        sys_types = (await session.execute(
-            select(SysType).order_by(SysType.gas_volume_calc_type_id, SysType.sys_type_id)
-        )).scalars().all()
-        edit_types = (await session.execute(
-            select(EditType).order_by(EditType.gas_volume_calc_type_id, EditType.edit_type_id)
-        )).scalars().all()
-
-        base = Path("backend/db/preload_db")
-        flowtype = {"FLOWTYPE": [{"ID_TYPE": c.type_id, "TYPENAME": c.type_name} for c in calc_types]}
-        sysname  = {"SYSNAME":  [{"ID_TYPE": s.gas_volume_calc_type_id, "SYS_ID":  s.sys_type_id,  "SYSNAME":  s.sys_name}  for s in sys_types]}
-        editname = {"EDITNAME": [{"ID_TYPE": e.gas_volume_calc_type_id, "EDIT_ID": e.edit_type_id, "EDITNAME": e.edit_name} for e in edit_types]}
-
-        (base / "FLOWTYPE.json").write_text(json.dumps(flowtype,  ensure_ascii=False, indent=2), encoding="utf-8")
-        (base / "SYSNAME.json").write_text( json.dumps(sysname,   ensure_ascii=False, indent=2), encoding="utf-8")
-        (base / "EDITNAME.json").write_text(json.dumps(editname,  ensure_ascii=False, indent=2), encoding="utf-8")
-
+        """DB → FLOWTYPE/SYSNAME/EDITNAME.json. The files are committed with the
+        code and reloaded on every start, so this is what makes an edit made in
+        the admin panel survive a restart and reach the offline server."""
+        counts = await export_event_types(session)
         return {"ok": True, "exported": {
-            "flowtype": len(calc_types),
-            "sysname":  len(sys_types),
-            "editname": len(edit_types),
+            "flowtype": counts.flowtype,
+            "sysname": counts.sysname,
+            "editname": counts.editname,
+        }}
+
+    async def preload_json(
+        self,
+        force: bool = False,
+        user: AppUser = Depends(require_admin),
+        session: AsyncSession = Depends(get_session),
+    ):
+        """The other direction. Without `force` a merge; with it sys_type and
+        edit_type are emptied first — see `import_event_types` for why the
+        calculator types are never wiped."""
+        counts = await import_event_types(session, force=force)
+        return {"ok": True, "wiped": counts.wiped, "exported": {
+            "flowtype": counts.flowtype,
+            "sysname": counts.sysname,
+            "editname": counts.editname,
         }}
 
 

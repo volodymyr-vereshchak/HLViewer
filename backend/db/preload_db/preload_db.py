@@ -1,72 +1,18 @@
-import asyncio
-import json
-from datetime import datetime
+"""Seed the reference data every installation needs: the device catalog and the
+event-type dictionaries. Runs on container start and is also exposed as
+POST /preload_data/, so it must stay idempotent and non-destructive."""
 
-from backend.db.dao.edit_type_dao import EditTypeDao
-from backend.db.dao.gas_volume_calc_type_dao import GasVolumeCalcTypeDao
-from backend.db.dao.sys_type_dao import SysTypeDao
+import asyncio
+
 from backend.db.engine import async_session_factory
-from backend.db.models import (
-    EDIT_TYPE_CONSTRAINT,
-    SYS_TYPE_CONSTRAINT,
-)
-from backend.db.models.gas_volume_calc_type_model import GAS_VOLUME_CALC_TYPE_CONSTRAINT
 from backend.db.preload_db import preload_device_catalog
+from backend.db.preload_db.event_types_json import import_event_types
 
 
 async def preload_db():
     async with async_session_factory() as session:
         await preload_device_catalog.preload(session)
-        path = "backend/db/preload_db/FLOWTYPE.json"
-        with open(path, "r", encoding="utf8") as file:
-            flow_type = json.load(file)["FLOWTYPE"]
-        instance_list = [
-            {
-                "type_id": flow_dict["ID_TYPE"],
-                "type_name": flow_dict["TYPENAME"].strip(),
-                "updated_at": datetime.now(),
-            }
-            for flow_dict in flow_type
-        ]
-        await GasVolumeCalcTypeDao(session=session).bulk_upsert_with_update(
-            instance_list, GAS_VOLUME_CALC_TYPE_CONSTRAINT
-        )
-
-        path = "backend/db/preload_db/EDITNAME.json"
-        with open(path, "r", encoding="utf8") as file:
-            flow_type = json.load(file)["EDITNAME"]
-        instance_list = [
-            {
-                "edit_type_id": flow_dict["EDIT_ID"],
-                "gas_volume_calc_type_id": flow_dict["ID_TYPE"],
-                "edit_name": flow_dict["EDITNAME"].strip(),
-                "updated_at": datetime.now(),
-            }
-            for flow_dict in flow_type
-        ]
-        await EditTypeDao(session=session).bulk_upsert_with_update(
-            instance_list, EDIT_TYPE_CONSTRAINT
-        )
-
-        path = "backend/db/preload_db/SYSNAME.json"
-        with open(path, "r", encoding="utf8") as file:
-            flow_type = json.load(file)["SYSNAME"]
-        instance_list = [
-            {
-                "sys_type_id": flow_dict["SYS_ID"],
-                "gas_volume_calc_type_id": flow_dict["ID_TYPE"],
-                "sys_name": flow_dict["SYSNAME"].strip(),
-                "updated_at": datetime.now(),
-            }
-            for flow_dict in flow_type
-        ]
-        batch_size = 1000
-
-        for i in range(0, len(instance_list), batch_size):
-            batch = instance_list[i : i + batch_size]
-            await SysTypeDao(session=session).bulk_upsert_with_update(
-                batch, SYS_TYPE_CONSTRAINT
-            )
+        await import_event_types(session)
 
 
 if __name__ == "__main__":

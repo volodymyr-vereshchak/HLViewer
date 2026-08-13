@@ -3,6 +3,7 @@ type-router factory — see type_router_factory.py."""
 
 from backend.api.endpoints.type_router_factory import make_type_router
 from backend.db.dao.sys_type_dao import SysTypeDao
+from backend.db.models.sys_archive_model import SysArchive
 from backend.db.models.sys_type_model import (
     SysType,
     SysTypeCreate,
@@ -20,4 +21,6 @@ sys_type_router = make_type_router(
     list_model_cls=SysTypeList,
     type_id_field="sys_type_id",
     name_field="sys_name",
+    archive_model=SysArchive,
+    archive_code_field="sys_type_id",
 )
