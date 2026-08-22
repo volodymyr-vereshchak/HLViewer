@@ -281,6 +281,9 @@ _ADMIN_PATH_MARKERS = (
     "config-debug",
     "config-preview",
     "config-mappings",
+    # The branch bundle carries the DPD password in clear text, and a GET would
+    # otherwise pass the read-only check.
+    "config-export",
     "scan-eis",
 )
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})

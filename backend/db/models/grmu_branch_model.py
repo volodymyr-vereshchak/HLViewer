@@ -10,10 +10,11 @@ New hierarchy:
           └── VirtualLineMember  (junction)
 """
 
+import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
 
-from sqlalchemy import Index, BigInteger
+from sqlalchemy import Index, BigInteger, Uuid
 from sqlmodel import Field, Relationship, SQLModel, UniqueConstraint
 
 from .base_model import HlBaseModel
@@ -36,11 +37,20 @@ class GrmuBranch(GrmuBranchBase, table=True):
     __tablename__ = "grmu_branch"
     __table_args__ = (
         UniqueConstraint("name", name="uq_grmu_branch_name"),
+        UniqueConstraint("export_uid", name="uq_grmu_branch_export_uid"),
         Index("idx_grmu_branch_name", "name"),
         Index("idx_grmu_branch_active", "active"),
     )
 
     id: int | None = Field(default=None, primary_key=True, sa_type=BigInteger)
+    # Identity of the branch ACROSS installations, minted once and carried in
+    # the config bundle. `name` cannot do this job: it is unique per database,
+    # so a rename at the source would arrive on the central server as a second
+    # branch, and two genuinely different branches that happen to share a name
+    # would silently merge into one. See services/branch_config_transfer.py.
+    export_uid: uuid.UUID = Field(
+        default_factory=uuid.uuid4, sa_type=Uuid, nullable=False,
+    )
 
     lumgs: List["Lumg"] = Relationship(
         back_populates="branch", cascade_delete=True

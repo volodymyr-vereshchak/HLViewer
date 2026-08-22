@@ -5,12 +5,20 @@ Provides CRUD for branches and read access to per-branch device mappings.
 """
 
 import asyncio
+import io
+import json
 import logging
+from dataclasses import asdict
 from datetime import datetime
 from typing import List, Optional
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import (
+    APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status,
+)
+from fastapi.responses import StreamingResponse
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
@@ -30,10 +38,12 @@ from backend.db.models.grmu_branch_model import (
     GrmuBranchDpdCredential,
     GrmuBranchDpdCredentialUpdate,
 )
-from backend.api.endpoints.auth_ep import get_branch_filter
+from backend.api.endpoints.auth_ep import get_branch_filter, require_admin
+from backend.db.models.app_user_model import AppUser
 from backend.db.models.lumg_model import Lumg
 from backend.hl_engine.config_reader import ConfigReader
 from backend.utils.path_utils import resolve_stored_path
+from backend.services import branch_config_transfer
 from backend.services.grmu_branch_mappings import get_all_mappings
 
 _update_lock = asyncio.Lock()
@@ -394,6 +404,133 @@ async def delete_dpd_credential(branch_id: int, session: AsyncSession = Depends(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="DPD credentials not found")
     await session.delete(cred)
     await session.commit()
+
+
+# ─── Config transfer (філія → центральний сервер) ─────────────────────────────
+
+
+@router.get(
+    "/{branch_id}/config-export",
+    summary="Download this branch's configuration as a JSON bundle",
+    response_class=StreamingResponse,
+)
+async def export_branch_config(
+    branch_id: int,
+    include_secrets: bool = Query(
+        default=True,
+        description="Put the DPD password into the file (it is stored in clear text)",
+    ),
+    admin: AppUser = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """The file carries the DPD password, so this GET must stay admin-only.
+
+    `auth_guard` only demands admin for write methods and for paths listed in
+    `_ADMIN_PATH_MARKERS`; "config-export" is in that list, and `require_admin`
+    here is the second lock on the same door.
+    """
+    try:
+        bundle = await branch_config_transfer.export_branch(
+            session, branch_id, include_secrets=include_secrets
+        )
+    except branch_config_transfer.BranchNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Branch not found")
+
+    # indent=2 + ensure_ascii=False: the file is meant to be read and diffed by
+    # a person, and Cyrillic escaped to \uXXXX makes that impossible.
+    body = json.dumps(bundle, ensure_ascii=False, indent=2) + "\n"
+    stamp = datetime.now().strftime("%Y-%m-%d_%H_%M")
+    label = bundle["branch"].get("short_name") or bundle["branch"]["name"]
+    pretty = f"branch_{label}_{stamp}.json".replace(" ", "_")
+    # HTTP headers are latin-1; the Ukrainian name goes in the RFC 5987 form and
+    # an ASCII name stays as the fallback for anything that ignores it.
+    disposition = (
+        f'attachment; filename="branch_{branch_id}_{stamp}.json"; '
+        f"filename*=UTF-8''{quote(pretty)}"
+    )
+    return StreamingResponse(
+        io.BytesIO(body.encode("utf-8")),
+        media_type="application/json",
+        headers={"Content-Disposition": disposition},
+    )
+
+
+@router.post(
+    "/config-import",
+    summary="Merge a branch configuration bundle into this installation",
+)
+async def import_branch_config(
+    file: UploadFile = File(...),
+    dry_run: bool = Query(
+        default=True, description="Report what would change without keeping it"
+    ),
+    target_branch_id: Optional[int] = Query(
+        default=None, description="Branch the bundle updates; omit to match by the file"
+    ),
+    create_new: bool = Query(
+        default=False, description="Always create a new branch instead of matching"
+    ),
+    lumg_map: Optional[str] = Form(
+        default=None,
+        description='JSON {"ЛУМГ у файлі": <id наявного ЛУМГ>} — renames, not duplicates',
+    ),
+    admin: AppUser = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Merge a bundle, or preview the merge.
+
+    The preview is the real import rolled back — that is what makes its counts
+    exact and lets a constraint the file would violate surface before anyone
+    presses «Застосувати» rather than after.
+
+    `target_branch_id` / `create_new` / `lumg_map` carry the one decision the
+    file cannot make for itself: which rows here this configuration IS. Without
+    them the bundle matches itself by transfer id and then by name, which is
+    right for a repeat transfer and wrong the first time it arrives under a name
+    that has changed on one of the two sides.
+    """
+    content = await file.read()
+    try:
+        bundle = json.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Файл не читається як JSON: {exc}",
+        )
+
+    try:
+        mapping = json.loads(lumg_map) if lumg_map else None
+        if mapping is not None and not isinstance(mapping, dict):
+            raise ValueError("expected an object")
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Некоректне зіставлення ЛУМГ: {exc}",
+        )
+
+    try:
+        report = await branch_config_transfer.import_branch(
+            session,
+            bundle,
+            dry_run=dry_run,
+            target_branch_id=target_branch_id,
+            create_new=create_new,
+            lumg_map=mapping,
+        )
+    except SQLAlchemyError as exc:
+        await session.rollback()
+        logger.error("Branch config import failed: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"База відхилила імпорт: {exc.__class__.__name__}",
+        )
+
+    applied = report.ok and not dry_run
+    if applied:
+        await session.commit()
+    else:
+        await session.rollback()
+    return {**asdict(report), "applied": applied}
 
 
 grmu_branch_router = router
