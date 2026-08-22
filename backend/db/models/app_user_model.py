@@ -23,6 +23,12 @@ class AppUser(AppUserBase, table=True):
     )
     id: Optional[int] = Field(default=None, primary_key=True, sa_type=BigInteger)
     password_hash: Optional[str] = Field(default=None, max_length=255)
+    # Bumped whenever an admin changes what this account may do (role, active,
+    # branch access) or resets its password. The value is baked into the JWT at
+    # login; a token carrying an older one is refused, so a rights change takes
+    # effect on the next request instead of waiting out a token that can live
+    # 30 days. See auth_ep.resolve_session_user.
+    perms_version: int = Field(default=1, nullable=False)
     branch_access: List["AppUserBranchAccess"] = Relationship(back_populates="user")
 
 
@@ -44,3 +50,8 @@ class AppUserBranchAccess(HlBaseModel, table=True):
 class AppUserRead(AppUserBase):
     id: int
     allowed_branch_ids: list[int] = []
+    # Whether this account has a password of ours at all. False = a domain
+    # account: it was provisioned by an LDAP login and authenticates against
+    # Active Directory, so there is nothing here for an admin to reset. Derived
+    # from password_hash, which itself never leaves the backend.
+    has_password: bool = True

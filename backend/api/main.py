@@ -43,8 +43,12 @@ from backend.api.endpoints.auth_ep import (
     hash_password,
     _maybe_refresh_token,
     decode_jwt,
+    resolve_session_user,
     COOKIE_NAME,
     COOKIE_SECURE,
+    PERMS_CHANGED_DETAIL,
+    SESSION_ENDED_HEADER,
+    SESSION_ENDED_PERMS,
 )
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
@@ -235,7 +239,11 @@ async def sliding_session_middleware(request: Request, call_next):
     Idle tabs still expire normally (and the frontend re-auths via /auth/me)."""
     response = await call_next(request)
     token = request.cookies.get(COOKIE_NAME)
-    if token:
+    # 401 means the guard (or /auth/me) just refused this token — a rights change
+    # under it, a deactivated account, an expired session. Re-issuing the cookie
+    # here would hand back a fresh copy of the very token that was refused, and
+    # on /auth/me it would race the delete_cookie that ends the session.
+    if token and response.status_code != 401:
         refreshed = _maybe_refresh_token(token)
         if refreshed:
             new_token, max_age = refreshed
@@ -291,8 +299,24 @@ async def auth_guard(request: Request, call_next):
     if claims is None:
         return NaNSafeJSONResponse(status_code=401, content={"detail": "Not authenticated"})
 
+    # The role in the token is a snapshot taken at login and a remember-me token
+    # lives 30 days, so it cannot be the last word on what the account may do:
+    # a demoted admin would keep write access here for weeks, and a promoted
+    # viewer would be shown the admin screens and refused on every save. The
+    # account is re-read per request; a token from before the change is dead.
+    user, reason = await resolve_session_user(claims)
+    if user is None:
+        headers = (
+            {SESSION_ENDED_HEADER: SESSION_ENDED_PERMS}
+            if reason == PERMS_CHANGED_DETAIL
+            else None
+        )
+        return NaNSafeJSONResponse(
+            status_code=401, content={"detail": reason}, headers=headers
+        )
+
     needs_admin = method in _WRITE_METHODS or any(m in path for m in _ADMIN_PATH_MARKERS)
-    if needs_admin and claims.get("role") != "admin":
+    if needs_admin and user.role != "admin":
         return NaNSafeJSONResponse(status_code=403, content={"detail": "Admin privileges required"})
 
     request.state.claims = claims
@@ -328,6 +352,10 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # allow_headers covers the request side; a response header is invisible to
+    # JS cross-origin unless it is listed here. Same-origin behind nginx this
+    # changes nothing, but the dev server talks to the API on another port.
+    expose_headers=[SESSION_ENDED_HEADER],
 )
 
 app.include_router(day_archive_ep.daily_router)

@@ -16,13 +16,14 @@ from typing import List, Optional
 
 import bcrypt
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 from jose import JWTError, jwt
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from backend.db.dao.app_user_dao import AppUserDao
-from backend.db.engine import get_session
+from backend.db.engine import async_session_factory, get_session
 from backend.services.ldap_auth import ldap_authenticate, ldap_enabled
 from backend.db.models.app_user_model import AppUser, AppUserRead
 from backend.db.models.lumg_model import Lumg
@@ -66,6 +67,14 @@ COOKIE_NAME = "hlviewer_token"
 # Set COOKIE_SECURE=true when serving over HTTPS so the auth cookie is not sent
 # over plain HTTP. Defaults to false for internal HTTP deployments.
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
+# Shown when a token is refused because the account's rights changed under it.
+# Distinct from the plain "not authenticated" so the reason reaches the user.
+PERMS_CHANGED_DETAIL = "Права доступу змінено. Увійдіть у систему знову"
+# ...and marked on the response, so the frontend can tell "your rights changed"
+# apart from an ordinary expiry and say so in the user's own language instead of
+# echoing this string back at them.
+SESSION_ENDED_HEADER = "X-Session-Ended"
+SESSION_ENDED_PERMS = "perms-changed"
 
 
 def hash_password(password: str) -> str:
@@ -81,6 +90,7 @@ def _create_token(
     remember_me: bool = False,
     role: str | None = None,
     branch_ids: list[int] | None = None,
+    perms_version: int | None = None,
 ) -> str:
     delta = timedelta(days=JWT_REMEMBER_ME_DAYS) if remember_me else timedelta(hours=JWT_EXPIRE_HOURS)
     now = datetime.now(timezone.utc)
@@ -101,6 +111,10 @@ def _create_token(
         payload["role"] = role
     if branch_ids is not None:
         payload["branches"] = branch_ids
+    # pv = the account's rights generation at login. Re-checked on every request
+    # so that changing those rights ends the sessions that predate the change.
+    if perms_version is not None:
+        payload["pv"] = perms_version
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
@@ -134,6 +148,11 @@ def _maybe_refresh_token(token: str) -> Optional[tuple[str, int]]:
         payload["role"] = claims["role"]
     if "branches" in claims:
         payload["branches"] = claims["branches"]
+    if "pv" in claims:
+        # Carried, not re-read: the refresh must not silently upgrade a token
+        # whose rights generation is already out of date. Such a token is
+        # refused by the guard before it ever reaches this middleware.
+        payload["pv"] = claims["pv"]
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM), ttl
 
 
@@ -152,6 +171,7 @@ async def _issue_session(
         remember_me=remember_me,
         role=user.role,
         branch_ids=user_read.allowed_branch_ids,
+        perms_version=user.perms_version,
     )
     max_age = JWT_REMEMBER_ME_DAYS * 86400 if remember_me else JWT_EXPIRE_HOURS * 3600
     response.set_cookie(
@@ -176,6 +196,7 @@ async def _build_user_read(session: AsyncSession, user: AppUser) -> AppUserRead:
         created_at=user.created_at,
         updated_at=user.updated_at,
         allowed_branch_ids=branch_ids,
+        has_password=bool(user.password_hash),
     )
 
 
@@ -189,6 +210,43 @@ def decode_jwt(token: Optional[str]) -> Optional[dict]:
         return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
     except JWTError:
         return None
+
+
+def perms_current(claims: dict, user: AppUser) -> bool:
+    """Does this token still describe the rights the account actually has?
+
+    Tokens minted before perms_version existed carry no `pv`; they are read as
+    generation 1, which is what every untouched account has. So the change does
+    not log the whole userbase out on deploy — a token only goes stale once an
+    admin actually edits that account.
+    """
+    return int(claims.get("pv", 1)) == int(user.perms_version or 1)
+
+
+async def resolve_session_user(claims: dict) -> tuple[Optional[AppUser], str]:
+    """The account behind a decoded token, or (None, reason) if the token must
+    not be honoured any more.
+
+    Used by the central auth_guard middleware, which runs outside the dependency
+    system and therefore opens its own short-lived session (closed before the
+    request is handed on, so it never holds a pool slot alongside the endpoint's
+    own session).
+
+    The DB read is the point of the exercise: role and branches live in the
+    token, so without re-reading something per request there is no moment at
+    which a rights change can take effect.
+    """
+    try:
+        user_id = int(claims["sub"])
+    except (KeyError, TypeError, ValueError):
+        return None, "Invalid token"
+    async with async_session_factory() as session:
+        user = await AppUserDao(session=session).get_by_id(user_id)
+    if not user or not user.active:
+        return None, "User not found or inactive"
+    if not perms_current(claims, user):
+        return None, PERMS_CHANGED_DETAIL
+    return user, ""
 
 
 async def get_token_claims(hlviewer_token: Optional[str] = Cookie(default=None)) -> dict:
@@ -215,6 +273,8 @@ async def get_current_user(
     user = await AppUserDao(session=session).get_by_id(user_id)
     if not user or not user.active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
+    if not perms_current(claims, user):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=PERMS_CHANGED_DETAIL)
     return user
 
 
@@ -236,8 +296,9 @@ async def get_branch_filter(
     query on every request. Tokens issued before this change have no 'branches' claim,
     so we fall back to the DB until the user re-logs in.
 
-    Note: branch access changes take effect on the user's next login (or token expiry),
-    since the list is carried in the token. Role changes are still immediate (re-read here)."""
+    Changing a user's branches bumps their perms_version, which kills the tokens
+    that carry the old list — so the change lands on the next login, and there is
+    no window in which the stale list is still honoured."""
     if user.role == "admin":
         return None
     if "branches" in claims:
@@ -341,6 +402,19 @@ async def login(
                 )
             return await _issue_session(session, user, response, body.remember_me)
 
+    # A domain account on a server with domain login switched off. Without this
+    # it falls into the generic 401 below and the user is told their password is
+    # wrong — it is not, and no amount of retyping will help. There is nothing
+    # here to check it against: no local hash, and no AD to ask.
+    if user and not user.password_hash and not ldap_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Вхід за доменними обліковими даними вимкнено на сервері. "
+                "Зверніться до адміністратора"
+            ),
+        )
+
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Невірний логін або пароль",
@@ -368,6 +442,21 @@ async def get_me(
             payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
             user = await dao.get_by_id(int(payload["sub"]))
             if user and user.active:
+                if not perms_current(payload, user):
+                    # This endpoint is public and is also the frontend's 401
+                    # recovery path: answering it from the database would hand
+                    # back a profile the token can no longer act with, and the
+                    # app would hydrate as signed in and then fail every call.
+                    # Drop the cookie so the next load goes to the login form.
+                    # Returned rather than raised: headers set on the injected
+                    # Response are dropped when an HTTPException unwinds, and
+                    # the Set-Cookie is the whole point here.
+                    stale = JSONResponse(
+                        status_code=401, content={"detail": PERMS_CHANGED_DETAIL}
+                    )
+                    stale.headers[SESSION_ENDED_HEADER] = SESSION_ENDED_PERMS
+                    stale.delete_cookie(key=COOKIE_NAME)
+                    return stale
                 return await _build_user_read(session, user)
         except Exception:
             pass
@@ -384,6 +473,26 @@ async def get_me(
                 return await _issue_session(session, default_user, response)
 
     raise HTTPException(status_code=401, detail="Not authenticated")
+
+
+class AuthMode(BaseModel):
+    """How this server authenticates, for the admin screens to explain itself.
+
+    Both are deployment switches, not stored settings — the admin panel cannot
+    change them, it can only tell the operator what the server is currently
+    doing and which accounts that leaves stranded.
+    """
+
+    ldap_enabled: bool
+    auto_login: bool
+
+
+@router.get("/mode", response_model=AuthMode)
+async def get_auth_mode(admin: AppUser = Depends(require_admin)):
+    return AuthMode(
+        ldap_enabled=ldap_enabled(),
+        auto_login=os.getenv("AUTO_LOGIN", "false").lower() == "true",
+    )
 
 
 @router.get("/users", response_model=List[AppUserRead])
@@ -474,6 +583,16 @@ async def update_user(
                 detail="Не можна деактивувати або змінити роль останнього активного адміністратора",
             )
 
+    # Only a real change ends the user's sessions: the admin screen submits the
+    # whole form, so comparing here is what keeps a display-name edit from
+    # logging someone out. Branch access is compared as a set — order and
+    # duplicates in the payload are not a change.
+    rights_changed = (body.role is not None and body.role != user.role) or (
+        body.active is not None and body.active != user.active
+    )
+    if body.branch_ids is not None and not rights_changed:
+        rights_changed = set(body.branch_ids) != set(await dao.branch_ids(user.id))
+
     if body.display_name is not None:
         user.display_name = body.display_name
     if body.role is not None:
@@ -482,6 +601,8 @@ async def update_user(
         user.active = body.active
     if body.branch_ids is not None:
         await dao.set_branch_access(user.id, body.branch_ids)
+    if rights_changed:
+        user.perms_version = (user.perms_version or 1) + 1
 
     session.add(user)
     await session.commit()
@@ -501,7 +622,23 @@ async def reset_password(
     user = await AppUserDao(session=session).get_by_id(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    # A domain account has no password of ours to reset. Writing one would not
+    # just be pointless: the login flow checks the local password FIRST, so the
+    # account would stop being authenticated against AD altogether — it would
+    # survive the domain password being changed, and survive being disabled
+    # there. Deleting the account is the way to revoke a domain user here.
+    if not user.password_hash:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Це доменний обліковий запис — пароль зберігається в Active "
+                "Directory. Змінити його можна лише засобами домену."
+            ),
+        )
     user.password_hash = hash_password(plain_pw)
+    # A reset whose point is to lock someone out of an account is pointless if
+    # the session opened with the old password keeps running.
+    user.perms_version = (user.perms_version or 1) + 1
     session.add(user)
     await session.commit()
 
