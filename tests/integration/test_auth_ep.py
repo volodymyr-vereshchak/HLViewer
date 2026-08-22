@@ -15,7 +15,9 @@ from backend.api.endpoints.auth_ep import (
     COOKIE_NAME,
     JWT_EXPIRE_HOURS,
     JWT_REMEMBER_ME_DAYS,
+    DOMAIN_LOGIN_OFF_DETAIL,
     PERMS_CHANGED_DETAIL,
+    SESSION_ENDED_DOMAIN_OFF,
     SESSION_ENDED_HEADER,
     SESSION_ENDED_PERMS,
     _create_token,
@@ -610,6 +612,69 @@ class TestLdapSwitchedOff:
             "/auth/login", json={"username": "domain.only", "password": "bad-ad-password"}
         )
         assert resp.status_code == 401  # a failed bind is a wrong password
+
+    async def test_open_session_dies_at_the_next_request(
+        self, seed_users, monkeypatch, mocker
+    ):
+        # The whole point: switching domain login off must not leave domain
+        # users working for up to 30 days on the tokens they already hold.
+        monkeypatch.setenv("LDAP_ENABLED", "true")
+        mocker.patch(
+            "backend.api.endpoints.auth_ep.ldap_authenticate", return_value=(True, None)
+        )
+        await self._domain_user()
+        async with _fresh_client() as client:
+            login = await client.post(
+                "/auth/login", json={"username": "domain.only", "password": "ad-pass"}
+            )
+            assert login.status_code == 200
+            assert (await client.get("/lumgs/")).status_code == 200
+
+            monkeypatch.setenv("LDAP_ENABLED", "false")
+
+            resp = await client.get("/lumgs/")
+            assert resp.status_code == 401
+            assert resp.json()["detail"] == DOMAIN_LOGIN_OFF_DETAIL
+            assert resp.headers[SESSION_ENDED_HEADER] == SESSION_ENDED_DOMAIN_OFF
+
+    async def test_stranded_session_cannot_re_hydrate_via_me(
+        self, seed_users, monkeypatch, mocker
+    ):
+        monkeypatch.setenv("LDAP_ENABLED", "true")
+        mocker.patch(
+            "backend.api.endpoints.auth_ep.ldap_authenticate", return_value=(True, None)
+        )
+        await self._domain_user()
+        async with _fresh_client() as client:
+            assert (
+                await client.post(
+                    "/auth/login", json={"username": "domain.only", "password": "ad-pass"}
+                )
+            ).status_code == 200
+
+            monkeypatch.setenv("LDAP_ENABLED", "false")
+
+            resp = await client.get("/auth/me")
+            assert resp.status_code == 401
+            assert resp.headers[SESSION_ENDED_HEADER] == SESSION_ENDED_DOMAIN_OFF
+            assert not client.cookies.get(COOKIE_NAME)
+
+    async def test_local_session_unaffected(self, viewer_client, monkeypatch):
+        monkeypatch.setenv("LDAP_ENABLED", "false")
+        assert (await viewer_client.get("/lumgs/")).status_code == 200
+
+    async def test_auto_login_refuses_a_password_less_default_user(
+        self, anon_client, clean_db, monkeypatch
+    ):
+        # DEFAULT_USERNAME pointing at a domain record: minting a session here
+        # and refusing it on the next request would be a loop.
+        await self._domain_user("auto.default")
+        monkeypatch.setenv("LDAP_ENABLED", "false")
+        monkeypatch.setenv("AUTO_LOGIN", "true")
+        monkeypatch.setenv("DEFAULT_USERNAME", "auto.default")
+        resp = await anon_client.get("/auth/me")
+        assert resp.status_code == 401
+        assert COOKIE_NAME not in anon_client.cookies
 
     async def test_password_reset_still_refused(self, admin_client, monkeypatch):
         # The escape hatch stays shut: a local password minted here would not go

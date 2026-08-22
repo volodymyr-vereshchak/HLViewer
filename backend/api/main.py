@@ -44,11 +44,10 @@ from backend.api.endpoints.auth_ep import (
     _maybe_refresh_token,
     decode_jwt,
     resolve_session_user,
+    session_ended_marker,
     COOKIE_NAME,
     COOKIE_SECURE,
-    PERMS_CHANGED_DETAIL,
     SESSION_ENDED_HEADER,
-    SESSION_ENDED_PERMS,
 )
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
@@ -306,13 +305,11 @@ async def auth_guard(request: Request, call_next):
     # account is re-read per request; a token from before the change is dead.
     user, reason = await resolve_session_user(claims)
     if user is None:
-        headers = (
-            {SESSION_ENDED_HEADER: SESSION_ENDED_PERMS}
-            if reason == PERMS_CHANGED_DETAIL
-            else None
-        )
+        marker = session_ended_marker(reason)
         return NaNSafeJSONResponse(
-            status_code=401, content={"detail": reason}, headers=headers
+            status_code=401,
+            content={"detail": reason},
+            headers={SESSION_ENDED_HEADER: marker} if marker else None,
         )
 
     needs_admin = method in _WRITE_METHODS or any(m in path for m in _ADMIN_PATH_MARKERS)

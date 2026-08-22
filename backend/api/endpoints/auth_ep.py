@@ -75,6 +75,13 @@ PERMS_CHANGED_DETAIL = "Права доступу змінено. Увійдіт
 # echoing this string back at them.
 SESSION_ENDED_HEADER = "X-Session-Ended"
 SESSION_ENDED_PERMS = "perms-changed"
+# A domain account on a server whose domain login has been switched off. Such an
+# account cannot authenticate by any path, so it must not keep a session either.
+DOMAIN_LOGIN_OFF_DETAIL = (
+    "Вхід за доменними обліковими даними вимкнено на сервері. "
+    "Зверніться до адміністратора"
+)
+SESSION_ENDED_DOMAIN_OFF = "domain-login-off"
 
 
 def hash_password(password: str) -> str:
@@ -223,6 +230,39 @@ def perms_current(claims: dict, user: AppUser) -> bool:
     return int(claims.get("pv", 1)) == int(user.perms_version or 1)
 
 
+def session_refusal(user: Optional[AppUser], claims: dict) -> Optional[str]:
+    """Why this token must not be honoured any more, or None if it still may be.
+
+    One place for the whole policy, because it is checked from three: the
+    central guard (which runs outside the dependency system), the
+    get_current_user dependency, and /auth/me, which is public and therefore
+    passes the guard untouched. They disagreed once already — the guard trusted
+    the role baked into the token while /auth/me read the database — and the
+    result was an admin panel that appeared but refused every save.
+    """
+    if not user or not user.active:
+        return "User not found or inactive"
+    # A domain account has no password here; the domain is the only thing that
+    # can vouch for it. With domain login switched off it cannot log in, so
+    # letting the sessions it already had run on until they expire — up to 30
+    # days — is the one hole the login check does not cover.
+    if not user.password_hash and not ldap_enabled():
+        return DOMAIN_LOGIN_OFF_DETAIL
+    if not perms_current(claims, user):
+        return PERMS_CHANGED_DETAIL
+    return None
+
+
+def session_ended_marker(detail: str) -> Optional[str]:
+    """Value for the X-Session-Ended header: names the sessions the server ended
+    on purpose, so the login screen can explain itself instead of just appearing.
+    None for an ordinary expiry, which needs no explanation."""
+    return {
+        PERMS_CHANGED_DETAIL: SESSION_ENDED_PERMS,
+        DOMAIN_LOGIN_OFF_DETAIL: SESSION_ENDED_DOMAIN_OFF,
+    }.get(detail)
+
+
 async def resolve_session_user(claims: dict) -> tuple[Optional[AppUser], str]:
     """The account behind a decoded token, or (None, reason) if the token must
     not be honoured any more.
@@ -242,11 +282,8 @@ async def resolve_session_user(claims: dict) -> tuple[Optional[AppUser], str]:
         return None, "Invalid token"
     async with async_session_factory() as session:
         user = await AppUserDao(session=session).get_by_id(user_id)
-    if not user or not user.active:
-        return None, "User not found or inactive"
-    if not perms_current(claims, user):
-        return None, PERMS_CHANGED_DETAIL
-    return user, ""
+    refusal = session_refusal(user, claims)
+    return (None, refusal) if refusal else (user, "")
 
 
 async def get_token_claims(hlviewer_token: Optional[str] = Cookie(default=None)) -> dict:
@@ -271,10 +308,9 @@ async def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
     user = await AppUserDao(session=session).get_by_id(user_id)
-    if not user or not user.active:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
-    if not perms_current(claims, user):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=PERMS_CHANGED_DETAIL)
+    refusal = session_refusal(user, claims)
+    if refusal:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=refusal)
     return user
 
 
@@ -441,23 +477,23 @@ async def get_me(
         try:
             payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
             user = await dao.get_by_id(int(payload["sub"]))
-            if user and user.active:
-                if not perms_current(payload, user):
-                    # This endpoint is public and is also the frontend's 401
-                    # recovery path: answering it from the database would hand
-                    # back a profile the token can no longer act with, and the
-                    # app would hydrate as signed in and then fail every call.
-                    # Drop the cookie so the next load goes to the login form.
-                    # Returned rather than raised: headers set on the injected
-                    # Response are dropped when an HTTPException unwinds, and
-                    # the Set-Cookie is the whole point here.
-                    stale = JSONResponse(
-                        status_code=401, content={"detail": PERMS_CHANGED_DETAIL}
-                    )
-                    stale.headers[SESSION_ENDED_HEADER] = SESSION_ENDED_PERMS
-                    stale.delete_cookie(key=COOKIE_NAME)
-                    return stale
+            refusal = session_refusal(user, payload)
+            if user and not refusal:
                 return await _build_user_read(session, user)
+            marker = session_ended_marker(refusal or "")
+            if marker:
+                # This endpoint is public and is also the frontend's 401
+                # recovery path: answering it from the database would hand back
+                # a profile the token can no longer act with, and the app would
+                # hydrate as signed in and then fail every call. Drop the cookie
+                # so the next load goes to the login form.
+                # Returned rather than raised: headers set on the injected
+                # Response are dropped when an HTTPException unwinds, and the
+                # Set-Cookie is the whole point here.
+                stale = JSONResponse(status_code=401, content={"detail": refusal})
+                stale.headers[SESSION_ENDED_HEADER] = marker
+                stale.delete_cookie(key=COOKIE_NAME)
+                return stale
         except Exception:
             pass
 
@@ -469,8 +505,18 @@ async def get_me(
         default_username = os.getenv("DEFAULT_USERNAME")
         if default_username:
             default_user = await dao.get_by_username(default_username)
-            if default_user and default_user.active:
+            # A password-less default account would be a misconfiguration:
+            # DEFAULT_USERNAME pointed at a record that came from a domain
+            # login. Minting a session for it here and having the guard refuse
+            # it on the very next request is a loop, so refuse it once, loudly.
+            if default_user and default_user.active and default_user.password_hash:
                 return await _issue_session(session, default_user, response)
+            if default_user and not default_user.password_hash:
+                logger.warning(
+                    "AUTO_LOGIN: DEFAULT_USERNAME '%s' is a domain account with no "
+                    "local password — cannot sign in automatically while LDAP is off",
+                    default_username,
+                )
 
     raise HTTPException(status_code=401, detail="Not authenticated")
 
