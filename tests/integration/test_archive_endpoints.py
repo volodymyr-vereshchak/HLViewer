@@ -209,6 +209,45 @@ class TestSysArchive:
         assert body["total"] == 2
         assert len(body["items"]) == 1
 
+    async def test_events_compact_shape(self, admin_client, seed_topology):
+        """The accidents report's payload: names once, rows as tuples."""
+        await self._seed_sys(seed_topology)
+        resp = await admin_client.get(
+            "/sys/events/",
+            params={"from_date": "2024-12-25T00:00:00", "to_date": "2024-12-26T00:00:00"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["rows"]) == 2
+
+        by_code = {row[2]: row for row in body["rows"]}
+        line_id, ms, code, volume, name_idx = by_code[7]
+        assert line_id == seed_topology["line1"]
+        assert code == 7
+        assert volume == 1.0
+        assert body["names"][name_idx] == "Втрата живлення"
+        # Epoch milliseconds of the same instant the ordinary endpoint reports.
+        assert ms == int(datetime(2024, 12, 25, 10).timestamp() * 1000)
+
+        # An unknown code still gets a name, and every name is stored once.
+        assert "99" in body["names"][by_code[99][4]]
+        assert len(body["names"]) == len(set(body["names"]))
+
+    async def test_events_matches_the_ordinary_endpoint(self, admin_client, seed_topology):
+        """Same rows, same names — only the shape differs."""
+        await self._seed_sys(seed_topology)
+        params = {"from_date": "2024-12-25T00:00:00", "to_date": "2024-12-26T00:00:00"}
+        plain = (await admin_client.get("/sys/", params=params)).json()
+        compact = (await admin_client.get("/sys/events/", params=params)).json()
+
+        expected = {(r["line_id"], r["sys_type_id"], r["volume"], r["sys_name"]) for r in plain}
+        got = {(row[0], row[2], row[3], compact["names"][row[4]]) for row in compact["rows"]}
+        assert got == expected
+
+    async def test_events_requires_dates(self, admin_client):
+        resp = await admin_client.get("/sys/events/", params={"from_date": "2024-12-25T00:00:00"})
+        assert resp.status_code == 400
+
     async def test_grouped(self, admin_client, seed_topology):
         await self._seed_sys(seed_topology)
         resp = await admin_client.get(
@@ -418,6 +457,30 @@ class TestViewerBranchScoping:
         resp = await scoped_viewer_client.get("/grmu_branch/")
         assert resp.status_code == 200
         assert [b["id"] for b in resp.json()] == [seed_two_branches["branch1"]]
+
+    async def test_viewer_foreign_line_sys_events_empty(
+        self, scoped_viewer_client, seed_two_branches
+    ):
+        """The compact endpoint is scoped like every other archive read."""
+        line2 = seed_two_branches["line2"]
+        await _add(
+            SysArchive(
+                period=datetime(2024, 12, 25, 10),
+                sys_type_id=7,
+                volume=1.0,
+                line_id=line2,
+            )
+        )
+        resp = await scoped_viewer_client.get(
+            "/sys/events/",
+            params={
+                "from_date": "2024-12-25T00:00:00",
+                "to_date": "2024-12-26T00:00:00",
+                "line_id": [line2],
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["rows"] == []
 
     async def test_viewer_foreign_line_sys_paged_empty(
         self, scoped_viewer_client, seed_two_branches
