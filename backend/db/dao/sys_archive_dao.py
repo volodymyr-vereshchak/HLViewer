@@ -155,6 +155,12 @@ class SysArchiveDao(BasicDao):
         the period is epoch milliseconds (which the browser also needs no
         parsing for), and a row is a plain array. Same data, 21 MB.
 
+        `period` is stored naive — plant wall clock — so turning it into an
+        instant uses the container's timezone, fixed to Europe/Kyiv in
+        docker-compose. That is what makes the browser show the same hour the
+        ordinary endpoint's ISO string used to produce; a container left on UTC
+        would shift every timestamp in the report.
+
         Returns the finished JSON text: going through a response model would
         validate and re-serialise every row, which costs more than reading them
         from the database did.
