@@ -634,6 +634,59 @@ class TestEnterpriseVolumes:
         assert result[0]["device_count"] == 1
         assert result[0]["devices"] == []
 
+    async def test_stream_hours_filter_keeps_only_those_hours(
+        self, admin_client, seed_topology, mocker
+    ):
+        """The night report reads nine hours of the day; the other fifteen are
+        never aggregated and never sent."""
+        await admin_client.post(
+            "/enterprise-mappings/", json=_enterprise_payload(seed_topology)
+        )
+        mock_client = mocker.AsyncMock()
+        # Stamps inside the commercial day 25.12 (07:00 → 26.12 06:00): the
+        # night hours of that day fall on the NEXT calendar date.
+        mock_client.get_volumes = mocker.AsyncMock(side_effect=tagging_get_volumes([
+            {"serNum": 123456, "mfDev": 1, "typeDev": 3, "chNum": 0,
+             "date": f"{day}T{hour:02d}:00:00", "dvstAlwrk": float(hour)}
+            for day, hour in (
+                ("2024-12-25", 12), ("2024-12-25", 22),
+                ("2024-12-26", 2), ("2024-12-26", 3),
+            )
+        ]))
+        mocker.patch(
+            "backend.services.enterprise_volume_service.DPDClient.for_branch",
+            mocker.AsyncMock(return_value=mock_client),
+        )
+        params = {
+            "line_id": [seed_topology["line1"]],
+            "from_date": "2024-12-25",
+            "to_date": "2024-12-25",
+            "period_type": "hourly",
+            "include_devices": "false",
+        }
+
+        every = (await read_stream_events(admin_client, params))[-1]["data"]
+        assert sorted(r["period"][11:13] for r in every) == ["02", "03", "12", "22"]
+
+        # Same request, hours narrowed: the totals of the kept hours are
+        # untouched and nothing else comes back.
+        night = (await read_stream_events(
+            admin_client, {**params, "hours": [2, 3]}
+        ))[-1]["data"]
+        assert {(r["period"], r["total_volume"]) for r in night} == {
+            (r["period"], r["total_volume"]) for r in every if r["period"][11:13] in ("02", "03")
+        }
+
+    async def test_stream_rejects_hours_out_of_range(self, admin_client, seed_topology):
+        async with admin_client.stream("GET", "/enterprise/volumes/stream", params={
+            "line_id": [seed_topology["line1"]],
+            "from_date": "2024-12-25",
+            "to_date": "2024-12-25",
+            "hours": [24],
+        }) as resp:
+            await resp.aread()
+            assert resp.status_code == 400
+
     async def test_stream_reports_dpd_failure_in_band(
         self, admin_client, seed_topology, mocker
     ):

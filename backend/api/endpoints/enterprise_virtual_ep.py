@@ -220,10 +220,8 @@ class EnterpriseVirtualRouter:
             period_type,
             line_remap=physical_to_original,
             none_volume_as_zero=True,
+            include_devices=include_devices,
         )
-        if not include_devices:
-            for r in result:
-                r.devices = []
 
         logger.info(
             f"Returning {len(result)} aggregated enterprise volume records "

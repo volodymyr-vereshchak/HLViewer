@@ -80,3 +80,28 @@ class TestDpdLineArchiveUnits:
     async def test_dates_are_still_required(self, admin_client, dpd_line):
         resp = await admin_client.get("/daily_dpd/", params={"line_id": [dpd_line]})
         assert resp.status_code == 400
+
+
+class TestDpdLineInCompactArchive:
+    """DPD lines come back through /hourly_compact/ too — the night report
+    reads all three kinds of line from that one endpoint."""
+
+    async def test_hourly_compact_serves_dpd_lines(self, admin_client, dpd_line):
+        resp = await admin_client.get("/hourly_compact/", params={
+            "line_id": [dpd_line],
+            "from_date": "2026-05-03T00:00:00",
+            "to_date": "2026-05-03T23:00:00",
+        })
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["stamps"] == ["2026-05-03T10"]
+        assert body["rows"] == [[dpd_line, 0, 10.0]]
+
+    async def test_hourly_compact_honours_the_hours_filter(self, admin_client, dpd_line):
+        resp = await admin_client.get("/hourly_compact/", params={
+            "line_id": [dpd_line],
+            "from_date": "2026-05-03T00:00:00",
+            "to_date": "2026-05-03T23:00:00",
+            "hours": [2, 3],
+        })
+        assert resp.json() == {"stamps": [], "rows": []}

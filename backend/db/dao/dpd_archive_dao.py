@@ -74,7 +74,7 @@ class DpdArchiveDao(BasicDao):
         return [dict(r) for r in rows]
 
     async def load_windows(
-        self, period_type: str, windows: List[Dict]
+        self, period_type: str, windows: List[Dict], hours: List[int] = None
     ) -> List[Dict]:
         """Archive rows per ASSIGNMENT window, tagged with the assignment.
 
@@ -86,6 +86,11 @@ class DpdArchiveDao(BasicDao):
 
         One query over a VALUES join: a point with a long history would
         otherwise cost a round trip per entry.
+
+        `hours` (hourly only) keeps just those wall-clock hours. The night
+        report reads nine of twenty-four, and the rows it would throw away
+        cost the same to fetch, hand to Python and aggregate as the ones it
+        keeps.
         """
         if not windows:
             return []
@@ -115,30 +120,50 @@ class DpdArchiveDao(BasicDao):
             params[f"device_id{i}"] = r["device_id"]
             params[f"wf{i}"] = r["wf"]
             params[f"wt{i}"] = r["wt"]
+        hour_clause = ""
+        if hours and period_type != "daily":
+            params["hours"] = list(hours)
+            # CAST: EXTRACT returns numeric, and numeric = ANY(int[]) has no
+            # operator — Postgres would reject the comparison outright.
+            hour_clause = (
+                f"AND CAST(EXTRACT(HOUR FROM a.{stamp_col}) AS int) = ANY(:hours) "
+            )
         rows = (await self.session.execute(
             text(
                 f"WITH w (tag, device_id, wf, wt) AS (VALUES {values}) "
                 f"SELECT w.tag, a.device_id, a.{stamp_col} AS stamp, "
                 f"a.dvst_alwrk, a.dvwrk_alwrk, a.press, a.temper, a.press_unit "
                 f"FROM w JOIN {table} a ON a.device_id = w.device_id "
-                f"AND a.{stamp_col} >= w.wf AND a.{stamp_col} <= w.wt"
+                f"AND a.{stamp_col} >= w.wf AND a.{stamp_col} <= w.wt "
+                f"{hour_clause}"
             ),
             params,
         )).mappings().all()
         return [dict(r) for r in rows]
 
     async def touch_windows(self, period_type: str, windows: List[Dict]) -> None:
-        """Mark the rows a window read as read today (retention input)."""
+        """Mark the rows a window read as read today (retention input).
+
+        Devices that share a span are marked together. A report over a branch
+        asks the same month of every device, so this is one statement instead
+        of one per device — five hundred round trips, each re-scanning its
+        slice of the archive, for a bookkeeping column.
+        """
         if not windows:
             return
+        by_span: Dict[tuple, List[int]] = {}
         by_device: Dict[int, List[Dict]] = {}
         for w in windows:
             by_device.setdefault(w["device_id"], []).append(w)
         for device_id, group in by_device.items():
-            span_from = min(w["win_from"] for w in group)
-            span_to = max(w["win_to"] for w in group)
+            span = (
+                min(w["win_from"] for w in group),
+                max(w["win_to"] for w in group),
+            )
+            by_span.setdefault(span, []).append(device_id)
+        for (span_from, span_to), device_ids in by_span.items():
             await self.touch_accessed(
-                [device_id], period_type, span_from, span_to
+                device_ids, period_type, span_from, span_to
             )
 
     async def upsert_records(self, period_type: str, rows: List[Dict]) -> None:

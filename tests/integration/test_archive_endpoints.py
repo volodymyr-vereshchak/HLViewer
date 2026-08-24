@@ -515,3 +515,143 @@ class TestViewerBranchScoping:
         resp = await scoped_viewer_client.get("/param/", params={"line_id": [line2]})
         assert resp.status_code == 200
         assert resp.json() == []
+
+
+class TestHourlyCompact:
+    """/hourly_compact/ — the bulk read the night report lives on.
+
+    The point of these is that it agrees with /hourly/ while sending a
+    fraction of it: same rows, same volumes, same scoping, wall-clock stamps
+    listed once."""
+
+    @staticmethod
+    def _rows(body) -> set:
+        """(line_id, stamp, volume) — the payload resolved through its index."""
+        return {(r[0], body["stamps"][r[1]], r[2]) for r in body["rows"]}
+
+    async def test_matches_the_ordinary_endpoint(self, admin_client, seed_topology):
+        line1, line2 = seed_topology["line1"], seed_topology["line2"]
+        await _add(_hour(line1, 0), _hour(line1, 5, volume=7.5), _hour(line2, 3))
+        params = {
+            "from_date": "2024-12-25T00:00:00",
+            "to_date": "2024-12-25T23:00:00",
+        }
+        plain = (await admin_client.get("/hourly/", params=params)).json()
+        resp = await admin_client.get("/hourly_compact/", params={**params, "line_id": [line1, line2]})
+
+        assert resp.status_code == 200
+        expected = {(r["line_id"], r["period"][:13], r["volume"]) for r in plain}
+        assert self._rows(resp.json()) == expected
+
+    async def test_stamp_is_wall_clock_and_listed_once(self, admin_client, seed_topology):
+        """Both lines report the same hour, and the stamp is stored once.
+
+        Wall clock, not an instant: the report joins these against enterprise
+        periods, which are naive ISO strings — an epoch would only line the two
+        up for a viewer in the server's timezone."""
+        line1, line2 = seed_topology["line1"], seed_topology["line2"]
+        await _add(_hour(line1, 3), _hour(line2, 3))
+        resp = await admin_client.get(
+            "/hourly_compact/",
+            params={
+                "from_date": "2024-12-25T00:00:00",
+                "to_date": "2024-12-25T23:00:00",
+                "line_id": [line1, line2],
+            },
+        )
+        body = resp.json()
+        assert body["stamps"] == ["2024-12-25T03"]
+        assert sorted(r[0] for r in body["rows"]) == sorted([line1, line2])
+
+    async def test_hours_filter(self, admin_client, seed_topology):
+        line1 = seed_topology["line1"]
+        await _add(_hour(line1, 2), _hour(line1, 12), _hour(line1, 22))
+        resp = await admin_client.get(
+            "/hourly_compact/",
+            params={
+                "from_date": "2024-12-25T00:00:00",
+                "to_date": "2024-12-25T23:00:00",
+                "line_id": [line1],
+                "hours": [2, 22],
+            },
+        )
+        assert sorted(resp.json()["stamps"]) == ["2024-12-25T02", "2024-12-25T22"]
+
+    async def test_rejects_hours_out_of_range(self, admin_client, seed_topology):
+        resp = await admin_client.get(
+            "/hourly_compact/",
+            params={
+                "from_date": "2024-12-25T00:00:00",
+                "to_date": "2024-12-25T23:00:00",
+                "line_id": [seed_topology["line1"]],
+                "hours": [24],
+            },
+        )
+        assert resp.status_code == 400
+
+    async def test_requires_dates(self, admin_client):
+        resp = await admin_client.get(
+            "/hourly_compact/", params={"from_date": "2024-12-25T00:00:00"}
+        )
+        assert resp.status_code == 400
+
+    async def test_ring_is_summed_and_members_kept(self, admin_client, seed_topology):
+        """A ring reports its members' total; a member asked for by name keeps
+        its own row alongside."""
+        line1, line2 = seed_topology["line1"], seed_topology["line2"]
+        await _add(_hour(line1, 3, volume=100.0), _hour(line2, 3, volume=50.0))
+        ring = (await admin_client.post("/virtual_lines/", json={
+            "name": "Кільце-1",
+            "branch_id": seed_topology["branch"],
+            "lumg_id": seed_topology["lumg"],
+            "physical_line_ids": [line1, line2],
+            "active": True,
+        })).json()
+
+        params = {
+            "from_date": "2024-12-25T00:00:00",
+            "to_date": "2024-12-25T23:00:00",
+        }
+        resp = await admin_client.get(
+            "/hourly_compact/", params={**params, "line_id": [ring["id"]]}
+        )
+        assert self._rows(resp.json()) == {(ring["id"], "2024-12-25T03", 150.0)}
+        # The same total /hourly_virtual/ reports for the ring.
+        virtual = (await admin_client.get(
+            "/hourly_virtual/", params={**params, "line_id": [ring["id"]]}
+        )).json()
+        assert [r["volume"] for r in virtual] == [150.0]
+
+        # Asked for together, the member is not swallowed by the ring. Asked
+        # for with line2, not line1: rings and lines are numbered from separate
+        # sequences, and in a fresh test schema the first of each share id 1.
+        resp = await admin_client.get(
+            "/hourly_compact/", params={**params, "line_id": [ring["id"], line2]}
+        )
+        assert self._rows(resp.json()) == {
+            (ring["id"], "2024-12-25T03", 150.0),
+            (line2, "2024-12-25T03", 50.0),
+        }
+
+        # A repeated id must not count its members twice.
+        resp = await admin_client.get(
+            "/hourly_compact/", params={**params, "line_id": [ring["id"], ring["id"]]}
+        )
+        assert self._rows(resp.json()) == {(ring["id"], "2024-12-25T03", 150.0)}
+
+    async def test_viewer_foreign_line_empty(
+        self, scoped_viewer_client, seed_two_branches
+    ):
+        """Scoped like every other archive read."""
+        line2 = seed_two_branches["line2"]
+        await _add(_hour(line2, 3))
+        resp = await scoped_viewer_client.get(
+            "/hourly_compact/",
+            params={
+                "from_date": "2024-12-25T00:00:00",
+                "to_date": "2024-12-25T23:00:00",
+                "line_id": [line2],
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json() == {"stamps": [], "rows": []}

@@ -207,6 +207,10 @@ class EnterpriseRouter:
             "Re-poll the DPD API for the whole range first (fresh data); the "
             "archive serves as fallback when the API is unreachable"
         )),
+        hours: Optional[List[int]] = Query(default=None, description=(
+            "Hourly only: keep just these wall-clock hours (0-23). A report "
+            "that reads nine hours of the day never fetches the other fifteen"
+        )),
         session: AsyncSession = Depends(get_session),
     ) -> StreamingResponse:
         logger.info(
@@ -220,6 +224,11 @@ class EnterpriseRouter:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid date format: {e}. Use YYYY-MM-DD format."
+            )
+        if hours and any(h < 0 or h > 23 for h in hours):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="hours must be within 0-23",
             )
 
         # Devices are resolved before the stream starts so validation and DB
@@ -265,7 +274,7 @@ class EnterpriseRouter:
         return StreamingResponse(
             self._volume_events(
                 devices, date_from, date_to, period_type,
-                line_remap, none_volume_as_zero, include_devices, live,
+                line_remap, none_volume_as_zero, include_devices, live, hours,
             ),
             media_type="application/x-ndjson",
             # nginx honors this per-response: events reach the browser as they
@@ -277,6 +286,7 @@ class EnterpriseRouter:
     async def _volume_events(
         devices, date_from, date_to, period_type,
         line_remap, none_volume_as_zero, include_devices=True, live=False,
+        hours=None,
     ):
         """NDJSON event generator around fetch_dpd_volumes.
 
@@ -312,12 +322,13 @@ class EnterpriseRouter:
         async def run():
             volumes = await fetch_dpd_volumes(
                 devices, date_from, date_to, period_type,
-                events_cb=events_cb, live=live,
+                events_cb=events_cb, live=live, hours=hours,
             )
             return aggregate_volumes(
                 volumes, devices, period_type,
                 line_remap=line_remap,
                 none_volume_as_zero=none_volume_as_zero,
+                include_devices=include_devices,
             )
 
         task = asyncio.create_task(run())
@@ -355,9 +366,6 @@ class EnterpriseRouter:
             if latest["dirty"]:
                 yield dump(latest["progress"])
             result = await task
-            if not include_devices:
-                for r in result:
-                    r.devices = []
             # Serialize with the pydantic core (jsonable_encoder walked ~118k
             # nested device objects in pure Python — minutes on prod) and off
             # the event loop, so a big result cannot stall the whole worker.
@@ -500,10 +508,9 @@ class EnterpriseRouter:
             logger.warning("No volume data returned from DPD API")
             return []
 
-        result = aggregate_volumes(volumes_data, devices, period_type)
-        if not include_devices:
-            for r in result:
-                r.devices = []
+        result = aggregate_volumes(
+            volumes_data, devices, period_type, include_devices=include_devices
+        )
         logger.info(
             f"Returning {len(result)} aggregated enterprise volume records "
             f"for {len(devices)} devices"

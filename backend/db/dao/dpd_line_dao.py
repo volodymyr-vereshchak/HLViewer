@@ -175,6 +175,43 @@ class DpdLineArchiveDao(BasicDao):
         )).mappings().all()
         return [dict(r) for r in rows]
 
+    async def load_hourly_volumes(
+        self,
+        line_ids: List[int],
+        range_from: datetime,
+        range_to: datetime,
+        hours: Optional[List[int]] = None,
+    ) -> List[tuple]:
+        """(dpd_line_id, stamp, volume) triples for the compact hourly read.
+
+        `load_range` returns every measured column as a dict per row; the
+        night report reads only the volume. `hours` narrows to those
+        wall-clock hours in the database, so a report that looks at nine
+        hours of twenty-four never fetches the other fifteen.
+        """
+        if not line_ids:
+            return []
+        table, stamp_col, _ = _table("hourly")
+        params: Dict = {"ids": line_ids, "from": range_from, "to": range_to}
+        hour_clause = ""
+        if hours:
+            params["hours"] = list(hours)
+            # CAST: EXTRACT returns numeric, and numeric = ANY(int[]) has no
+            # operator — Postgres would reject the comparison outright.
+            hour_clause = (
+                f"AND CAST(EXTRACT(HOUR FROM {stamp_col}) AS int) = ANY(:hours) "
+            )
+        return (await self.session.execute(
+            text(
+                f"SELECT dpd_line_id, {stamp_col} AS stamp, volume "
+                f"FROM {table} "
+                f"WHERE dpd_line_id = ANY(:ids) "
+                f"AND {stamp_col} >= :from AND {stamp_col} <= :to "
+                f"{hour_clause}"
+            ),
+            params,
+        )).all()
+
     async def last_period(
         self, dpd_line_id: int, period_type: str
     ) -> Optional[datetime | date]:

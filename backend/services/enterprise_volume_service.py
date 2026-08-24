@@ -111,6 +111,7 @@ async def fetch_dpd_volumes(
     period_type: str,
     events_cb: Optional[Callable[[Dict], None]] = None,
     live: bool = False,
+    hours: Optional[List[int]] = None,
 ) -> List[Dict]:
     """Raw volume records for the requested devices/range, served from the DB
     archive; DPD is contacted only to backfill ranges older than a device's
@@ -128,6 +129,11 @@ async def fetch_dpd_volumes(
     {"type":"progress","done":N,"total":M} as backfill device polls complete
     (total=0 when nothing needs backfilling),
     {"type":"status","phase":"aggregating"} before the DB read/aggregation.
+
+    ``hours`` (hourly only) restricts the response to those wall-clock hours.
+    Backfill is unaffected — a range is polled and stored whole, so the
+    archive stays complete for the next reader; only what comes back out is
+    narrowed.
 
     Raises LookupError when a backfill is needed but no device carries a
     branch_id, ValueError when the branch has no/incomplete credentials
@@ -217,7 +223,7 @@ async def fetch_dpd_volumes(
                     "tag": assignment_id, "device_id": a["device_id"],
                     "win_from": span[0], "win_to": span[1],
                 })
-            rows = await dao.load_windows(period_type, read_windows)
+            rows = await dao.load_windows(period_type, read_windows, hours)
             await dao.touch_windows(period_type, read_windows)
 
     records: List[Dict] = []
@@ -470,15 +476,30 @@ def aggregate_volumes(
     period_type: str,
     line_remap: Optional[Dict[int, list]] = None,
     none_volume_as_zero: bool = False,
+    include_devices: bool = True,
 ) -> List[EnterpriseVolumeResponse]:
-    """Group raw DPD records into per-(line_id, period) responses."""
+    """Group raw DPD records into per-(line_id, period) responses.
+
+    `include_devices=False` returns the same totals without the per-device
+    breakdown. Callers that only want line totals used to get it by emptying
+    `.devices` afterwards, which meant building a quarter of a million
+    pydantic objects — six seconds on a month over a branch — and dropping
+    every one of them. The device COUNT is still exact.
+    """
     t_start = perf_counter()
     # Keyed by assignment: a record's device is whichever one was in force at
     # its stamp, which is also what decides the volume field below.
     device_map = {
         d["assignment_id"]: d for d in devices if d.get("assignment_id") is not None
     }
-    aggregated = defaultdict(lambda: {"total": 0.0, "devices": []})
+    aggregated = defaultdict(lambda: {"total": 0.0, "devices": [], "count": 0})
+    # One stamp per hour of the range, repeated once per device: a month over
+    # a branch is a quarter of a million records over some seven hundred
+    # distinct stamps. strptime was the most expensive call in this function
+    # by a wide margin, so it runs once per distinct stamp instead of once
+    # per record. Local to the call — stamps are request data, not a cache
+    # worth keeping.
+    period_cache: Dict = {}
 
     for record in volumes_data:
         device_info = device_map.get(record.get("tag"))
@@ -512,36 +533,45 @@ def aggregate_volumes(
         if not raw_period:
             logger.warning(f"No date field in record: {record}")
             continue
-        record_period = _parse_record_period(raw_period, period_type)
+        try:
+            record_period = period_cache[raw_period]
+        except KeyError:
+            record_period = _parse_record_period(raw_period, period_type)
+            period_cache[raw_period] = record_period
         if record_period is None:
             continue
 
-        pressure_unit = normalize_press_unit(record.get("pressUnit"))
+        pressure_unit = (
+            normalize_press_unit(record.get("pressUnit")) if include_devices else None
+        )
 
         for line_key in line_keys:
             key = (line_key, record_period)
+            entry = aggregated[key]
             if volume is not None:
-                aggregated[key]["total"] += volume
-            aggregated[key]["devices"].append(
-                DeviceVolume(
-                    serNum=device_info["serNum"],
-                    mfDev=device_info["mfDev"],
-                    typeDev=device_info["typeDev"],
-                    chNum=device_info["chNum"],
-                    enterprise_name=device_info.get("enterprise_name", ""),
-                    volume=volume,
-                    temperature=record.get("temper"),
-                    pressure=record.get("press"),
-                    pressure_unit=pressure_unit,
+                entry["total"] += volume
+            entry["count"] += 1
+            if include_devices:
+                entry["devices"].append(
+                    DeviceVolume(
+                        serNum=device_info["serNum"],
+                        mfDev=device_info["mfDev"],
+                        typeDev=device_info["typeDev"],
+                        chNum=device_info["chNum"],
+                        enterprise_name=device_info.get("enterprise_name", ""),
+                        volume=volume,
+                        temperature=record.get("temper"),
+                        pressure=record.get("press"),
+                        pressure_unit=pressure_unit,
+                    )
                 )
-            )
 
     result = [
         EnterpriseVolumeResponse(
             line_id=line_id_val,
             period=period_val,
             total_volume=round(data["total"], 2),
-            device_count=len(data["devices"]),
+            device_count=data["count"],
             devices=data["devices"],
         )
         for (line_id_val, period_val), data in aggregated.items()
