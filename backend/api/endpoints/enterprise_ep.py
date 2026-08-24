@@ -57,6 +57,25 @@ logger = logging.getLogger(__name__)
 _poll_reapers: set = set()
 
 
+def _check_inactive_scope(virtual: bool, include_inactive: bool) -> None:
+    """A deactivated point may be polled by name, never through a ring.
+
+    Deactivation is what keeps a point out of daily/hourly totals, trends and
+    the night report, and those all read through the virtual (ring-resolving)
+    path. Silently ignoring the flag there would leave a caller believing it
+    got the deactivated points it asked for; refusing says which door the
+    manual poll uses.
+    """
+    if virtual and include_inactive:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "include_inactive не поєднується з virtual=true: деактивовані "
+                "підприємства опитуються поточково і не входять у звіти"
+            ),
+        )
+
+
 async def _reap_poll(task: "asyncio.Task") -> None:
     """Await a (usually cancelled) poll task until it fully unwinds, so its
     transaction rolls back and the branch advisory lock is released.
@@ -211,6 +230,11 @@ class EnterpriseRouter:
             "Hourly only: keep just these wall-clock hours (0-23). A report "
             "that reads nine hours of the day never fetches the other fifteen"
         )),
+        include_inactive: bool = Query(default=False, description=(
+            "Also resolve DEACTIVATED points. Only the manual poll screen asks "
+            "for this; rejected together with virtual=true so deactivated "
+            "points can never reach a report"
+        )),
         session: AsyncSession = Depends(get_session),
     ) -> StreamingResponse:
         logger.info(
@@ -230,6 +254,7 @@ class EnterpriseRouter:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="hours must be within 0-23",
             )
+        _check_inactive_scope(virtual, include_inactive)
 
         # Devices are resolved before the stream starts so validation and DB
         # problems still surface as ordinary HTTP errors, not 200 + error event.
@@ -252,6 +277,7 @@ class EnterpriseRouter:
             elif line_id:
                 devices = await get_devices_for_lines_db(
                     line_id, session, range_from=win[0], range_to=win[1],
+                    include_inactive=include_inactive,
                 )
                 if serNum is not None and chNum is not None:
                     devices = [d for d in devices if d["serNum"] == serNum and d["chNum"] == chNum]
@@ -259,6 +285,7 @@ class EnterpriseRouter:
                 devices = await get_assignments_for_device_db(
                     serNum, mfDev, typeDev, chNum, session,
                     range_from=win[0], range_to=win[1],
+                    include_inactive=include_inactive,
                 )
             else:
                 raise HTTPException(
@@ -439,6 +466,10 @@ class EnterpriseRouter:
             "Re-poll the DPD API for the whole range first (fresh data); the "
             "archive serves as fallback when the API is unreachable"
         )),
+        include_inactive: bool = Query(default=False, description=(
+            "Also resolve DEACTIVATED points — the manual poll screen's "
+            "fallback transport; reports never pass it"
+        )),
         session: AsyncSession = Depends(get_session),
     ) -> List[EnterpriseVolumeResponse]:
         logger.info(
@@ -467,6 +498,7 @@ class EnterpriseRouter:
             if line_id:
                 devices = await get_devices_for_lines_db(
                     line_id, session, range_from=win[0], range_to=win[1],
+                    include_inactive=include_inactive,
                 )
                 if serNum is not None and chNum is not None:
                     devices = [d for d in devices if d["serNum"] == serNum and d["chNum"] == chNum]
@@ -477,6 +509,7 @@ class EnterpriseRouter:
                 devices = await get_assignments_for_device_db(
                     serNum, mfDev, typeDev, chNum, session,
                     range_from=win[0], range_to=win[1],
+                    include_inactive=include_inactive,
                 )
                 if not devices:
                     logger.warning(f"No enterprise found: serNum={serNum} mfDev={mfDev} typeDev={typeDev} chNum={chNum}")

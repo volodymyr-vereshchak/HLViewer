@@ -687,6 +687,58 @@ class TestEnterpriseVolumes:
             await resp.aread()
             assert resp.status_code == 400
 
+    async def test_deactivated_point_polls_by_name_but_stays_out_of_reports(
+        self, admin_client, seed_topology, mocker
+    ):
+        """Deactivating a point takes it out of the totals, not off the wire.
+
+        The poll screen must still be able to ask its meter — that is often
+        exactly why someone opens a switched-off point — while everything that
+        computes a volume goes on ignoring it."""
+        await admin_client.post(
+            "/enterprise-mappings/",
+            json=_enterprise_payload(seed_topology, active=False),
+        )
+        mock_client = mocker.AsyncMock()
+        mock_client.get_volumes = mocker.AsyncMock(side_effect=tagging_get_volumes([{
+            "serNum": 123456, "mfDev": 1, "typeDev": 3, "chNum": 0,
+            "date": "2024-12-25", "dvstAlwrk": 100.5,
+        }]))
+        mocker.patch(
+            "backend.services.enterprise_volume_service.DPDClient.for_branch",
+            mocker.AsyncMock(return_value=mock_client),
+        )
+        params = {
+            "line_id": [seed_topology["line1"]],
+            "from_date": "2024-12-25",
+            "to_date": "2024-12-25",
+        }
+
+        # What the reports ask for: nothing, exactly as before.
+        assert (await read_stream_events(admin_client, params))[-1]["data"] == []
+
+        # What the poll screen asks for: the meter answers.
+        polled = (await read_stream_events(
+            admin_client, {**params, "include_inactive": "true", "live": "true"}
+        ))[-1]["data"]
+        assert [r["total_volume"] for r in polled] == [100.5]
+
+    async def test_inactive_is_refused_through_the_ring_path(
+        self, admin_client, seed_topology
+    ):
+        """The flag cannot be smuggled into a report: virtual=true is how
+        trends and the night report resolve, and it refuses the combination
+        rather than quietly ignoring it."""
+        async with admin_client.stream("GET", "/enterprise/volumes/stream", params={
+            "line_id": [seed_topology["line1"]],
+            "from_date": "2024-12-25",
+            "to_date": "2024-12-25",
+            "virtual": "true",
+            "include_inactive": "true",
+        }) as resp:
+            await resp.aread()
+            assert resp.status_code == 400
+
     async def test_stream_reports_dpd_failure_in_band(
         self, admin_client, seed_topology, mocker
     ):

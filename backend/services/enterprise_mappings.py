@@ -279,7 +279,7 @@ def get_devices_for_lines(line_ids: List[int]) -> List[Dict]:
 
 
 async def _query_assignments_db(
-    session, *where, range_from=None, range_to=None
+    session, *where, range_from=None, range_to=None, include_inactive=False
 ) -> list[dict]:
     """Shared ASSIGNMENT-dict builder for the DB-backed lookups below.
 
@@ -292,6 +292,12 @@ async def _query_assignments_db(
     Device codes are read THROUGH the corrector-type catalog when the device
     is linked (so catalog edits propagate to DPD polling), falling back to the
     legacy mf_dev/type_dev columns for not-yet-linked rows.
+
+    Deactivated points are left out. `include_inactive=True` brings them back
+    for the one screen that means to ask a specific meter directly — a point
+    is deactivated to keep it out of the totals, not to make its corrector
+    unreachable, and an operator checking why it was switched off still needs
+    to be able to read it. Nothing that computes a volume passes this.
 
     With `range_from`/`range_to` (inclusive datetimes) only assignments that
     overlap the range are returned. Their windows are NOT rewritten: `win_to`
@@ -314,8 +320,9 @@ async def _query_assignments_db(
         .join(DpdDevice, DpdDevice.id == EnterpriseDevice.device_id)
         .outerjoin(CorectorType, DpdDevice.corector_type_id == CorectorType.id)
         .outerjoin(Manufacturer, CorectorType.manufacturer_id == Manufacturer.id)
-        .where(Enterprise.active == True)  # noqa: E712
     )
+    if not include_inactive:
+        stmt = stmt.where(Enterprise.active == True)  # noqa: E712
     for clause in where:
         stmt = stmt.where(clause)
     rows = (await session.execute(stmt)).all()
@@ -363,10 +370,14 @@ async def _query_assignments_db(
 
 
 async def get_devices_for_lines_db(
-    line_ids: list[int], session, range_from=None, range_to=None
+    line_ids: list[int], session, range_from=None, range_to=None,
+    include_inactive: bool = False,
 ) -> list[dict]:
     """Assignments of the active enterprises on the given lines (physical or
-    DPD), optionally narrowed and clipped to a datetime range."""
+    DPD), optionally narrowed and clipped to a datetime range.
+
+    `include_inactive=True` also returns deactivated points — only the manual
+    poll screen asks for that; see `_query_assignments_db`."""
     from sqlalchemy import or_
     from backend.db.models.enterprise_model import Enterprise
 
@@ -378,12 +389,13 @@ async def get_devices_for_lines_db(
         ),
         range_from=range_from,
         range_to=range_to,
+        include_inactive=include_inactive,
     )
 
 
 async def get_assignments_for_device_db(
     ser_num: int, mf_dev: int, type_dev: int, ch_num: int, session,
-    range_from=None, range_to=None,
+    range_from=None, range_to=None, include_inactive: bool = False,
 ) -> list[dict]:
     """Assignments of one corrector, addressed the way the DPD API addresses
     it. A device that moved has several — narrow with a range to get the
@@ -402,6 +414,7 @@ async def get_assignments_for_device_db(
         or_(CorectorType.type_dev == type_dev, DpdDevice.type_dev == type_dev),
         range_from=range_from,
         range_to=range_to,
+        include_inactive=include_inactive,
     )
 
 
