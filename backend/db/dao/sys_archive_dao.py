@@ -35,14 +35,11 @@ class SysArchiveDao(BasicDao):
         from_date: datetime = None,
         to_date: datetime = None,
         line_id: list[int] = None,
+        type_id: list[int] = None,
     ):
         statement = self._range_statement()
-        if from_date:
-            statement = statement.where(self.model.period >= from_date)
-        if to_date:
-            statement = statement.where(self.model.period <= to_date)
-        if line_id:
-            statement = statement.where(self.model.line_id.in_(line_id))
+        for f in self._filters(from_date, to_date, line_id, type_id):
+            statement = statement.where(f)
 
         query = await self.session.execute(statement)
         rows = query.all()
@@ -61,6 +58,7 @@ class SysArchiveDao(BasicDao):
         from_date: datetime = None,
         to_date: datetime = None,
         line_id: list[int] = None,
+        type_id: list[int] = None,
         skip: int = 0,
         limit: int = 50,
         order_by: str = "period",
@@ -69,13 +67,7 @@ class SysArchiveDao(BasicDao):
         """Paginated variant of get_range: returns {"total": int, "items": [...]}.
         Used by the sys-archive table view; the full get_range is kept for the
         accidents report which must load every row."""
-        filters = []
-        if from_date:
-            filters.append(self.model.period >= from_date)
-        if to_date:
-            filters.append(self.model.period <= to_date)
-        if line_id:
-            filters.append(self.model.line_id.in_(line_id))
+        filters = self._filters(from_date, to_date, line_id, type_id)
 
         count_stmt = select(func.count()).select_from(self.model)
         for f in filters:
@@ -95,6 +87,59 @@ class SysArchiveDao(BasicDao):
         rows = (await self.session.execute(statement)).all()
         items = self._build_range_result(rows)
         return {"total": total, "items": items}
+
+    def _filters(self, from_date, to_date, line_id, type_id=None):
+        """The WHERE clauses every sys read shares. `type_id` is the event CODE
+        (sys_type_id), which is what the table's type filter selects — the name
+        is only a label the calculator type puts on that code."""
+        filters = []
+        if from_date:
+            filters.append(self.model.period >= from_date)
+        if to_date:
+            filters.append(self.model.period <= to_date)
+        if line_id:
+            filters.append(self.model.line_id.in_(line_id))
+        if type_id:
+            filters.append(self.model.sys_type_id.in_(type_id))
+        return filters
+
+    async def get_type_counts(
+        self,
+        from_date: datetime = None,
+        to_date: datetime = None,
+        line_id: list[int] = None,
+    ) -> list[dict]:
+        """Which event codes actually occur in this period, and how often.
+
+        Feeds the table's type filter. Built from the archive rather than from
+        the SysType dictionary on purpose: the dictionary holds every code every
+        calculator model can emit — hundreds — while a single line over a month
+        produces a handful, and a filter listing codes that cannot appear is
+        worse than no filter."""
+        statement = (
+            select(
+                self.model.sys_type_id,
+                SysType.sys_name,
+                func.count().label("count"),
+            )
+            .outerjoin(Line, self.model.line_id == Line.id)
+            .outerjoin(GasVolumeCalc, Line.gas_volume_calc_id == GasVolumeCalc.id)
+            .outerjoin(GasVolumeCalcType, GasVolumeCalc.type_id == GasVolumeCalcType.id)
+            .outerjoin(
+                SysType,
+                (GasVolumeCalcType.type_id == SysType.gas_volume_calc_type_id)
+                & (self.model.sys_type_id == SysType.sys_type_id),
+            )
+            .group_by(self.model.sys_type_id, SysType.sys_name)
+            .order_by(self.model.sys_type_id)
+        )
+        for f in self._filters(from_date, to_date, line_id):
+            statement = statement.where(f)
+        rows = (await self.session.execute(statement)).all()
+        return [
+            {"type_id": type_id, "name": _sys_name(name, type_id), "count": count}
+            for type_id, name, count in rows
+        ]
 
     def _range_statement(self):
         """The event rows plus the name their calculator type gives each code.

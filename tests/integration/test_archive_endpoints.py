@@ -248,6 +248,46 @@ class TestSysArchive:
         resp = await admin_client.get("/sys/events/", params={"from_date": "2024-12-25T00:00:00"})
         assert resp.status_code == 400
 
+    async def test_type_counts_lists_only_codes_present(self, admin_client, seed_topology):
+        """Options for the table's type filter: the codes this period actually
+        holds, named and counted — not the whole SysType dictionary."""
+        await self._seed_sys(seed_topology)
+        resp = await admin_client.get(
+            "/sys/type_counts/",
+            params={"from_date": "2024-12-25T00:00:00", "to_date": "2024-12-26T00:00:00"},
+        )
+        assert resp.status_code == 200
+        by_code = {o["type_id"]: o for o in resp.json()}
+        assert set(by_code) == {7, 99}
+        assert by_code[7]["name"] == "Втрата живлення"
+        assert by_code[7]["count"] == 1
+        assert "99" in by_code[99]["name"]  # unknown-code fallback, same as the rows
+
+    async def test_paged_filtered_by_type(self, admin_client, seed_topology):
+        """`type_id` narrows the page AND the total — a filter that left the
+        count alone would page over rows the table never shows."""
+        await self._seed_sys(seed_topology)
+        resp = await admin_client.get(
+            "/sys/paged/",
+            params={
+                "from_date": "2024-12-25T00:00:00",
+                "to_date": "2024-12-26T00:00:00",
+                "type_id": [7],
+            },
+        )
+        body = resp.json()
+        assert body["total"] == 1
+        assert [r["sys_type_id"] for r in body["items"]] == [7]
+
+    async def test_full_range_filtered_by_type(self, admin_client, seed_topology):
+        """The export path (/sys/) honours the same filter as the table."""
+        await self._seed_sys(seed_topology)
+        params = {"from_date": "2024-12-25T00:00:00", "to_date": "2024-12-26T00:00:00"}
+        resp = await admin_client.get("/sys/", params={**params, "type_id": [99]})
+        assert [r["sys_type_id"] for r in resp.json()] == [99]
+        # No type_id at all still means "everything", not "nothing".
+        assert len((await admin_client.get("/sys/", params=params)).json()) == 2
+
     async def test_grouped(self, admin_client, seed_topology):
         await self._seed_sys(seed_topology)
         resp = await admin_client.get(
@@ -293,6 +333,61 @@ class TestEditArchive:
         assert body[0]["edit_name"] == "Зміна уставки"
         assert body[0]["old_value"] == 10
         assert body[0]["new_value"] == 20
+
+    async def _seed_edits(self, seed_topology):
+        """Two interventions of different codes; only one is in the dictionary."""
+        async with async_session_factory() as session:
+            gvct = GasVolumeCalcType(type_id=4, type_name="Тип 4")
+            session.add(gvct)
+            await session.flush()
+            calc = await session.get(GasVolumeCalc, seed_topology["calc"])
+            calc.type_id = gvct.id
+            session.add(calc)
+            session.add(
+                EditType(edit_type_id=3, gas_volume_calc_type_id=4, edit_name="Зміна уставки")
+            )
+            await session.commit()
+        await _add(
+            EditArchive(
+                period=datetime(2024, 12, 25, 9),
+                old_value=10,
+                new_value=20,
+                edit_type_id=3,
+                line_id=seed_topology["line1"],
+            ),
+            EditArchive(
+                period=datetime(2024, 12, 25, 10),
+                old_value=1,
+                new_value=2,
+                edit_type_id=88,  # no EditType row → fallback name
+                line_id=seed_topology["line1"],
+            ),
+        )
+
+    async def test_type_counts(self, admin_client, seed_topology):
+        await self._seed_edits(seed_topology)
+        resp = await admin_client.get(
+            "/edit/type_counts/",
+            params={"from_date": "2024-12-25T00:00:00", "to_date": "2024-12-26T00:00:00"},
+        )
+        assert resp.status_code == 200
+        by_code = {o["type_id"]: o for o in resp.json()}
+        assert set(by_code) == {3, 88}
+        assert by_code[3]["name"] == "Зміна уставки"
+        assert by_code[3]["count"] == 1
+        assert "88" in by_code[88]["name"]
+
+    async def test_filtered_by_type(self, admin_client, seed_topology):
+        await self._seed_edits(seed_topology)
+        params = {"from_date": "2024-12-25T00:00:00", "to_date": "2024-12-26T00:00:00"}
+        paged = (
+            await admin_client.get("/edit/paged/", params={**params, "type_id": [3]})
+        ).json()
+        assert paged["total"] == 1
+        assert [r["edit_type_id"] for r in paged["items"]] == [3]
+
+        full = (await admin_client.get("/edit/", params={**params, "type_id": [3]})).json()
+        assert [r["edit_type_id"] for r in full] == [3]
 
 
 class TestParam:

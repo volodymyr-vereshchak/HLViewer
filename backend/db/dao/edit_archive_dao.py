@@ -19,13 +19,25 @@ class EditArchiveDao(BasicDao):
         super().__init__(session=session)
         self.model = EditArchive
 
-    async def get_range(
-        self,
-        from_date: datetime = None,
-        to_date: datetime = None,
-        line_id: list[int] = None,
-    ):
-        statement = (
+    def _filters(self, from_date, to_date, line_id, type_id=None):
+        """The WHERE clauses every edit read shares. `type_id` is the event CODE
+        (edit_type_id), which is what the table's type filter selects — one code
+        can print under several labels once the %s channel is substituted, but
+        it is still one kind of intervention."""
+        filters = []
+        if from_date:
+            filters.append(self.model.period >= from_date)
+        if to_date:
+            filters.append(self.model.period <= to_date)
+        if line_id:
+            filters.append(self.model.line_id.in_(line_id))
+        if type_id:
+            filters.append(self.model.edit_type_id.in_(type_id))
+        return filters
+
+    def _range_statement(self):
+        """Event rows plus the name and calculator type that decode them."""
+        return (
             select(self.model, EditType, GasVolumeCalcType.type_id)
             .outerjoin(Line, self.model.line_id == Line.id)
             .outerjoin(GasVolumeCalc, Line.gas_volume_calc_id == GasVolumeCalc.id)
@@ -36,27 +48,59 @@ class EditArchiveDao(BasicDao):
                 & (self.model.edit_type_id == EditType.edit_type_id),
             )
         )
-        if from_date:
-            statement = statement.where(self.model.period >= from_date)
-        if to_date:
-            statement = statement.where(self.model.period <= to_date)
-        if line_id:
-            statement = statement.where(self.model.line_id.in_(line_id))
+
+    async def get_range(
+        self,
+        from_date: datetime = None,
+        to_date: datetime = None,
+        line_id: list[int] = None,
+        type_id: list[int] = None,
+    ):
+        statement = self._range_statement()
+        for f in self._filters(from_date, to_date, line_id, type_id):
+            statement = statement.where(f)
 
         query = await self.session.execute(statement)
-        result = []
-        for edit_archive, edit_type, calc_type_id in query.all():
-            row = edit_archive.model_dump()
-            row["edit_name"] = (
-                edit_type.edit_name
-                if edit_type
-                else f"Неизвестный код {row['edit_type_id']}"
+        return self._build_paged_rows(query.all())
+
+    async def get_type_counts(
+        self,
+        from_date: datetime = None,
+        to_date: datetime = None,
+        line_id: list[int] = None,
+    ) -> list[dict]:
+        """Which intervention codes actually occur in this period, and how often.
+
+        Feeds the table's type filter — see SysArchiveDao.get_type_counts for
+        why this reads the archive and not the EditType dictionary."""
+        statement = (
+            select(
+                self.model.edit_type_id,
+                EditType.edit_name,
+                func.count().label("count"),
             )
-            # Computer (vychislitel) type — lets the frontend scope value
-            # decoding to a verified device type instead of guessing globally.
-            row["gas_volume_calc_type_id"] = calc_type_id
-            result.append(row)
-        return result
+            .outerjoin(Line, self.model.line_id == Line.id)
+            .outerjoin(GasVolumeCalc, Line.gas_volume_calc_id == GasVolumeCalc.id)
+            .outerjoin(GasVolumeCalcType, GasVolumeCalc.type_id == GasVolumeCalcType.id)
+            .outerjoin(
+                EditType,
+                (GasVolumeCalcType.type_id == EditType.gas_volume_calc_type_id)
+                & (self.model.edit_type_id == EditType.edit_type_id),
+            )
+            .group_by(self.model.edit_type_id, EditType.edit_name)
+            .order_by(self.model.edit_type_id)
+        )
+        for f in self._filters(from_date, to_date, line_id):
+            statement = statement.where(f)
+        rows = (await self.session.execute(statement)).all()
+        return [
+            {
+                "type_id": type_id,
+                "name": name if name is not None else f"Неизвестный код {type_id}",
+                "count": count,
+            }
+            for type_id, name, count in rows
+        ]
 
     # Columns the table is allowed to sort on, server-side (maps API name → ORM column).
     _ORDER_COLUMNS = {
@@ -85,6 +129,7 @@ class EditArchiveDao(BasicDao):
         from_date: datetime = None,
         to_date: datetime = None,
         line_id: list[int] = None,
+        type_id: list[int] = None,
         skip: int = 0,
         limit: int = 50,
         order_by: str = "period",
@@ -93,30 +138,14 @@ class EditArchiveDao(BasicDao):
         """Paginated variant of get_range: returns {"total": int, "items": [...]}.
         Used by the edit-archive table view; full get_range stays for callers
         that need every row."""
-        filters = []
-        if from_date:
-            filters.append(self.model.period >= from_date)
-        if to_date:
-            filters.append(self.model.period <= to_date)
-        if line_id:
-            filters.append(self.model.line_id.in_(line_id))
+        filters = self._filters(from_date, to_date, line_id, type_id)
 
         count_stmt = select(func.count()).select_from(self.model)
         for f in filters:
             count_stmt = count_stmt.where(f)
         total = (await self.session.execute(count_stmt)).scalar_one()
 
-        statement = (
-            select(self.model, EditType, GasVolumeCalcType.type_id)
-            .outerjoin(Line, self.model.line_id == Line.id)
-            .outerjoin(GasVolumeCalc, Line.gas_volume_calc_id == GasVolumeCalc.id)
-            .outerjoin(GasVolumeCalcType, GasVolumeCalc.type_id == GasVolumeCalcType.id)
-            .outerjoin(
-                EditType,
-                (GasVolumeCalcType.type_id == EditType.gas_volume_calc_type_id)
-                & (self.model.edit_type_id == EditType.edit_type_id),
-            )
-        )
+        statement = self._range_statement()
         for f in filters:
             statement = statement.where(f)
 

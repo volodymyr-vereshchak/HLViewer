@@ -38,12 +38,38 @@ class SysArchiveRouter(BaseArchiveRouter):
             tags=["sys"],
             methods=["GET"],
         )
+        self.router.add_api_route(
+            path="/sys/type_counts/",
+            endpoint=self._get_type_counts,
+            tags=["sys"],
+            methods=["GET"],
+        )
+
+    async def get_archive(
+        self,
+        from_date: datetime = Query(None),
+        to_date: datetime = Query(None),
+        line_id: list[int] = Query(None),
+        type_id: list[int] = Query(None),
+        allowed_line_ids: list[int] | None = Depends(get_allowed_line_ids),
+        session: AsyncSession = Depends(get_session),
+    ):
+        """The base route plus `type_id`: the table filters by event code, and
+        its Excel export goes through here — an export that ignored the filter
+        on screen would not be the same report."""
+        self._check_dates(from_date, to_date)
+        line_id = self._scope_line_ids(line_id, allowed_line_ids)
+        if self._scope_is_empty(line_id):
+            return []
+        dao = SysArchiveDao(session=session)
+        return await dao.get_range(from_date, to_date, line_id, type_id)
 
     async def _get_paged(
         self,
         from_date: datetime = Query(None),
         to_date: datetime = Query(None),
         line_id: list[int] = Query(None),
+        type_id: list[int] = Query(None),
         skip: int = Query(0),
         limit: int = Query(50),
         order_by: str = Query("period"),
@@ -57,9 +83,27 @@ class SysArchiveRouter(BaseArchiveRouter):
             return {"total": 0, "items": []}
         dao = SysArchiveDao(session=session)
         return await dao.get_range_paged(
-            from_date, to_date, line_id,
+            from_date, to_date, line_id, type_id,
             skip=skip, limit=limit, order_by=order_by, order_dir=order_dir,
         )
+
+    async def _get_type_counts(
+        self,
+        from_date: datetime = Query(None),
+        to_date: datetime = Query(None),
+        line_id: list[int] = Query(None),
+        allowed_line_ids: list[int] | None = Depends(get_allowed_line_ids),
+        session: AsyncSession = Depends(get_session),
+    ):
+        """Event codes present in this period, with counts — the options the
+        table's type filter offers. Deliberately NOT narrowed by the current
+        filter: the list must keep offering what could be picked instead."""
+        self._check_dates(from_date, to_date)
+        line_id = self._scope_line_ids(line_id, allowed_line_ids)
+        if self._scope_is_empty(line_id):
+            return []
+        dao = SysArchiveDao(session=session)
+        return await dao.get_type_counts(from_date, to_date, line_id)
 
     async def _get_events(
         self,
