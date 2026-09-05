@@ -7,6 +7,7 @@ GET  /auth/me     — returns current user from JWT
 GET  /auth/users  — list all users (admin only)
 """
 
+import asyncio
 import logging
 import os
 import secrets
@@ -400,7 +401,13 @@ async def login(
     #    as an unrestricted viewer; without it the record is created inactive
     #    and waits for an admin to activate it and assign role/branches.
     if ldap_enabled():
-        ldap_ok, ldap_name = ldap_authenticate(uname, body.password)
+        # ldap3 is synchronous and its timeouts are 5s connect + 10s receive,
+        # so binding on the event loop stalls every other request this worker
+        # is serving. Eight simultaneous logins against an unreachable domain
+        # controller would otherwise freeze the whole API.
+        ldap_ok, ldap_name = await asyncio.to_thread(
+            ldap_authenticate, uname, body.password
+        )
         if ldap_ok:
             if user:
                 if not user.active:

@@ -56,6 +56,9 @@ logger = logging.getLogger(__name__)
 # garbage-collected before completion).
 _poll_reapers: set = set()
 
+# Same, for the detached archive refresh started by the manual trigger.
+_detached_refreshes: set = set()
+
 
 def _check_inactive_scope(virtual: bool, include_inactive: bool) -> None:
     """A deactivated point may be polled by name, never through a ring.
@@ -557,7 +560,14 @@ class EnterpriseRouter:
                 detail="Оновлення архіву вже виконується",
             )
         # Lock is held; run detached (same lifecycle as the scheduler run).
-        asyncio.create_task(dpd_archive_refresh.execute_locked())
+        # Kept in a module set for the same reason _poll_reapers is: a bare
+        # create_task result can be collected mid-flight, and a refresh that
+        # dies that way leaves dpd_refresh_job 'running' until STALE_SECONDS
+        # expires, blocking both the manual and the scheduled refresh for
+        # half an hour.
+        task = asyncio.create_task(dpd_archive_refresh.execute_locked())
+        _detached_refreshes.add(task)
+        task.add_done_callback(_detached_refreshes.discard)
         return {"started": True}
 
     async def archive_refresh_status(self) -> dict:

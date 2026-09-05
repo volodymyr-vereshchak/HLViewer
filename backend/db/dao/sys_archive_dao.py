@@ -302,7 +302,7 @@ class SysArchiveDao(BasicDao):
 
         grouped: dict[tuple, dict] = {}
         for row in rows:
-            sys_name = row.sys_name or f"Невідомий код {row.sys_type_id}"
+            sys_name = _sys_name(row.sys_name, row.sys_type_id)
             key = (row.sys_type_id, sys_name)
             if key not in grouped:
                 grouped[key] = {

@@ -19,6 +19,9 @@ warnings.filterwarnings('ignore', message='Unverified HTTPS request')
 
 logger = logging.getLogger(__name__)
 
+# Re-login attempts allowed per page request before the status is believed.
+MAX_RELOGINS = 2
+
 
 class DPDClient:
     """Async HTTP client for DPD API with JWT authentication."""
@@ -468,6 +471,7 @@ class DPDClient:
         client = await self._ensure_client()
         out: List[Dict] = []
         page = 0
+        relogins = 0
         while True:
             params = {
                 "from": date_from.strftime("%Y-%m-%d"),
@@ -480,8 +484,13 @@ class DPDClient:
                 resp = await client.post(url, json=body or {}, headers=headers, params=params)
             else:
                 resp = await client.get(url, headers=headers, params=params)
-            if resp.status_code in (401, 403):
+            if resp.status_code in (401, 403) and relogins < MAX_RELOGINS:
                 # Same recovery as the volume path: the token is cheap to renew.
+                # Bounded, because a 403 that is about PERMISSIONS rather than
+                # an expired token survives any number of logins, and an
+                # unbounded retry here would hammer /auth/login forever while
+                # holding this request's connection.
+                relogins += 1
                 await self._authenticate()
                 continue
             resp.raise_for_status()

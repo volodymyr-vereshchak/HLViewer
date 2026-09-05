@@ -75,6 +75,13 @@ async def heartbeat(progress: dict) -> None:
 
 
 async def finalize(status_: str, error: str | None, progress: dict) -> None:
+    """Close out THIS run. Like heartbeat, it only touches a running job.
+
+    acquire() lets a stale lock be taken over, so a process that hung past
+    STALE_SECONDS and then woke up would otherwise write its own 'done' over
+    the run that replaced it — after which the next acquire() succeeds and two
+    hostlib updates run at once, the exact thing this module exists to stop.
+    """
     async with async_session_factory() as session:
         await session.execute(
             sa.text(
@@ -85,7 +92,7 @@ async def finalize(status_: str, error: str | None, progress: dict) -> None:
                     progress = CAST(:progress AS jsonb),
                     finished_at = now(),
                     updated_at = now()
-                WHERE id = 1
+                WHERE id = 1 AND status = 'running'
                 """
             ),
             {"status": status_, "error": error, "progress": json.dumps(progress)},

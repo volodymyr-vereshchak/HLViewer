@@ -205,13 +205,16 @@ async def _heartbeat(dpd_line_id: int) -> None:
 
 
 async def _finalize(dpd_line_id: int, status: str, error: str | None) -> None:
+    # Only closes a RUNNING job: acquire() can take over a stale lock, so a
+    # process that hung and then woke up must not write its result over the
+    # run that replaced it.
     async with async_session_factory() as session:
         await session.execute(
             sa.text(
                 "UPDATE dpd_line_job SET status = :status, error = :error, "
                 "progress_done = NULL, progress_total = NULL, "
                 "finished_at = now(), updated_at = now() "
-                "WHERE dpd_line_id = :id"
+                "WHERE dpd_line_id = :id AND status = 'running'"
             ),
             {"id": dpd_line_id, "status": status, "error": error},
         )
