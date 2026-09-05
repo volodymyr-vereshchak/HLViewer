@@ -399,23 +399,61 @@ async def get_assignments_for_device_db(
 ) -> list[dict]:
     """Assignments of one corrector, addressed the way the DPD API addresses
     it. A device that moved has several — narrow with a range to get the
-    point(s) it actually served then."""
-    from sqlalchemy import or_
-    from backend.db.models.enterprise_model import DpdDevice
+    point(s) it actually served then.
+
+    Resolved in two steps, and the order is the whole point. A window ends
+    where the NEXT entry of the same metering point begins, so a history
+    filtered down to one corrector before the windows are derived has nothing
+    to end against: the corrector comes back as still installed, and every
+    period after its replacement is read from its archive and credited to a
+    point it had already left. So: find the points this device ever served,
+    let _query_assignments_db assemble their histories whole, then keep the
+    entries that are this device.
+    """
+    from sqlalchemy import or_, select
+    from backend.db.models.enterprise_model import (
+        DpdDevice, Enterprise, EnterpriseDevice,
+    )
     from backend.db.models.device_catalog_model import CorectorType, Manufacturer
 
-    return await _query_assignments_db(
-        session,
+    # Effective codes: the catalog when linked, the legacy columns otherwise —
+    # the same rule the poll resolves identity by.
+    identity = (
         DpdDevice.ser_num == ser_num,
         DpdDevice.ch_num == ch_num,
-        # Effective codes: the catalog when linked, the legacy columns
-        # otherwise — the same rule the poll resolves identity by.
         or_(Manufacturer.mf_dev == mf_dev, DpdDevice.mf_dev == mf_dev),
         or_(CorectorType.type_dev == type_dev, DpdDevice.type_dev == type_dev),
+    )
+
+    points = (
+        select(Enterprise.id)
+        .join(EnterpriseDevice, EnterpriseDevice.enterprise_id == Enterprise.id)
+        .join(DpdDevice, DpdDevice.id == EnterpriseDevice.device_id)
+        .outerjoin(CorectorType, DpdDevice.corector_type_id == CorectorType.id)
+        .outerjoin(Manufacturer, CorectorType.manufacturer_id == Manufacturer.id)
+    )
+    for clause in identity:
+        points = points.where(clause)
+    if not include_inactive:
+        points = points.where(Enterprise.active == True)  # noqa: E712
+    point_ids = list((await session.execute(points)).scalars().all())
+    if not point_ids:
+        return []
+
+    assignments = await _query_assignments_db(
+        session,
+        Enterprise.id.in_(point_ids),
         range_from=range_from,
         range_to=range_to,
         include_inactive=include_inactive,
     )
+    # The caller asked about one corrector, not about everything that ever
+    # stood at those points.
+    return [
+        a for a in assignments
+        if a["serNum"] == ser_num and a["chNum"] == ch_num
+        and a["mfDev"] == mf_dev and a["typeDev"] == type_dev
+    ]
 
 
 async def get_devices_for_branch_db(

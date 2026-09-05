@@ -592,3 +592,61 @@ class TestLineResolution:
                 [line_id], session, range_from=dt(6), range_to=dt(9),
             )
             assert during_gap == []
+
+
+class TestAssignmentsByDeviceIdentity:
+    """`get_assignments_for_device_db` is how the manual poll screen asks about
+    one corrector by the identity the DPD API uses.
+
+    The window a corrector served ends where the NEXT entry of the same
+    metering point begins. Narrowing the history to one corrector before the
+    windows are derived leaves nothing to end against, so the device comes back
+    as still installed and every later period is credited to a point it left.
+    """
+
+    async def test_replaced_corrector_stops_at_its_replacement(self, topology):
+        from backend.services.enterprise_mappings import get_assignments_for_device_db
+
+        point = await topology["make_point"]("Точка із заміною")
+        old = await topology["make_device"](7)
+        new = await topology["make_device"](8)
+        await topology["assign"](point, old, EPOCH_INSTALLED_FROM)
+        await topology["assign"](point, new, dt(10, 7))
+
+        async with async_session_factory() as session:
+            served = await get_assignments_for_device_db(
+                7, 1, 3, 0, session, range_from=dt(1), range_to=dt(20),
+            )
+
+        assert [a["serNum"] for a in served] == [7]
+        # The replacement bounds it. Before the fix this was None — "still
+        # installed" — and the days after the 10th were read from #7.
+        assert served[0]["win_to"] == dt(10, 7)
+
+    async def test_device_absent_after_its_replacement(self, topology):
+        from backend.services.enterprise_mappings import get_assignments_for_device_db
+
+        point = await topology["make_point"]("Точка із заміною 2")
+        old = await topology["make_device"](7)
+        new = await topology["make_device"](8)
+        await topology["assign"](point, old, EPOCH_INSTALLED_FROM)
+        await topology["assign"](point, new, dt(10, 7))
+
+        async with async_session_factory() as session:
+            after = await get_assignments_for_device_db(
+                7, 1, 3, 0, session, range_from=dt(12), range_to=dt(20),
+            )
+            replacement = await get_assignments_for_device_db(
+                8, 1, 3, 0, session, range_from=dt(12), range_to=dt(20),
+            )
+
+        assert after == []
+        assert [a["serNum"] for a in replacement] == [8]
+
+    async def test_unknown_device_returns_nothing(self, topology):
+        from backend.services.enterprise_mappings import get_assignments_for_device_db
+
+        async with async_session_factory() as session:
+            assert await get_assignments_for_device_db(
+                999999, 1, 3, 0, session,
+            ) == []
