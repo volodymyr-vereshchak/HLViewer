@@ -45,8 +45,11 @@ class DPDClient:
         self.password = password
         self.timeout = timeout
 
+        # Only the access token is kept: the login response also carries a
+        # "refresh" token, but DPD's refresh endpoint is not reachable from
+        # this client (auth lives on auth-direct, data on rest-direct), so an
+        # expired token is recovered with a plain re-login instead.
         self.access_token: Optional[str] = None
-        self.refresh_token: Optional[str] = None
         self._authenticated: bool = False
         # One pooled httpx client per request (created in get_volumes, closed in
         # its finally). The pool caps concurrency and reuses keep-alive
@@ -116,7 +119,6 @@ class DPDClient:
 
             data = response.json()
             self.access_token = data["access"]
-            self.refresh_token = data["refresh"]
             self._authenticated = True
 
             logger.info("DPD API authentication successful")
@@ -127,26 +129,6 @@ class DPDClient:
         except Exception as e:
             logger.error(f"DPD API authentication error: {e}")
             raise
-
-    async def _refresh_tokens(self):
-        """Refresh access token using refresh token."""
-        headers = {"Authorization": f"Bearer {self.refresh_token}"}
-        refresh_url = f"{self.base_url}refreshToken"
-
-        client = self._client
-        try:
-            response = await client.post(refresh_url, headers=headers)
-            response.raise_for_status()
-
-            data = response.json()
-            self.access_token = data["access"]
-            self.refresh_token = data["refresh"]
-
-            logger.info("DPD API tokens refreshed")
-
-        except Exception as e:
-            logger.warning(f"Token refresh failed, re-authenticating: {e}")
-            await self._authenticate()
 
     async def _get_device_indications(
         self,
@@ -247,11 +229,16 @@ class DPDClient:
                     return result
 
                 elif response.status_code in (401, 403):
+                    # The client lives for one get_volumes call, so a token
+                    # rarely outlives its request. When it does, a plain
+                    # re-login is the whole recovery: DPD's refresh endpoint
+                    # is not on this host (auth lives on auth-direct, data on
+                    # rest-direct) and its contract is unverified.
                     logger.warning(
                         f"Auth failed for device {device['serNum']} "
-                        f"(attempt {attempt}), refreshing tokens"
+                        f"(attempt {attempt}), re-authenticating"
                     )
-                    await self._refresh_tokens()
+                    await self._authenticate()
                     continue
 
                 elif 400 <= response.status_code < 500:

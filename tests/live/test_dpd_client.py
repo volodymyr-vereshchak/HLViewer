@@ -33,7 +33,6 @@ class TestDPDClientStandalone:
 
         # Tokens should be None after init (lazy authentication)
         assert client.access_token is None, "access_token should be None after init (lazy auth)"
-        assert client.refresh_token is None, "refresh_token should be None after init (lazy auth)"
         assert client._authenticated is False, "_authenticated flag should be False"
 
         print(f"✓ Lazy authentication verified")
@@ -48,7 +47,6 @@ class TestDPDClientStandalone:
         await client._authenticate()
 
         assert client.access_token is not None, "access_token should be set"
-        assert client.refresh_token is not None, "refresh_token should be set"
 
         print(f"✓ Authentication successful")
 
@@ -143,22 +141,6 @@ class TestDPDClientStandalone:
 
 class TestDPDClientErrorHandling:
     """Test error handling in DPD client."""
-
-    @pytest.mark.asyncio
-    async def test_dpd_token_refresh(self):
-        """Test token refresh mechanism."""
-        client = DPDClient()
-
-        old_access_token = client.access_token
-
-        # Test refresh
-        await client._refresh_tokens()
-
-        print(f"✓ Token refresh executed")
-        print(f"  Old token length: {len(old_access_token) if old_access_token else 0}")
-        print(f"  New token length: {len(client.access_token) if client.access_token else 0}")
-
-        assert client.access_token is not None, "New access token should be set"
 
     @pytest.mark.asyncio
     async def test_dpd_invalid_date_range(self):
