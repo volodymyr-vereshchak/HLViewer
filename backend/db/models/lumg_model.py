@@ -19,13 +19,14 @@ class Lumg(LumgBase, table=True):
     __table_args__ = (
         # Unique per branch (was global unique before)
         UniqueConstraint("branch_id", "name", name="uq_lumg_grmu_branch_name"),
-        Index("idx_lumg_name", "name"),
         Index("idx_lumg_branch", "branch_id"),
     )
 
     id: int | None = Field(default=None, primary_key=True, sa_type=BigInteger)
-    branch_id: int | None = Field(
-        default=None,
+    # NOT NULL in the database since the branch rollout, and every ЛУМГ does
+    # belong to one. The model kept saying Optional, so autogenerate proposed
+    # loosening the column on every run.
+    branch_id: int = Field(
         foreign_key="grmu_branch.id",
         ondelete="CASCADE",
         sa_type=BigInteger,

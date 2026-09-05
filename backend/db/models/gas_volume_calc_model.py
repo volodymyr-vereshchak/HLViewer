@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Index, BigInteger
+from sqlalchemy import BigInteger
 from sqlmodel import Field, Relationship, UniqueConstraint
 
 from .base_model import HlBaseModel
@@ -27,11 +27,6 @@ class GasVolumeCalc(GasVolumeCalcBase, table=True):
         # Per-lumg name uniqueness (replaces global unique on name)
         UniqueConstraint("lumg_id", "name", name="uq_gvc_lumg_name"),
         # Indexes
-        Index("idx_gvc_lumg", "lumg_id"),
-        Index("idx_gvc_lumg_address", "lumg_id", "address"),
-        Index("idx_gvc_address", "address"),
-        Index("idx_gvc_type", "type_id"),
-        Index("idx_gvc_name", "name"),
     )
 
     id: int | None = Field(default=None, primary_key=True, sa_type=BigInteger)

@@ -190,6 +190,9 @@ class VirtualLine(VirtualLineBase, table=True):
         UniqueConstraint("branch_id", "name", name="uq_virtual_line_branch_name"),
         Index("idx_virtual_line_branch", "branch_id"),
         Index("idx_virtual_line_active", "active"),
+        # Created by a migration but never declared here, which is why
+        # `alembic check` kept proposing to drop it.
+        Index("idx_virtual_line_include_in_trends", "include_in_trends"),
     )
 
     id: int | None = Field(default=None, primary_key=True, sa_type=BigInteger)

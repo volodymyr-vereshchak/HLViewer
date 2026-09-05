@@ -3,7 +3,7 @@ from datetime import date
 from decimal import Decimal
 from pydantic import field_validator
 from typing import TYPE_CHECKING, ClassVar
-from sqlalchemy import Index, BigInteger
+from sqlalchemy import BigInteger
 from .base_model import HlBaseModel
 
 if TYPE_CHECKING:
@@ -28,11 +28,6 @@ class DailyArchive(DailyArchiveBase, table=True):
         UniqueConstraint(
             *DAILY_ARCHIVE_CONSTRAINT, name="day_calc_id_line_period_constraint"
         ),
-        # Оптимизированные индексы для запросов по диапазону дат и line_id
-        Index("idx_daily_line_period", "line_id", "period"),
-        Index("idx_daily_period_line", "period", "line_id"),
-        # Индекс для агрегации по дням
-        Index("idx_daily_period_day", "period"),
     )
     id: int | None = Field(default=None, primary_key=True, sa_type=BigInteger)
     line_id: int | None = Field(

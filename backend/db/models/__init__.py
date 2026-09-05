@@ -132,3 +132,13 @@ from .dpd_line_model import (
     DpdLineHourlyArchive,
     DpdLineJob,
 )
+
+# The DPD volume cache. Nothing else imports these, so leaving them out of the
+# package left them out of SQLModel.metadata too — and alembic autogenerate,
+# seeing tables it had no model for, proposed DROPPING all four.
+from .dpd_cache_model import (
+    DpdDailyArchive,
+    DpdHourlyArchive,
+    DpdDeviceCoverage,
+    DpdRefreshJob,
+)

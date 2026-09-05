@@ -77,6 +77,11 @@ class EnterpriseBase(SQLModel):
 
 class Enterprise(EnterpriseBase, table=True):
     __tablename__ = "enterprise"
+    __table_args__ = (
+        # Created by a migration but never declared here, which is why
+        # `alembic check` kept proposing to drop it.
+        Index("ix_enterprise_dpd_line", "dpd_line_id"),
+    )
 
     id: Optional[int] = Field(default=None, primary_key=True, sa_type=BigInteger)
 

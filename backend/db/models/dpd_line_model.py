@@ -36,6 +36,9 @@ class DpdLine(DpdLineBase, table=True):
     __table_args__ = (
         UniqueConstraint("branch_id", "name", name="uq_dpd_line_branch_name"),
         Index("ix_dpd_line_branch", "branch_id"),
+        # Created by a migration but never declared here, which is why
+        # `alembic check` kept proposing to drop it.
+        Index("ix_dpd_line_include_in_report", "include_in_report"),
     )
 
     id: int | None = Field(default=None, primary_key=True, sa_type=BigInteger)

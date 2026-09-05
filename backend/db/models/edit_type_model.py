@@ -1,6 +1,6 @@
 from sqlmodel import Field, Relationship, UniqueConstraint
 from typing import TYPE_CHECKING
-from sqlalchemy import Index, BigInteger
+from sqlalchemy import BigInteger
 
 from .base_model import HlBaseModel
 
@@ -21,12 +21,6 @@ class EditType(EditTypeBase, table=True):
     __tablename__ = "edit_type"
     __table_args__ = (
         UniqueConstraint(*EDIT_TYPE_CONSTRAINT, name="edit_type_id_constraint"),
-        # Индекс для поиска по edit_type_id
-        Index("idx_edit_type_id", "edit_type_id"),
-        # Индекс для поиска по gas_volume_calc_type_id
-        Index("idx_edit_gas_volume_calc_type", "gas_volume_calc_type_id"),
-        # Индекс для поиска по edit_name
-        Index("idx_edit_name", "edit_name"),
     )
     id: int | None = Field(default=None, primary_key=True, sa_type=BigInteger)
 

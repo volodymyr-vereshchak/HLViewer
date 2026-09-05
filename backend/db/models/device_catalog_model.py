@@ -58,8 +58,11 @@ class CorectorType(SQLModel, table=True):
     )
 
     id: Optional[int] = Field(default=None, primary_key=True, sa_type=BigInteger)
+    # The FK is ON DELETE CASCADE in the database; without saying so here,
+    # autogenerate proposed replacing it with a plain one on every run.
     manufacturer_id: int = Field(
-        foreign_key="manufacturer.id", index=True, sa_type=BigInteger,
+        foreign_key="manufacturer.id", ondelete="CASCADE", index=True,
+        sa_type=BigInteger,
     )
     model_name: str = Field(index=True)    # e.g. "ВЕГА-1.01"
     type_dev: int                           # DPD device type code

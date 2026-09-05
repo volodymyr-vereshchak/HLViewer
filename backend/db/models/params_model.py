@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from pydantic import field_validator
-from sqlalchemy import Column, Index, BigInteger
+from sqlalchemy import Column, BigInteger
 from sqlmodel import Field, UniqueConstraint, Relationship
 
 from .base_model import HlBaseModel
@@ -43,7 +43,6 @@ class Param(ParamBase, table=True):
     __tablename__ = "params"
     __table_args__ = (
         UniqueConstraint(*PARAM_CONSTRAINT, name="param_line_period_constraint"),
-        Index("idx_param_line_period", "line_id", "period"),
     )
     id: int | None = Field(default=None, primary_key=True, sa_type=BigInteger)
     line_id: int | None = Field(
