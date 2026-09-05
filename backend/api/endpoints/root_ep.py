@@ -85,19 +85,22 @@ class RootRouter:
     # heartbeat and progress logic. These are thin delegators kept for the
     # endpoints below.
 
-    async def _acquire(self, lumg_id: int | None = None) -> bool:
+    async def _acquire(self, lumg_id: int | None = None) -> str | None:
+        """The run token, or None when another update already holds the lock.
+        Falsy on failure, so `if not await self._acquire()` still reads right."""
         return await update_job_lock.acquire(lumg_id)
 
     async def _read(self) -> dict:
         return await update_job_lock.read()
 
-    async def _run_job(self, work) -> None:
-        await update_job_lock.run_job(work)
+    async def _run_job(self, work, token: str | None = None) -> None:
+        await update_job_lock.run_job(work, token)
 
     # ── Endpoints ─────────────────────────────────────────────────────────────
 
     async def update_data(self, background_tasks: BackgroundTasks):
-        if not await self._acquire():
+        token = await self._acquire()
+        if not token:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Оновлення вже виконується. Зачекайте завершення.",
@@ -106,11 +109,12 @@ class RootRouter:
         async def work(session, progress):
             await update_hostlibs(session=session, progress=progress)
 
-        background_tasks.add_task(self._run_job, work)
+        background_tasks.add_task(self._run_job, work, token)
         return await self._read()
 
     async def update_data_for_lumg(self, lumg_id: int, background_tasks: BackgroundTasks):
-        if not await self._acquire(lumg_id=lumg_id):
+        token = await self._acquire(lumg_id=lumg_id)
+        if not token:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Оновлення вже виконується. Зачекайте завершення.",
@@ -119,11 +123,12 @@ class RootRouter:
         async def work(session, progress):
             await update_hostlibs(session=session, lumg_id=lumg_id, progress=progress)
 
-        background_tasks.add_task(self._run_job, work)
+        background_tasks.add_task(self._run_job, work, token)
         return await self._read()
 
     async def update_data_direct(self, body: DirectUpdateBody, background_tasks: BackgroundTasks):
-        if not await self._acquire(lumg_id=body.lumg_id):
+        token = await self._acquire(lumg_id=body.lumg_id)
+        if not token:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Оновлення вже виконується. Зачекайте завершення.",
@@ -132,7 +137,7 @@ class RootRouter:
         async def work(session, progress):
             await update_direct(path=body.path, lumg_id=body.lumg_id, session=session, progress=progress)
 
-        background_tasks.add_task(self._run_job, work)
+        background_tasks.add_task(self._run_job, work, token)
         return await self._read()
 
     async def update_status(self):

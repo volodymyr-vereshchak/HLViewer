@@ -39,14 +39,60 @@ async def _mark_stale():
 
 class TestUpdateJobLock:
     async def test_acquire_and_duplicate_guard(self, update_job_row):
-        assert await update_job_lock.acquire() is True
+        assert await update_job_lock.acquire() is not None
         # a second worker must NOT win while the job is running and fresh
-        assert await update_job_lock.acquire() is False
+        assert await update_job_lock.acquire() is None
 
     async def test_stale_job_can_be_taken_over(self, update_job_row):
-        assert await update_job_lock.acquire() is True
+        assert await update_job_lock.acquire() is not None
         await _mark_stale()
-        assert await update_job_lock.acquire() is True
+        assert await update_job_lock.acquire() is not None
+
+    async def test_finalize_does_not_close_a_takeover(self, update_job_row):
+        """The run that was replaced must not close the run that replaced it.
+
+        A hung process whose lock was taken over used to write its own status
+        over the new run — after which acquire() succeeds again and two hostlib
+        updates go at once, which is what this lock exists to prevent. Status
+        alone cannot tell the two apart: both of them are 'running'.
+        """
+        token_a = await update_job_lock.acquire()
+        assert token_a is not None
+        await _mark_stale()
+        token_b = await update_job_lock.acquire()               # takes over
+        assert token_b is not None and token_b != token_a
+
+        # A wakes up and finishes, still holding its own token.
+        await update_job_lock.finalize("done", None, {}, token_a)
+
+        state = await update_job_lock.read()
+        assert state["status"] == "running", "B's run was closed by A"
+        assert await update_job_lock.acquire() is None, "the lock was released"
+
+    async def test_heartbeat_of_a_replaced_run_does_not_hold_the_lock(
+        self, update_job_row
+    ):
+        """A's heartbeat must not keep B's lock warm — or refresh a lock that
+        is no longer A's, hiding B's own staleness."""
+        token_a = await update_job_lock.acquire()
+        await _mark_stale()
+        token_b = await update_job_lock.acquire()
+        await _mark_stale()
+
+        await update_job_lock.heartbeat({"files": 1}, token_a)
+
+        # Still stale from B's point of view, so B's lock can be taken over.
+        assert await update_job_lock.acquire() is not None
+        assert token_b is not None
+
+    async def test_finalize_closes_its_own_run(self, update_job_row):
+        token = await update_job_lock.acquire()
+        assert token is not None
+        await update_job_lock.finalize("done", None, {"files": 3}, token)
+
+        state = await update_job_lock.read()
+        assert state["status"] == "done"
+        assert await update_job_lock.acquire() is not None
 
     async def test_read_idle(self, update_job_row):
         state = await update_job_lock.read()
@@ -123,7 +169,7 @@ class TestUpdateEndpoints:
         assert status["status"] == "done"
 
     async def test_update_data_429_when_running(self, admin_client, update_job_row):
-        assert await update_job_lock.acquire() is True
+        assert await update_job_lock.acquire() is not None
         resp = await admin_client.post("/update_data/")
         assert resp.status_code == 429
 

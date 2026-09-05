@@ -12,7 +12,6 @@ requires-python = ">=3.8"
 markers = [
     "unit: fast tests without DB or network",
     "integration: tests against the real test Postgres + ASGI app",
-    "live: tests that call real external services (DPD API); excluded by default",
 ]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
@@ -22,7 +21,6 @@ addopts = [
     "-v",
     "--tb=short",
     "--strict-markers",
-    "-m", "not live",
 ]
 asyncio_mode = "auto"
 # One shared event loop for the whole session: the app engine (module-level

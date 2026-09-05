@@ -31,6 +31,10 @@ class UpdateJob(SQLModel, table=True):
     updated_at: Optional[datetime] = Field(
         default=None, sa_column=Column(DateTime(timezone=True))
     )
+    # Identifies the run that currently holds the lock. A stale lock can be
+    # taken over, so "status = running" cannot tell a live run from the hung
+    # one it replaced; heartbeat and finalize match on this instead.
+    run_token: Optional[str] = Field(default=None, max_length=32)
     error: Optional[str] = Field(default=None, max_length=2000)
     lumg_id: Optional[int] = Field(default=None, sa_type=BigInteger)
     progress: dict = Field(

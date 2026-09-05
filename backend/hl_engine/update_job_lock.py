@@ -12,6 +12,7 @@ update and a poll-triggered update can never run at the same time.
 import asyncio
 import json
 import logging
+import uuid
 from typing import Awaitable, Callable
 
 import sqlalchemy as sa
@@ -28,10 +29,18 @@ HEARTBEAT_SEC = 1.5
 STALE_SECONDS = 300
 
 
-async def acquire(lumg_id: int | None = None) -> bool:
-    """Atomically claim the job. Returns True if claimed, False if one is already
-    running (and not stale). Atomic at the DB level, so two processes can never
-    both win."""
+async def acquire(lumg_id: int | None = None) -> str | None:
+    """Atomically claim the job. Returns a RUN TOKEN when claimed and None when
+    one is already running (and not stale) — truthy/falsy either way, so
+    `if not await acquire()` still reads the same.
+
+    The token is what makes ownership checkable. A stale lock may be taken
+    over, so "is a job running" cannot answer "is MY job still running", and
+    heartbeat/finalize need the second question. It is stored on the row and
+    every later write matches on it.
+
+    Atomic at the DB level, so two processes can never both win."""
+    token = uuid.uuid4().hex
     async with async_session_factory() as session:
         result = await session.execute(
             sa.text(
@@ -43,6 +52,7 @@ async def acquire(lumg_id: int | None = None) -> bool:
                     finished_at = NULL,
                     error = NULL,
                     lumg_id = :lumg_id,
+                    run_token = :token,
                     progress = '{}'::jsonb
                 WHERE id = 1
                   AND (status <> 'running'
@@ -50,16 +60,17 @@ async def acquire(lumg_id: int | None = None) -> bool:
                 RETURNING id
                 """
             ),
-            {"lumg_id": lumg_id, "stale": STALE_SECONDS},
+            {"lumg_id": lumg_id, "stale": STALE_SECONDS, "token": token},
         )
         acquired = result.scalar() is not None
         await session.commit()
-        return acquired
+        return token if acquired else None
 
 
-async def heartbeat(progress: dict) -> None:
-    """Flush progress + bump the heartbeat. No-op if the job is no longer running
-    (e.g. it was reset), so it can't resurrect a finished job."""
+async def heartbeat(progress: dict, token: str | None = None) -> None:
+    """Flush progress + bump the heartbeat. No-op if THIS run is no longer the
+    one holding the lock — it was reset, or a stale takeover replaced it — so
+    it can neither resurrect a finished job nor keep another run's lock warm."""
     async with async_session_factory() as session:
         await session.execute(
             sa.text(
@@ -67,20 +78,28 @@ async def heartbeat(progress: dict) -> None:
                 UPDATE update_job
                 SET progress = CAST(:progress AS jsonb), updated_at = now()
                 WHERE id = 1 AND status = 'running'
+                  -- CAST, not `::text`: asyncpg cannot infer a bare
+                  -- parameter's type in an IS NULL test, and SQLAlchemy's
+                  -- text() reads `::` as the start of another bind param.
+                  AND (CAST(:token AS text) IS NULL
+                       OR run_token = CAST(:token AS text))
                 """
             ),
-            {"progress": json.dumps(progress)},
+            {"progress": json.dumps(progress), "token": token},
         )
         await session.commit()
 
 
-async def finalize(status_: str, error: str | None, progress: dict) -> None:
-    """Close out THIS run. Like heartbeat, it only touches a running job.
+async def finalize(
+    status_: str, error: str | None, progress: dict, token: str | None = None
+) -> None:
+    """Close out THIS run, identified by the token acquire() handed back.
 
     acquire() lets a stale lock be taken over, so a process that hung past
     STALE_SECONDS and then woke up would otherwise write its own 'done' over
     the run that replaced it — after which the next acquire() succeeds and two
     hostlib updates run at once, the exact thing this module exists to stop.
+    Matching on status alone cannot tell the two runs apart: both are running.
     """
     async with async_session_factory() as session:
         await session.execute(
@@ -93,9 +112,15 @@ async def finalize(status_: str, error: str | None, progress: dict) -> None:
                     finished_at = now(),
                     updated_at = now()
                 WHERE id = 1 AND status = 'running'
+                  -- CAST, not `::text`: asyncpg cannot infer a bare
+                  -- parameter's type in an IS NULL test, and SQLAlchemy's
+                  -- text() reads `::` as the start of another bind param.
+                  AND (CAST(:token AS text) IS NULL
+                       OR run_token = CAST(:token AS text))
                 """
             ),
-            {"status": status_, "error": error, "progress": json.dumps(progress)},
+            {"status": status_, "error": error,
+             "progress": json.dumps(progress), "token": token},
         )
         await session.commit()
 
@@ -143,16 +168,20 @@ async def read() -> dict:
     }
 
 
-async def run_job(work: Callable[[object, dict], Awaitable[None]]) -> None:
+async def run_job(
+    work: Callable[[object, dict], Awaitable[None]], token: str | None = None
+) -> None:
     """Run `work(session, progress)` with a heartbeat that flushes progress to the
-    DB and records the terminal state. The lock must already be acquired."""
+    DB and records the terminal state. The lock must already be acquired, and
+    `token` is what acquire() returned — without it this run cannot prove the
+    lock is still its own."""
     progress: dict = {}
     stop = asyncio.Event()
 
     async def _beat():
         while not stop.is_set():
             try:
-                await heartbeat(dict(progress))
+                await heartbeat(dict(progress), token)
             except Exception:
                 logger.warning("Heartbeat persist failed", exc_info=True)
             try:
@@ -175,7 +204,7 @@ async def run_job(work: Callable[[object, dict], Awaitable[None]]) -> None:
         except Exception:
             pass
         try:
-            await finalize(result_status, error, dict(progress))
+            await finalize(result_status, error, dict(progress), token)
         except Exception:
             logger.error("Failed to persist final job state", exc_info=True)
 
@@ -185,7 +214,8 @@ async def run_guarded_update(
 ) -> bool:
     """Claim the lock and run `work` under heartbeat/finalize. Returns False
     immediately (without running) if another update is already in progress."""
-    if not await acquire(lumg_id):
+    token = await acquire(lumg_id)
+    if token is None:
         return False
-    await run_job(work)
+    await run_job(work, token)
     return True

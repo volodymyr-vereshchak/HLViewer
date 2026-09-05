@@ -251,3 +251,129 @@ class TestCancellation:
             and not t.done()
         ]
         assert orphans == []
+
+
+class TestPagedEvents:
+    """The alarm/intervention endpoints: a paged POST that lists devices with
+    events, then a paged GET per device."""
+
+    async def test_drains_every_page(self):
+        """Driven through _paged with a tiny page so the loop actually turns:
+        the public callers ask for 500 at a time, which a fixture cannot fill.
+        """
+        pages = {
+            0: [{"id": 1}, {"id": 2}],   # full page → ask for another
+            1: [{"id": 3}],              # short page → stop
+        }
+        seen = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/auth/login"):
+                return auth_response()
+            page = int(request.url.params["page"])
+            seen.append(page)
+            return httpx.Response(200, json={
+                "content": pages.get(page, []),
+                "page": page, "size": 2, "totalElements": 3,
+            })
+
+        client = make_client(handler)
+        try:
+            rows = await client._paged(
+                "POST", BASE_URL + "devices/accidents", DATE_FROM, DATE_TO,
+                body={}, page_size=2,
+            )
+        finally:
+            await client.close()
+
+        assert [r["id"] for r in rows] == [1, 2, 3]
+        # Stops on the short page rather than asking for one more.
+        assert seen == [0, 1]
+
+    async def test_single_short_page_asks_once(self):
+        """The common case: fewer devices than a page, one request."""
+        seen = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/auth/login"):
+                return auth_response()
+            seen.append(int(request.url.params["page"]))
+            return httpx.Response(200, json={
+                "content": [{"id": 1}], "page": 0, "size": 500, "totalElements": 1,
+            })
+
+        client = make_client(handler)
+        try:
+            rows = await client.get_event_devices("accidents", DATE_FROM, DATE_TO)
+        finally:
+            await client.close()
+
+        assert [r["id"] for r in rows] == [1]
+        assert seen == [0]
+
+    async def test_relogin_is_bounded(self):
+        """A 403 about PERMISSIONS survives any number of logins.
+
+        Before this was bounded the loop re-authenticated forever, hammering
+        /auth/login while holding the request's connection open.
+        """
+        logins = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/auth/login"):
+                logins.append(1)
+                return auth_response()
+            return httpx.Response(403, json={"detail": "no access to journal"})
+
+        client = make_client(handler)
+        try:
+            with pytest.raises(httpx.HTTPStatusError):
+                await client.get_event_devices("accidents", DATE_FROM, DATE_TO)
+        finally:
+            await client.close()
+
+        # One lazy login plus the bounded retries — not an unbounded stream.
+        assert len(logins) <= 1 + 2
+
+    async def test_expired_token_is_renewed_once(self):
+        """The ordinary case the bound must not break: one 401, then data."""
+        state = {"served": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/auth/login"):
+                return auth_response()
+            state["served"] += 1
+            if state["served"] == 1:
+                return httpx.Response(401, json={"detail": "expired"})
+            return httpx.Response(200, json={
+                "content": [{"id": 9}], "page": 0, "size": 500, "totalElements": 1,
+            })
+
+        client = make_client(handler)
+        try:
+            rows = await client.get_device_events("accidents", 9, DATE_FROM, DATE_TO)
+        finally:
+            await client.close()
+
+        assert [r["id"] for r in rows] == [9]
+
+    async def test_device_events_addresses_the_right_path(self):
+        paths = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/auth/login"):
+                return auth_response()
+            paths.append(request.url.path)
+            return httpx.Response(200, json={
+                "content": [], "page": 0, "size": 500, "totalElements": 0,
+            })
+
+        client = make_client(handler)
+        try:
+            await client.get_device_events("interventions", 193, DATE_FROM, DATE_TO)
+            await client.get_event_devices("interventions", DATE_FROM, DATE_TO)
+        finally:
+            await client.close()
+
+        # DPD names these inconsistently; the map is the only place that knows.
+        assert paths == ["/api/interventions/193", "/api/devices/interventions"]
