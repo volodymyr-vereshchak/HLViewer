@@ -498,6 +498,45 @@ class TestUserManagement:
         )
         assert resp.status_code == 400
 
+    async def test_cannot_deactivate_self_even_with_another_admin(
+        self, admin_client, seed_users
+    ):
+        """The last-admin guard is not what stops this — a second admin exists.
+
+        Deactivation takes effect on the very next request, because
+        session_refusal re-reads the account, so switching yourself off is not
+        a setting you can undo. Deleting your own account was already refused;
+        this is the door that was left open beside it.
+        """
+        second = await admin_client.post(
+            "/auth/users",
+            json={"username": "admin2", "role": "admin", "branch_ids": []},
+        )
+        assert second.status_code == 200
+
+        resp = await admin_client.patch(
+            f"/auth/users/{seed_users['admin']}", json={"active": False}
+        )
+        assert resp.status_code == 400
+        assert "власний" in resp.json()["detail"]
+
+        # Still usable afterwards — the refusal changed nothing.
+        assert (await admin_client.get("/lumgs/")).status_code == 200
+
+    async def test_can_deactivate_someone_else(self, admin_client, seed_users):
+        resp = await admin_client.patch(
+            f"/auth/users/{seed_users['viewer']}", json={"active": False}
+        )
+        assert resp.status_code == 200
+
+    async def test_deactivated_user_is_refused_on_the_next_request(
+        self, admin_client, viewer_client, seed_users
+    ):
+        """Not at token expiry — on the next request."""
+        assert (await viewer_client.get("/lumgs/")).status_code == 200
+        await admin_client.patch(f"/auth/users/{seed_users['viewer']}", json={"active": False})
+        assert (await viewer_client.get("/lumgs/")).status_code == 401
+
     async def test_demote_ok_with_second_admin(self, admin_client, seed_users, _admin_hash):
         await _insert_user(
             username="admin2", role="admin", active=True, password_hash=_admin_hash

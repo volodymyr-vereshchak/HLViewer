@@ -617,6 +617,17 @@ async def update_user(
     admin: AppUser = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ):
+    # Guard: an admin may not switch off their own account. Deactivation takes
+    # effect on the very next request — session_refusal re-reads the account —
+    # so this is not a setting that can be undone by the person who made it.
+    # Deleting your own account is already refused for the same reason; this
+    # closes the door that was left open beside it.
+    if user_id == admin.id and body.active is False:
+        raise HTTPException(
+            status_code=400,
+            detail="Не можна деактивувати власний обліковий запис",
+        )
+
     dao = AppUserDao(session=session)
     user = await dao.get_by_id(user_id)
     if not user:
