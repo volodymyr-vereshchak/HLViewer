@@ -12,7 +12,7 @@ from datetime import datetime
 import httpx
 import pytest
 
-from backend.services.dpd_client import DPDClient
+from backend.services.dpd_client import EVENT_PAGE_SIZE, DPDClient
 
 AUTH_URL = "https://dpd.test/auth/login"
 BASE_URL = "https://dpd.test/api/"
@@ -289,6 +289,41 @@ class TestPagedEvents:
         assert [r["id"] for r in rows] == [1, 2, 3]
         # Stops on the short page rather than asking for one more.
         assert seen == [0, 1]
+
+    async def test_one_request_when_the_answer_fits_a_page(self):
+        """The page size is a throughput decision, not a formatting one.
+
+        DPD answers the list endpoint in ~6s whether asked for 500 rows or
+        5000 — the cost is its query, not the transfer — so a 2847-device
+        month came back in six sequential pages (35s) at 500 and in one (6s)
+        at 3000. Asking for fewer rows than fit is the whole cost.
+        """
+        TOTAL = 2847
+        pages = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/auth/login"):
+                return auth_response()
+            # Honours the requested size, as DPD does — otherwise a too-small
+            # page would loop here for ever instead of failing.
+            size = int(request.url.params["size"])
+            page = int(request.url.params["page"])
+            pages.append(size)
+            start = page * size
+            return httpx.Response(200, json={
+                "content": [{"id": i} for i in range(start, min(start + size, TOTAL))],
+                "page": page, "size": size, "totalElements": TOTAL,
+            })
+
+        client = make_client(handler)
+        try:
+            rows = await client.get_event_devices("accidents", DATE_FROM, DATE_TO)
+        finally:
+            await client.close()
+
+        assert len(rows) == TOTAL
+        assert len(pages) == 1, f"a month of devices must not be paged, got {len(pages)}"
+        assert EVENT_PAGE_SIZE >= TOTAL
 
     async def test_single_short_page_asks_once(self):
         """The common case: fewer devices than a page, one request."""

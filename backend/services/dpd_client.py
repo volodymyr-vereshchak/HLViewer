@@ -22,6 +22,19 @@ logger = logging.getLogger(__name__)
 # Re-login attempts allowed per page request before the status is believed.
 MAX_RELOGINS = 2
 
+# Rows per page of the event endpoints.
+#
+# Measured against DPD, a month of accidents for one branch: the list endpoint
+# takes ~6s whether it is asked for 500 rows or 5000, because the cost is the
+# query and not the transfer. At 500 the 2847-device answer came back in six
+# sequential pages — 35s — and at 3000 it came back whole in one, at 6s. The
+# per-device detail behaves the same: 954 rows arrive in 0.26s as one page and
+# in two round trips as two.
+#
+# The loop still pages, so this is a hint and not a limit; it is only sized so
+# that the common answer fits in a single request.
+EVENT_PAGE_SIZE = 5000
+
 
 class DPDClient:
     """Async HTTP client for DPD API with JWT authentication."""
@@ -461,7 +474,7 @@ class DPDClient:
         return self._client
 
     async def _paged(self, method: str, url: str, date_from, date_to,
-                     *, body=None, page_size: int = 500, page_cb=None) -> List[Dict]:
+                     *, body=None, page_size: int = EVENT_PAGE_SIZE, page_cb=None) -> List[Dict]:
         """Drain a Spring Data page envelope into one list.
 
         DPD answers {content, page, size, totalElements}; totalElements counts
