@@ -38,6 +38,9 @@ MANIFEST
 /backend/data/*
 !/backend/data/askcfgs/
 !/backend/data/askcfgs/**
+# Shipped dictionary, not operational data: the accidents report reads it to
+# turn DPD's event keys into wording we control.
+!/backend/data/dpd_event_names.json
 
 # Database dumps
 /backend/data/server_dump.sql

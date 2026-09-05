@@ -435,6 +435,89 @@ class DPDClient:
         finally:
             await self.close()
 
+    # DPD exposes alarms and interventions through the same pair of endpoints:
+    # a paged POST that lists the DEVICES having events in the window, and a
+    # paged GET that returns one device's events. Only the path segment
+    # differs, so both kinds share the code below.
+    EVENT_KINDS = {
+        "accidents": ("devices/accidents", "accidents"),
+        "interventions": ("devices/interventions", "interventions"),
+    }
+
+    async def _ensure_client(self) -> httpx.AsyncClient:
+        """Pooled client + a live token, created on first use.
+
+        get_volumes owns its client for one call; the event endpoints are
+        driven by a caller that makes many requests in a row, so it opens the
+        client once and calls close() itself when done.
+        """
+        if self._client is None:
+            self._client = self._build_client()
+        if not self._authenticated:
+            await self._authenticate()
+        return self._client
+
+    async def _paged(self, method: str, url: str, date_from, date_to,
+                     *, body=None, page_size: int = 500, page_cb=None) -> List[Dict]:
+        """Drain a Spring Data page envelope into one list.
+
+        DPD answers {content, page, size, totalElements}; totalElements counts
+        rows, not pages, so the loop stops on a short/empty page rather than
+        computing a page count that a concurrent write could invalidate.
+        """
+        client = await self._ensure_client()
+        out: List[Dict] = []
+        page = 0
+        while True:
+            params = {
+                "from": date_from.strftime("%Y-%m-%d"),
+                "to": date_to.strftime("%Y-%m-%d"),
+                "page": page,
+                "size": page_size,
+            }
+            headers = {"Authorization": f"Bearer {self.access_token}"}
+            if method == "POST":
+                resp = await client.post(url, json=body or {}, headers=headers, params=params)
+            else:
+                resp = await client.get(url, headers=headers, params=params)
+            if resp.status_code in (401, 403):
+                # Same recovery as the volume path: the token is cheap to renew.
+                await self._authenticate()
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            content = data.get("content") or []
+            out.extend(content)
+            if page_cb is not None:
+                page_cb(len(out), data.get("totalElements"))
+            if len(content) < page_size:
+                return out
+            page += 1
+
+    async def get_event_devices(self, kind: str, date_from, date_to,
+                                *, filters=None, page_cb=None) -> List[Dict]:
+        """Devices that had alarms (or interventions) in the window.
+
+        This is the cheap half of the pair: one paged call answers "who has
+        anything to say", so the per-device calls that follow are only made
+        for devices that actually do.
+        """
+        path, _ = self.EVENT_KINDS[kind]
+        return await self._paged(
+            "POST", self.base_url + path, date_from, date_to,
+            body=filters or {}, page_cb=page_cb,
+        )
+
+    async def get_device_events(self, kind: str, device_id, date_from, date_to) -> List[Dict]:
+        """One device's alarms (or interventions), all pages.
+
+        device_id is DPD's own row id from get_event_devices — not serNum.
+        """
+        _, path = self.EVENT_KINDS[kind]
+        return await self._paged(
+            "GET", f"{self.base_url}{path}/{device_id}", date_from, date_to,
+        )
+
     async def close(self):
         """Close the pooled client and release its connections."""
         if self._client is not None:

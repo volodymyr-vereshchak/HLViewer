@@ -156,6 +156,20 @@ class EnterpriseRouter:
             ),
         )
         self.router.add_api_route(
+            path="/enterprise/events/stream",
+            tags=["enterprise"],
+            endpoint=self.stream_enterprise_events,
+            methods=["GET"],
+            summary="Enterprise alarms/interventions with NDJSON progress stream",
+            description=(
+                "Alarms (kind=accidents) or interventions (kind=interventions) "
+                "of the branch's enterprise devices, read live from DPD and "
+                "aggregated per event type. Nothing is stored. The response is "
+                "an application/x-ndjson stream: status/progress/ping events "
+                "while the poll runs, then a final result (or error) event."
+            ),
+        )
+        self.router.add_api_route(
             path="/enterprise/cache/",
             tags=["enterprise"],
             endpoint=self.clear_dpd_archive,
@@ -419,6 +433,113 @@ class EnterpriseRouter:
             reaper = asyncio.create_task(_reap_poll(task))
             _poll_reapers.add(reaper)
             reaper.add_done_callback(_poll_reapers.discard)
+
+    async def stream_enterprise_events(
+        self,
+        branch_id: int = Query(..., description="Branch whose enterprises to check (DPD credentials are per branch)"),
+        from_date: str = Query(..., description="Start date (YYYY-MM-DD)"),
+        to_date: str = Query(..., description="End date (YYYY-MM-DD)"),
+        kind: str = Query(
+            default="accidents",
+            pattern="^(accidents|interventions)$",
+            description="Which journal to read",
+        ),
+        branch_ids: list[int] | None = Depends(get_branch_filter),
+        session: AsyncSession = Depends(get_session),
+    ) -> StreamingResponse:
+        if branch_ids is not None and branch_id not in branch_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Немає доступу до цієї філії",
+            )
+        try:
+            date_from, date_to = parse_date_range(from_date, to_date)
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid date format: {e}. Use YYYY-MM-DD format.",
+            )
+        logger.info(
+            "Streaming enterprise %s for branch %s, %s to %s",
+            kind, branch_id, from_date, to_date,
+        )
+        return StreamingResponse(
+            self._event_events(branch_id, date_from, date_to, kind, session),
+            media_type="application/x-ndjson",
+            headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+        )
+
+    @staticmethod
+    async def _event_events(branch_id, date_from, date_to, kind, session):
+        """NDJSON generator around enterprise_events.collect.
+
+        Same coalescing as the volume stream — progress keeps only its newest
+        value so a slow reader can never hold the poll back — but without the
+        advisory lock and reaper: this report writes nothing, so an abandoned
+        run has nothing to roll back and cancelling the task is enough.
+        """
+        from backend.services import enterprise_events
+
+        def dump(event) -> str:
+            return json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+
+        queue: asyncio.Queue = asyncio.Queue()
+        latest = {"progress": None, "dirty": False}
+
+        def events_cb(event):
+            if event.get("type") == "progress":
+                latest["progress"] = event
+                latest["dirty"] = True
+            else:
+                queue.put_nowait(event)
+
+        task = asyncio.create_task(enterprise_events.collect(
+            branch_id, date_from, date_to, session,
+            kind=kind, events_cb=events_cb,
+        ))
+        silent = 0.0
+        try:
+            while True:
+                try:
+                    event = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    event = None
+                if event is not None:
+                    silent = 0.0
+                    yield dump(event)
+                    continue
+                if latest["dirty"]:
+                    latest["dirty"] = False
+                    silent = 0.0
+                    yield dump(latest["progress"])
+                    continue
+                if task.done():
+                    break
+                await asyncio.sleep(0.1)
+                silent += 0.1
+                if silent >= 15.0:
+                    silent = 0.0
+                    yield dump({"type": "ping"})
+            while True:
+                try:
+                    yield dump(queue.get_nowait())
+                except asyncio.QueueEmpty:
+                    break
+            if latest["dirty"]:
+                yield dump(latest["progress"])
+            result = await task
+            yield dump({"type": "result", "data": result})
+        except asyncio.CancelledError:
+            logger.info("Enterprise events stream cancelled by client")
+            raise
+        except Exception as e:
+            logger.exception("Enterprise events stream failed")
+            yield dump({"type": "error", "detail": str(e)})
+        finally:
+            # No reaper here, unlike the volume stream: this report writes
+            # nothing and takes no advisory lock, so an abandoned poll has
+            # nothing to unwind and cancelling it is the whole cleanup.
+            task.cancel()
 
     async def clear_dpd_archive(
         self,
