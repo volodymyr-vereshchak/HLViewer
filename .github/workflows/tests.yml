@@ -1,10 +1,15 @@
 name: Tests
 
 on:
+  # gsm-polling is a long-lived feature branch (docs/plans/gsm-polling.md).
+  # It is listed here so the suite runs on every push to it — a branch that
+  # lives for weeks and is only tested when it is merged is tested too late.
+  # Nothing deploys from any branch: the server is fed by make-bundles.bat,
+  # which names master/main explicitly.
   push:
-    branches: [ master, main, develop ]
+    branches: [ master, main, develop, gsm-polling ]
   pull_request:
-    branches: [ master, main, develop ]
+    branches: [ master, main, develop, gsm-polling ]
 
 jobs:
   tests:
