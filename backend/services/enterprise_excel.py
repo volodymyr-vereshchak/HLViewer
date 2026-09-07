@@ -402,6 +402,16 @@ def workbook_bytes(wb: openpyxl.Workbook) -> io.BytesIO:
     return buf
 
 
+def _same_name(a: str, b: str) -> bool:
+    """Do two rows name the same metering point?
+
+    Case and surrounding spaces are typing noise — a workbook edited by hand
+    picks them up constantly, and refusing an import over «ГРС-1 » would be
+    read as a bug.
+    """
+    return (a or "").strip().casefold() == (b or "").strip().casefold()
+
+
 def _parse_bool(val, default=True) -> bool:
     if val is None:
         return default
@@ -613,7 +623,14 @@ async def upsert_enterprises(records: list[dict]) -> tuple[list[int], list[str]]
     A row never rewrites history it does not describe:
       - device known → the point's fields and THAT entry's install moment are
         updated, other entries are left alone, so a replacement entered in the
-        admin panel survives a re-import of an older file;
+        admin panel survives a re-import of an older file. A blank install
+        date is the exception: it cannot erase a date already recorded;
+      - device already claimed by an earlier row of the SAME file → skipped:
+        one corrector cannot stand on two points, and the second row would
+        rename the point the first one just updated;
+      - device known but the row names a different point → it goes through as
+        a rename, with a warning naming the old point: from a single row a
+        deliberate rename and a mistyped serial are the same data;
       - device unknown but the branch already has a point with this name → the
         row is skipped with an explanation. Silently creating a second point
         would split the same consumer's archive in two;
@@ -625,6 +642,8 @@ async def upsert_enterprises(records: list[dict]) -> tuple[list[int], list[str]]
 
     ids: list[int] = []
     warnings: list[str] = []
+    # device id → the row that took it, for the "two rows, one corrector" check.
+    claimed_by: dict[int, dict] = {}
 
     async with async_session_factory() as session:
         dao = EnterpriseDao(session)
@@ -647,11 +666,53 @@ async def upsert_enterprises(records: list[dict]) -> tuple[list[int], list[str]]
                 "active", "enabled",
             )}
 
+            # One corrector cannot stand on two points at once, so the second
+            # row to claim it is a mistake — and the destructive one. A whole
+            # export re-imported with a serial mistyped into another row would
+            # otherwise update the right point first and then rename it to the
+            # other row's name, leaving the first consumer gone from the table
+            # with the import reporting success.
+            if device is not None and device.id in claimed_by:
+                first = claimed_by[device.id]
+                warnings.append(
+                    f"Рядок {row_no}: прилад №{rec['ser_num']} вже вказаний у "
+                    f"рядку {first['row']} («{first['name']}»). Той самий "
+                    f"прилад не може стояти на двох точках — рядок пропущено"
+                )
+                continue
+
             if entry is not None:
                 ent = await dao.get_by_id(entry.enterprise_id)
+                # Renaming a point by editing the name cell is a supported
+                # edit, and a serial typed into a brand-new row is a mistake —
+                # from one row the two are the same data. It goes through, and
+                # says so: the old name is the only trace the operator has
+                # that a point they did not mean to touch has just changed.
+                if not _same_name(ent.enterprise_name, rec["enterprise_name"]):
+                    warnings.append(
+                        f"Рядок {row_no}: прилад №{rec['ser_num']} стояв на "
+                        f"точці «{ent.enterprise_name}» — її перейменовано на "
+                        f"«{rec['enterprise_name']}». Якщо це не те, чого ви "
+                        f"хотіли, перевірте серійний номер"
+                    )
                 for key, value in fields.items():
                     setattr(ent, key, value)
-                entry.installed_from = rec["installed_from"]
+                # A blank date means "since forever", which is right for a
+                # point that never had a replacement and destructive for one
+                # that did: it drags this corrector's window back over its
+                # predecessor's. An export of a point installed in March
+                # carries that date, so a blank cell here means the date was
+                # cleared — never that it was unknown.
+                if (rec["installed_from"] == EPOCH_INSTALLED_FROM
+                        and entry.installed_from > EPOCH_INSTALLED_FROM):
+                    warnings.append(
+                        f"Рядок {row_no}: порожня дата встановлення не стирає "
+                        f"наявну ({entry.installed_from:%d.%m.%Y %H:%M}) — "
+                        f"дату залишено без змін"
+                    )
+                else:
+                    entry.installed_from = rec["installed_from"]
+                claimed_by[device.id] = {"row": row_no, "name": ent.enterprise_name}
                 ids.append(ent.id)
                 continue
 
@@ -685,6 +746,7 @@ async def upsert_enterprises(records: list[dict]) -> tuple[list[int], list[str]]
                 installed_from=rec["installed_from"],
             ))
             await session.flush()
+            claimed_by[device.id] = {"row": row_no, "name": ent.enterprise_name}
             ids.append(ent.id)
 
         await session.commit()
