@@ -100,14 +100,23 @@ class TestDeviceCards:
             admin_client,
             gas_volume_calc_id=targets["calc_id"],
             phone="0501234567",
-            baud=2400,
+            repeat_count=2,
         )
+        resp = await admin_client.put(
+            f"/polling/devices/{card['id']}", json={"repeat_count": 5}
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["repeat_count"] == 5
+        assert resp.json()["phone"] == "0501234567"
+
+    async def test_an_unknown_field_is_refused(self, admin_client, targets):
+        # The connection speed moved to the agent; a client still sending it
+        # is out of date, and saying so beats storing it where nothing reads.
+        card = await make_card(admin_client, gas_volume_calc_id=targets["calc_id"])
         resp = await admin_client.put(
             f"/polling/devices/{card['id']}", json={"baud": 9600}
         )
-        assert resp.status_code == 200, resp.text
-        assert resp.json()["baud"] == 9600
-        assert resp.json()["phone"] == "0501234567"
+        assert resp.status_code == 422
 
     async def test_poll_hours_are_validated(self, admin_client, targets):
         card = await make_card(admin_client, gas_volume_calc_id=targets["calc_id"])
@@ -218,6 +227,50 @@ class TestAgents:
         # The device survives and is now nobody's — which is exactly the state
         # the UI has to shout about.
         assert [c["agent_ids"] for c in listed] == [[]]
+
+
+@pytest.mark.asyncio
+class TestGsmOnlyCorrectors:
+    """A corrector can be ours over the modem and unknown to DPD.
+
+    It still needs a row in the corrector registry, but asking the DPD API
+    about it costs a request per refresh and can never answer anything — so
+    the flag that keeps it out is set here, where somebody is configuring the
+    modem for it precisely because DPD does not serve it.
+    """
+
+    async def test_a_corrector_is_assumed_to_be_in_dpd(self, admin_client, targets):
+        # Everything that existed before the GSM poll came from DPD.
+        card = await make_card(admin_client, dpd_device_id=targets["dpd_device_id"])
+        assert card["in_dpd"] is True
+
+    async def test_a_card_can_declare_it_gsm_only(self, admin_client, targets):
+        card = await make_card(
+            admin_client, dpd_device_id=targets["dpd_device_id"], in_dpd=False
+        )
+        assert card["in_dpd"] is False
+
+        async with async_session_factory() as session:
+            device = await session.get(DpdDevice, targets["dpd_device_id"])
+            # The flag belongs to the corrector, not to the poll card.
+            assert device.in_dpd is False
+
+    async def test_it_can_be_switched_back(self, admin_client, targets):
+        card = await make_card(
+            admin_client, dpd_device_id=targets["dpd_device_id"], in_dpd=False
+        )
+        resp = await admin_client.put(
+            f"/polling/devices/{card['id']}", json={"in_dpd": True}
+        )
+        assert resp.json()["in_dpd"] is True
+
+    async def test_the_question_does_not_apply_to_a_lumg_corrector(
+        self, admin_client, targets
+    ):
+        # A ЛУМГ corrector is not a DPD device at all; null says so, where
+        # `false` would read as "excluded from DPD".
+        card = await make_card(admin_client, gas_volume_calc_id=targets["calc_id"])
+        assert card["in_dpd"] is None
 
 
 @pytest.mark.asyncio

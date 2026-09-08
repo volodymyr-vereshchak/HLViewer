@@ -35,6 +35,14 @@ _ARCHIVES = ("dpd_daily_archive", "dpd_hourly_archive")
 
 
 def upgrade() -> None:
+    # ── A corrector can be ours over GSM and unknown to DPD ──────────────────
+    # Everything that existed before the GSM poll came from DPD, which the
+    # default states; the flag only ever goes false by hand.
+    op.add_column(
+        "dpd_device",
+        sa.Column("in_dpd", sa.Boolean(), nullable=False, server_default=sa.true()),
+    )
+
     # ── DPD archives: keep everything, remember who wrote it ─────────────────
     for table in _ARCHIVES:
         op.add_column(
@@ -92,7 +100,6 @@ def upgrade() -> None:
                   server_default="AT&F"),
         sa.Column("dial_prefix", sa.String(length=16), nullable=False,
                   server_default="ATDP"),
-        sa.Column("baud", sa.Integer(), nullable=False, server_default="9600"),
         sa.Column("tcp_host", sa.String(length=255), nullable=True),
         sa.Column("tcp_port", sa.Integer(), nullable=True),
         # Protocol.
@@ -241,6 +248,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_column("dpd_device", "in_dpd")
     op.drop_table("poll_settings")
     op.drop_index("idx_poll_attempt_device_started", table_name="poll_attempt")
     op.drop_table("poll_attempt")

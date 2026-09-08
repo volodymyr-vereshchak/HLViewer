@@ -459,13 +459,23 @@ async def get_assignments_for_device_db(
 async def get_devices_for_branch_db(
     branch_id: int, session, range_from=None, range_to=None
 ) -> list[dict]:
-    """All assignments of a branch's active enterprises — the scheduler
-    refresh works branch-by-branch (DPD credentials are per branch)."""
-    from backend.db.models.enterprise_model import Enterprise
+    """Assignments of a branch's active enterprises whose corrector DPD knows.
+
+    The scheduler refresh works branch-by-branch (DPD credentials are per
+    branch) and the alarms report follows the same list, so both go through
+    here — and both ask the DPD API. A corrector polled only over GSM has a row
+    in `dpd_device` like any other, because that table is the corrector
+    registry rather than a list of what DPD serves, but asking the API about it
+    costs a request per refresh and can never answer anything. `in_dpd` is what
+    keeps it out; reads of the archive are unaffected, since the rows the modem
+    wrote are in the same tables.
+    """
+    from backend.db.models.enterprise_model import DpdDevice, Enterprise
 
     return await _query_assignments_db(
         session,
         Enterprise.branch_id == branch_id,
+        DpdDevice.in_dpd.is_(True),
         range_from=range_from,
         range_to=range_to,
     )

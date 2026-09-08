@@ -57,6 +57,12 @@ class DpdDevice(SQLModel, table=True):
     mf_dev: Optional[int] = None    # legacy fallback (corector_type_id IS NULL)
     type_dev: Optional[int] = None  # legacy fallback (corector_type_id IS NULL)
     ch_num: int = 0
+    # Whether the DPD system knows this corrector at all. A device polled only
+    # over GSM still needs a row here — this is the corrector registry, not a
+    # list of what DPD serves — but asking the DPD API about it wastes a
+    # request per refresh and answers nothing, forever. Default true: every
+    # corrector that existed before the GSM poll came from DPD.
+    in_dpd: bool = Field(default=True, nullable=False)
 
 
 # ─── Metering point ───────────────────────────────────────────────────────────

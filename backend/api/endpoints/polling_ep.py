@@ -45,7 +45,6 @@ class PollDeviceLink(BaseModel):
     phone: Optional[str] = None
     init_str: str = "AT&F"
     dial_prefix: str = "ATDP"
-    baud: int = 9600
     tcp_host: Optional[str] = None
     tcp_port: Optional[int] = None
 
@@ -80,6 +79,9 @@ class PollDeviceCreate(PollDeviceLink):
     gas_volume_calc_id: Optional[int] = None
     dpd_line_id: Optional[int] = None
     dpd_device_id: Optional[int] = None
+    # Belongs to the corrector, offered here because this is where it is
+    # decided. Ignored for the other two target kinds.
+    in_dpd: Optional[bool] = None
 
     @model_validator(mode="after")
     def exactly_one_target(self):
@@ -104,7 +106,6 @@ class PollDeviceUpdate(BaseModel):
     phone: Optional[str] = None
     init_str: Optional[str] = None
     dial_prefix: Optional[str] = None
-    baud: Optional[int] = None
     tcp_host: Optional[str] = None
     tcp_port: Optional[int] = None
     protocol_id: Optional[int] = None
@@ -129,6 +130,7 @@ class PollDeviceUpdate(BaseModel):
     enabled: Optional[bool] = None
     auto_poll: Optional[bool] = None
     poll_times: Optional[List[str]] = None
+    in_dpd: Optional[bool] = None
 
 
 class PollDeviceRead(PollDeviceLink):
@@ -138,6 +140,9 @@ class PollDeviceRead(PollDeviceLink):
     dpd_device_id: Optional[int] = None
     target_kind: str
     target_label: Optional[str] = None
+    # Whether DPD knows this corrector. None = not an enterprise corrector, so
+    # the question does not apply.
+    in_dpd: Optional[bool] = None
     # Which agents took this device. Empty means nobody polls it at all.
     agent_ids: List[int] = Field(default_factory=list)
 
@@ -204,6 +209,7 @@ def _read(row: dict) -> PollDeviceRead:
         target_kind=row["target_kind"],
         target_label=row["target_label"],
         agent_ids=row["agent_ids"],
+        in_dpd=row["in_dpd"],
     )
 
 
@@ -252,8 +258,12 @@ async def create_device(
 ):
     _valid_times(body.poll_times)
     dao = PollingDao(session)
+    payload = body.model_dump()
+    in_dpd = payload.pop("in_dpd", None)
     try:
-        card = await dao.create_device(body.model_dump())
+        card = await dao.create_device(payload)
+        if in_dpd is not None:
+            await dao.set_in_dpd(card, in_dpd)
         await session.commit()
     except IntegrityError:
         await session.rollback()
@@ -296,6 +306,9 @@ async def update_device(
     patch = body.model_dump(exclude_unset=True)
     if "poll_times" in patch:
         _valid_times(patch["poll_times"])
+    in_dpd = patch.pop("in_dpd", None)
+    if in_dpd is not None:
+        await dao.set_in_dpd(card, in_dpd)
     await dao.update_device(card, patch)
     await session.commit()
     return await _reread(dao, device_id)

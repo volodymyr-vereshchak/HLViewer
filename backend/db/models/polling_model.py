@@ -132,10 +132,10 @@ class PollDevice(HlBaseModel, table=True):
     phone: Optional[str] = Field(default=None, max_length=32)
     init_str: str = Field(default="AT&F", max_length=64)
     dial_prefix: str = Field(default="ATDP", max_length=16)
-    # Baud belongs to the device, not to the machine calling it: the speed is
-    # decided by whatever sits at the other end of the line. The network
-    # address is on the device for the same reason.
-    baud: int = Field(default=9600)
+    # No baud. Ask2 kept it per device (COMChannel.bitRate belongs to Calc),
+    # but across this fleet it is one speed for every poll, so it lives in the
+    # agent beside the COM port it applies to — the server has nothing to do
+    # with either. If one device ever needs its own, the column comes back.
     tcp_host: Optional[str] = Field(default=None, max_length=255)
     tcp_port: Optional[int] = Field(default=None)
 

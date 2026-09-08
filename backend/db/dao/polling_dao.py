@@ -65,6 +65,7 @@ class PollingDao:
                 GasVolumeCalc.name,
                 DpdLine.name,
                 DpdDevice.ser_num,
+                DpdDevice.in_dpd,
             )
             .outerjoin(GasVolumeCalc,
                        GasVolumeCalc.id == PollDevice.gas_volume_calc_id)
@@ -75,7 +76,7 @@ class PollingDao:
 
         assignments = await self.assignments()
         result = []
-        for card, calc_name, line_name, ser_num in rows:
+        for card, calc_name, line_name, ser_num, in_dpd in rows:
             if card.gas_volume_calc_id is not None:
                 kind, label = "calc", calc_name
             elif card.dpd_line_id is not None:
@@ -89,6 +90,9 @@ class PollingDao:
                 "target_kind": kind,
                 "target_label": label,
                 "agent_ids": assignments.get(card.id, []),
+                # Only meaningful for an enterprise corrector; None elsewhere
+                # says "the question does not apply" rather than "no".
+                "in_dpd": in_dpd if card.dpd_device_id is not None else None,
             })
         return result
 
@@ -142,6 +146,21 @@ class PollingDao:
     async def cancel_manual(self, card: PollDevice) -> None:
         card.manual_requested_at = None
         card.manual_requested_by = None
+
+    async def set_in_dpd(self, card: PollDevice, in_dpd: bool) -> None:
+        """Mark the corrector as known (or not) to the DPD system.
+
+        The flag belongs to the device, not to the poll card, but this is where
+        an operator decides it: they are setting a corrector up for the modem
+        precisely because DPD does not serve it. Making them find a second
+        screen to say so would mean the DPD refresh keeps asking about a device
+        that will never answer.
+        """
+        if card.dpd_device_id is None:
+            return
+        device = await self.session.get(DpdDevice, card.dpd_device_id)
+        if device is not None:
+            device.in_dpd = in_dpd
 
     # ── Agents ───────────────────────────────────────────────────────────────
 
