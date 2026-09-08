@@ -2,6 +2,7 @@ import json
 import logging
 import math
 import os
+import re
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -37,6 +38,7 @@ from backend.api.endpoints import sys_type_ep
 from backend.api.endpoints import edit_type_ep
 from backend.api.endpoints import config_ep
 from backend.api.endpoints import logs_ep
+from backend.api.endpoints import polling_ep
 from backend.telegram_notifier.telegram_norifier import TelegramBot
 from backend.db.engine import async_session_factory
 from backend.db.models.app_user_model import AppUser
@@ -289,6 +291,16 @@ _ADMIN_PATH_MARKERS = (
 )
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
+# Writes a signed-in NON-admin may make. The default is that every write needs
+# the admin role, which is right for settings and wrong for exactly one thing:
+# asking for an out-of-turn poll. The person who notices a meter has gone quiet
+# is rarely the person with the admin role, and making them find one would mean
+# the request simply never gets made. This is an exception to "must be admin",
+# not to "must be signed in" — the session check above has already run.
+_USER_WRITE_PATTERNS = (
+    re.compile(r"^/polling/devices/\d+/poll$"),
+)
+
 
 @app.middleware("http")
 async def auth_guard(request: Request, call_next):
@@ -317,6 +329,8 @@ async def auth_guard(request: Request, call_next):
         )
 
     needs_admin = method in _WRITE_METHODS or any(m in path for m in _ADMIN_PATH_MARKERS)
+    if needs_admin and any(p.match(path) for p in _USER_WRITE_PATTERNS):
+        needs_admin = False
     if needs_admin and user.role != "admin":
         return NaNSafeJSONResponse(status_code=403, content={"detail": "Admin privileges required"})
 
@@ -384,3 +398,4 @@ app.include_router(sys_type_ep.sys_type_router)
 app.include_router(edit_type_ep.edit_type_router)
 app.include_router(config_ep.router)
 app.include_router(logs_ep.router)
+app.include_router(polling_ep.router)
