@@ -144,11 +144,12 @@ class PollDevice(HlBaseModel, table=True):
     # the calculator type on import, edited by hand afterwards.
     protocol_id: Optional[int] = Field(default=None)
     device_address: Optional[int] = Field(default=None)
-    access_code: Optional[str] = Field(default=None, max_length=64)
-    # Plaintext, like grmu_branch_dpd_credential.password, and under the same
-    # rule: GET never returns it, and a PUT that omits it does not clear it.
-    # There is no encryption in this project; introducing it is its own task.
-    access_password: Optional[str] = Field(default=None, max_length=128)
+    # No access code or password here. In these protocols they buy the right to
+    # WRITE — set the clock, change the contract hour, load an FHP passport —
+    # and this poll only reads archives. Carrying a plaintext device credential
+    # we never send would be a liability with no use: it would be filled in by
+    # the ask2cfg.xml import, backed up and bundled to the offline server for
+    # nothing. The values stay in ask2cfg.xml if writing is ever added.
 
     answer_timeout_sec: int = Field(default=7)
     pause_between_ms: int = Field(default=400)

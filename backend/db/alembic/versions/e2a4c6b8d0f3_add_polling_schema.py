@@ -98,8 +98,6 @@ def upgrade() -> None:
         # Protocol.
         sa.Column("protocol_id", sa.Integer(), nullable=True),
         sa.Column("device_address", sa.Integer(), nullable=True),
-        sa.Column("access_code", sa.String(length=64), nullable=True),
-        sa.Column("access_password", sa.String(length=128), nullable=True),
         sa.Column("answer_timeout_sec", sa.Integer(), nullable=False,
                   server_default="7"),
         sa.Column("pause_between_ms", sa.Integer(), nullable=False,

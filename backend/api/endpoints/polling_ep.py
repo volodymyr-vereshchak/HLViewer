@@ -51,7 +51,6 @@ class PollDeviceLink(BaseModel):
 
     protocol_id: Optional[int] = None
     device_address: Optional[int] = None
-    access_code: Optional[str] = None
     answer_timeout_sec: int = 7
     pause_between_ms: int = 400
     repeat_count: int = 3
@@ -81,8 +80,6 @@ class PollDeviceCreate(PollDeviceLink):
     gas_volume_calc_id: Optional[int] = None
     dpd_line_id: Optional[int] = None
     dpd_device_id: Optional[int] = None
-    # Never returned, only accepted. Same rule as the DPD branch credential.
-    access_password: Optional[str] = None
 
     @model_validator(mode="after")
     def exactly_one_target(self):
@@ -98,12 +95,7 @@ class PollDeviceCreate(PollDeviceLink):
 
 
 class PollDeviceUpdate(BaseModel):
-    """Every field optional: an omitted one keeps its value.
-
-    `access_password` follows the rule the DPD credential set — omitted means
-    "leave it alone", so a settings form that never shows the password cannot
-    wipe it by saving.
-    """
+    """Every field optional: an omitted one keeps its value."""
 
     model_config = {"extra": "forbid"}
 
@@ -117,8 +109,6 @@ class PollDeviceUpdate(BaseModel):
     tcp_port: Optional[int] = None
     protocol_id: Optional[int] = None
     device_address: Optional[int] = None
-    access_code: Optional[str] = None
-    access_password: Optional[str] = None
     answer_timeout_sec: Optional[int] = None
     pause_between_ms: Optional[int] = None
     repeat_count: Optional[int] = None
@@ -150,8 +140,6 @@ class PollDeviceRead(PollDeviceLink):
     target_label: Optional[str] = None
     # Which agents took this device. Empty means nobody polls it at all.
     agent_ids: List[int] = Field(default_factory=list)
-    # True when a password is stored — the form shows "set", never the value.
-    has_access_password: bool = False
 
     last_poll_at: Optional[datetime] = None
     last_attempt_at: Optional[datetime] = None
@@ -212,11 +200,10 @@ class ScheduleRead(BaseModel):
 def _read(row: dict) -> PollDeviceRead:
     card: PollDevice = row["card"]
     return PollDeviceRead(
-        **card.model_dump(exclude={"access_password", "created_at", "updated_at"}),
+        **card.model_dump(exclude={"created_at", "updated_at"}),
         target_kind=row["target_kind"],
         target_label=row["target_label"],
         agent_ids=row["agent_ids"],
-        has_access_password=bool(card.access_password),
     )
 
 
@@ -283,8 +270,8 @@ async def create_device(
     dependencies=[Depends(require_admin)],
 )
 async def get_device(device_id: int, session: AsyncSession = Depends(get_session)):
-    """Admin-only, unlike the list: this is the full card, phone number and
-    access code included."""
+    """Admin-only, unlike the list: this is the full card, phone number
+    and timings included."""
     rows = await PollingDao(session).list_devices()
     row = next((r for r in rows if r["card"].id == device_id), None)
     if row is None:

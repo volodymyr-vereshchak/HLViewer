@@ -5,8 +5,6 @@ worth pinning here is who may do what and what the API refuses to tell:
 
   * settings are administrative, but asking for an out-of-turn poll is not —
     the person who notices a meter went quiet is rarely an admin;
-  * an access password goes in and never comes back out, and a save that
-    omits it does not wipe it;
   * an agent key exists in clear exactly once, in the response that creates it.
 """
 
@@ -129,40 +127,6 @@ class TestDeviceCards:
             f"/polling/devices/{card['id']}"
         )).status_code == 204
         assert (await admin_client.get("/polling/devices")).json() == []
-
-
-@pytest.mark.asyncio
-class TestAccessPassword:
-    async def test_it_never_comes_back(self, admin_client, targets):
-        card = await make_card(
-            admin_client,
-            gas_volume_calc_id=targets["calc_id"],
-            access_password="secret",
-        )
-        assert "access_password" not in card
-        assert card["has_access_password"] is True
-
-    async def test_a_save_that_omits_it_keeps_it(self, admin_client, targets):
-        """The settings form never shows the password, so every ordinary save
-        omits it. If that cleared it, the first edit of anything else would
-        lock the poll out of the device."""
-        card = await make_card(
-            admin_client,
-            gas_volume_calc_id=targets["calc_id"],
-            access_password="secret",
-        )
-        resp = await admin_client.put(
-            f"/polling/devices/{card['id']}", json={"note": "змінено"}
-        )
-        assert resp.json()["has_access_password"] is True
-
-    async def test_it_can_still_be_changed(self, admin_client, targets):
-        card = await make_card(admin_client, gas_volume_calc_id=targets["calc_id"])
-        assert card["has_access_password"] is False
-        resp = await admin_client.put(
-            f"/polling/devices/{card['id']}", json={"access_password": "new"}
-        )
-        assert resp.json()["has_access_password"] is True
 
 
 @pytest.mark.asyncio
@@ -335,7 +299,6 @@ class TestWhoMayDoWhat:
             admin_client,
             gas_volume_calc_id=targets["calc_id"],
             phone="0501234567",
-            access_code="1234",
         )
         assert (await viewer_client.get(
             f"/polling/devices/{card['id']}"
