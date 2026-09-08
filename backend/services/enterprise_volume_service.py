@@ -224,7 +224,6 @@ async def fetch_dpd_volumes(
                     "win_from": span[0], "win_to": span[1],
                 })
             rows = await dao.load_windows(period_type, read_windows, hours)
-            await dao.touch_windows(period_type, read_windows)
 
     records: List[Dict] = []
     for row in rows:

@@ -17,8 +17,13 @@ class DpdDailyArchive(SQLModel, table=True):
     DPD_ARCHIVE_WINDOW_DAYS twice a day, older ranges are backfilled on
     demand (see dpd_device_coverage). Reads never hit the DPD API inside
     the refreshed window. Skeleton records (both volume fields NULL) are
-    never stored. accessed_at drives retention: rows with `day` older than
-    a year are pruned when not read for 7 days."""
+    never stored.
+
+    Nothing is ever deleted (retention removed 07.09.2026). These tables were
+    a cache while the DPD API was the only source and a dropped row could be
+    re-fetched; a row the GSM poll wrote has no second source, because the
+    device itself keeps weeks, not years. `source` says which of the two put
+    the row here — see the UPSERT rule in DpdArchiveDao."""
 
     __tablename__ = "dpd_daily_archive"
     __table_args__ = (
@@ -40,7 +45,13 @@ class DpdDailyArchive(SQLModel, table=True):
     press: Optional[float] = None
     temper: Optional[float] = None
     press_unit: Optional[str] = Field(default=None, max_length=16)
-    accessed_at: date
+    # "dpd" — came from the DPD API, "gsm" — read off the device by a modem.
+    # UNIQUE(device_id, day) leaves room for one row per period, so which
+    # source wins is settled here rather than at read time.
+    source: str = Field(
+        default="dpd", max_length=8,
+        sa_column_kwargs={"server_default": "dpd"},
+    )
 
 
 class DpdHourlyArchive(SQLModel, table=True):
@@ -69,7 +80,10 @@ class DpdHourlyArchive(SQLModel, table=True):
     press: Optional[float] = None
     temper: Optional[float] = None
     press_unit: Optional[str] = Field(default=None, max_length=16)
-    accessed_at: date
+    source: str = Field(
+        default="dpd", max_length=8,
+        sa_column_kwargs={"server_default": "dpd"},
+    )
 
 
 class DpdDeviceCoverage(SQLModel, table=True):
@@ -79,8 +93,8 @@ class DpdDeviceCoverage(SQLModel, table=True):
     device+period_type. A request with from_date < loaded_from triggers
     an on-demand backfill of [from_date, loaded_from); everything at or
     after loaded_from is served from the DB only. The scheduler lowers it
-    to today−window after each run; retention pruning RAISES it back to the
-    prune horizon so pruned ranges become backfillable again.
+    to today−window after each run. Nothing raises it any more: retention was
+    removed, so a range fetched once stays fetched.
 
     Per DEVICE, so a corrector shared by two points over time is backfilled
     once and the second point reads what the first already pulled."""

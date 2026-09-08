@@ -2,8 +2,8 @@
 
 Polls the last DPD_ARCHIVE_WINDOW_DAYS of daily and hourly data for every
 corrector that stood at an active enterprise inside that window, in every
-branch with DPD credentials; upserts the archive tables, lowers coverage and
-prunes retention. Each device is asked once for the whole window regardless of
+branch with DPD credentials; upserts the archive tables and lowers coverage.
+Each device is asked once for the whole window regardless of
 how many points it served in it — the archive is the corrector's, and which
 point sees which stretch is settled when the data is read. Runs from the
 scheduler process
@@ -414,14 +414,7 @@ async def execute_locked() -> None:
                 logger.exception(f"DPD refresh failed for branch {branch_id}")
                 failures.append(f"branch {branch_id}: {e}")
                 progress.skip_to(expected_offset)
-        async with async_session_factory() as session:
-            async with session.begin():
-                dao = DpdArchiveDao(session)
-                pruned_d = await dao.prune("daily")
-                pruned_h = await dao.prune("hourly")
-        logger.info(
-            f"DPD refresh: finished (pruned daily={pruned_d}, hourly={pruned_h})"
-        )
+        logger.info("DPD refresh: finished")
         if failures:
             status, error = "error", "; ".join(failures)[:2000]
     except Exception as e:

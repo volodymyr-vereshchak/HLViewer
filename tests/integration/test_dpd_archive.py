@@ -3,7 +3,7 @@
 Model under test: the DB is the primary source. Reads inside a device's
 coverage never touch the DPD API; ranges older than coverage are backfilled
 on demand per device; the refresh job re-polls the last window for all
-enterprises and prunes retention. DPDClient is mocked, Postgres is real."""
+enterprises. DPDClient is mocked, Postgres is real."""
 
 import asyncio
 import json
@@ -196,20 +196,6 @@ class TestArchiveReads:
             (101, D_OLD5.isoformat()), (101, D_OLD3.isoformat()),
         }
 
-    async def test_read_touches_accessed_at(self, dpd_mock, make_enterprise):
-        dev = await make_enterprise(101)
-        await seed_archive(dev, "daily", [D_OLD5], loaded_from=D_OLD10)
-        async with async_session_factory() as session:
-            await session.execute(text(
-                "UPDATE dpd_daily_archive SET accessed_at = :old"
-            ), {"old": TODAY - timedelta(days=6)})
-            await session.commit()
-
-        await fetch_dpd_volumes([dev], as_dt(D_OLD5), as_dt(D_OLD5), "daily")
-
-        rows = await archive_rows("daily")
-        assert rows[0]["accessed_at"] == TODAY
-
     async def test_hourly_commercial_window(self, dpd_mock, make_enterprise):
         """from=D1&to=D1 hourly means the commercial day [D1 07:00..D2 06:00]."""
         dev = await make_enterprise(101)
@@ -363,44 +349,81 @@ class TestBackfill:
         assert record_keys(first) == record_keys(second)
 
 
-class TestRetention:
-    async def test_prune_old_unread_rows_and_raise_coverage(
+class TestRetentionIsOff:
+    """Nothing is ever deleted from these archives (07.09.2026).
+
+    They were a cache while the DPD API was the only source and a dropped row
+    could be re-fetched. A row the GSM poll writes has no second source — the
+    device keeps weeks, not years — so keeping everything is cheaper than a
+    job that removes what nobody can restore.
+    """
+
+    async def test_a_year_old_record_that_nobody_reads_survives(
         self, dpd_mock, make_enterprise
     ):
         dev = await make_enterprise(101)
         ancient = TODAY - timedelta(days=400)
-        recent = D_OLD5
-        await seed_archive(dev, "daily", [ancient, recent],
-                           loaded_from=ancient)
-        async with async_session_factory() as session:
-            # Nobody has read anything for 8 days.
-            await session.execute(text(
-                "UPDATE dpd_daily_archive SET accessed_at = :old"
-            ), {"old": TODAY - timedelta(days=8)})
-            await session.commit()
+        await seed_archive(dev, "daily", [ancient, D_OLD5], loaded_from=ancient)
 
-        async with async_session_factory() as session:
-            async with session.begin():
-                pruned = await DpdArchiveDao(session).prune("daily")
-
-        assert pruned == 1
         rows = await archive_rows("daily")
-        assert [r["day"] for r in rows] == [recent]  # only the year-old one went
-        # Coverage raised to the horizon → the range is backfillable again.
-        assert await coverage_of(dev["device_id"], "daily") == TODAY - timedelta(days=365)
+        assert sorted(r["day"] for r in rows) == sorted([ancient, D_OLD5])
 
-    async def test_recently_read_old_rows_survive(self, dpd_mock, make_enterprise):
+    async def test_coverage_is_never_raised_back(self, dpd_mock, make_enterprise):
+        # Retention used to raise loaded_from so a pruned range could be
+        # re-fetched. With nothing pruned, a range fetched once stays fetched.
         dev = await make_enterprise(101)
         ancient = TODAY - timedelta(days=400)
         await seed_archive(dev, "daily", [ancient], loaded_from=ancient)
-        # accessed_at = today (set by upsert) → inside the 7-day grace.
+        assert await coverage_of(dev["device_id"], "daily") == ancient
 
+
+class TestSource:
+    """UNIQUE(device_id, stamp) leaves room for one row per period, so "the
+    GSM poll is the truth" has to be an UPSERT rule rather than a read-time
+    preference: otherwise the nightly DPD refresh overwrites what the modem
+    read off the device."""
+
+    async def _poll_over_gsm(self, dev, volume):
         async with async_session_factory() as session:
             async with session.begin():
-                pruned = await DpdArchiveDao(session).prune("daily")
+                await DpdArchiveDao(session).upsert_records("daily", [
+                    {"device_id": dev["device_id"], "stamp": as_dt(D_OLD5),
+                     "dvst_alwrk": volume, "dvwrk_alwrk": None,
+                     "press": None, "temper": None, "press_unit": None},
+                ], source="gsm")
 
-        assert pruned == 0
-        assert len(await archive_rows("daily")) == 1
+    async def test_the_api_refresh_marks_its_rows(self, dpd_mock, make_enterprise):
+        dev = await make_enterprise(101)
+        await seed_archive(dev, "daily", [D_OLD5], loaded_from=D_OLD5)
+        assert (await archive_rows("daily"))[0]["source"] == "dpd"
+
+    async def test_a_gsm_row_survives_a_dpd_refresh(self, dpd_mock, make_enterprise):
+        dev = await make_enterprise(101)
+        await self._poll_over_gsm(dev, 777.0)
+
+        await seed_archive(dev, "daily", [D_OLD5], loaded_from=D_OLD5)
+
+        row = (await archive_rows("daily"))[0]
+        assert row["source"] == "gsm"
+        assert row["dvst_alwrk"] == 777.0, "the modem's reading must stand"
+
+    async def test_a_gsm_poll_overwrites_what_the_api_left(
+        self, dpd_mock, make_enterprise
+    ):
+        dev = await make_enterprise(101)
+        await seed_archive(dev, "daily", [D_OLD5], loaded_from=D_OLD5)
+        await self._poll_over_gsm(dev, 777.0)
+
+        row = (await archive_rows("daily"))[0]
+        assert (row["source"], row["dvst_alwrk"]) == ("gsm", 777.0)
+
+    async def test_a_second_gsm_poll_still_wins(self, dpd_mock, make_enterprise):
+        # Re-polling the same period must update it, or a corrected reading
+        # could never replace a wrong one.
+        dev = await make_enterprise(101)
+        await self._poll_over_gsm(dev, 777.0)
+        await self._poll_over_gsm(dev, 888.0)
+        assert (await archive_rows("daily"))[0]["dvst_alwrk"] == 888.0
 
 
 class TestRefreshJob:

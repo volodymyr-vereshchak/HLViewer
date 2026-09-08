@@ -2,7 +2,7 @@
 
 All methods flush but never commit — the caller owns the transaction."""
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import Dict, List
 
 from sqlalchemy import text
@@ -20,10 +20,20 @@ from backend.db.models.dpd_cache_model import (  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
-# Retention (user decisions 2026-07-12): records older than a year (by the
-# record's own date) are pruned once nobody has read them for 7 days.
-RETENTION_DAYS = 365
-RETENTION_ACCESS_GRACE_DAYS = 7
+# Retention was removed 07.09.2026. These tables stopped being a cache when
+# the GSM poll started writing into them: a pruned row used to be re-fetchable
+# from the DPD API, but a row a modem brought has no second source — the device
+# itself keeps weeks, not years. Measured cost of keeping everything: ~292 B per
+# hourly record, about 1.25 GB a year at full coverage. Cheaper than a job that
+# deletes what cannot be recovered.
+#
+# `accessed_at` and `touch_accessed` went with it: they existed only to feed
+# the prune, and they cost a write on every read.
+
+# Which source a row came from. A DPD refresh must never overwrite a row the
+# modem brought; a GSM poll overwrites anything, because it asked the device.
+SOURCE_DPD = "dpd"
+SOURCE_GSM = "gsm"
 
 _TABLES = {
     "daily": ("dpd_daily_archive", "day"),
@@ -141,44 +151,25 @@ class DpdArchiveDao(BasicDao):
         )).mappings().all()
         return [dict(r) for r in rows]
 
-    async def touch_windows(self, period_type: str, windows: List[Dict]) -> None:
-        """Mark the rows a window read as read today (retention input).
-
-        Devices that share a span are marked together. A report over a branch
-        asks the same month of every device, so this is one statement instead
-        of one per device — five hundred round trips, each re-scanning its
-        slice of the archive, for a bookkeeping column.
-        """
-        if not windows:
-            return
-        by_span: Dict[tuple, List[int]] = {}
-        by_device: Dict[int, List[Dict]] = {}
-        for w in windows:
-            by_device.setdefault(w["device_id"], []).append(w)
-        for device_id, group in by_device.items():
-            span = (
-                min(w["win_from"] for w in group),
-                max(w["win_to"] for w in group),
-            )
-            by_span.setdefault(span, []).append(device_id)
-        for (span_from, span_to), device_ids in by_span.items():
-            await self.touch_accessed(
-                device_ids, period_type, span_from, span_to
-            )
-
-    async def upsert_records(self, period_type: str, rows: List[Dict]) -> None:
+    async def upsert_records(
+        self, period_type: str, rows: List[Dict], source: str = SOURCE_DPD
+    ) -> None:
         """Bulk insert/update archive rows.
 
         `rows`: dicts with device_id, stamp (datetime; date part is used
         for daily), dvst_alwrk, dvwrk_alwrk, press, temper, press_unit —
         unique per (device_id, stamp) within one call. COPY into a temp
         table + one INSERT ... ON CONFLICT DO UPDATE (plain columns, no JSONB
-        merging), ~20x faster than multi-VALUES on full-month refreshes."""
+        merging), ~20x faster than multi-VALUES on full-month refreshes.
+
+        `source` decides who wins a collision. UNIQUE(device_id, stamp) means
+        an hour has room for one row, so "the GSM poll is the truth" has to be
+        an UPSERT rule: without it the nightly DPD refresh would silently
+        overwrite what the modem read off the device."""
         if not rows:
             return
         table, stamp_col = _table(period_type)
-        today = date.today()
-        cols = ["device_id", stamp_col, *_VALUE_COLS, "accessed_at"]
+        cols = ["device_id", stamp_col, *_VALUE_COLS, "source"]
         col_list = ", ".join(cols)
         tmp = f"_tmp_{table}"
         await self.session.execute(text(
@@ -192,76 +183,27 @@ class DpdArchiveDao(BasicDao):
                 r["stamp"].date() if period_type == "daily" else r["stamp"],
                 r.get("dvst_alwrk"), r.get("dvwrk_alwrk"),
                 r.get("press"), r.get("temper"), r.get("press_unit"),
-                today,
+                source,
             )
             for r in rows
         ]
         await raw.driver_connection.copy_records_to_table(
             tmp, records=records, columns=cols
         )
-        set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in _VALUE_COLS)
+        set_clause = ", ".join(
+            f"{c} = EXCLUDED.{c}" for c in (*_VALUE_COLS, "source")
+        )
         constraint = (
             "uq_dpd_daily_dev_day" if period_type == "daily"
             else "uq_dpd_hourly_dev_stamp"
         )
         await self.session.execute(text(
             f"INSERT INTO {table} ({col_list}) SELECT {col_list} FROM {tmp} "
-            f"ON CONFLICT ON CONSTRAINT {constraint} DO UPDATE SET {set_clause}"
+            f"ON CONFLICT ON CONSTRAINT {constraint} DO UPDATE SET {set_clause} "
+            f"WHERE {table}.source <> '{SOURCE_GSM}' "
+            f"OR EXCLUDED.source = '{SOURCE_GSM}'"
         ))
         await self.session.execute(text(f"DROP TABLE {tmp}"))
-
-    async def touch_accessed(
-        self,
-        device_ids: List[int],
-        period_type: str,
-        range_from: datetime,
-        range_to: datetime,
-    ) -> None:
-        """Mark rows as read today (at most one write per row per day)."""
-        if not device_ids:
-            return
-        table, stamp_col = _table(period_type)
-        params: Dict = {"ids": device_ids, "today": date.today()}
-        if period_type == "daily":
-            params["from"], params["to"] = range_from.date(), range_to.date()
-        else:
-            params["from"], params["to"] = range_from, range_to
-        await self.session.execute(
-            text(
-                f"UPDATE {table} SET accessed_at = :today "
-                f"WHERE device_id = ANY(:ids) "
-                f"AND {stamp_col} >= :from AND {stamp_col} <= :to "
-                f"AND accessed_at < :today"
-            ),
-            params,
-        )
-
-    async def prune(self, period_type: str) -> int:
-        """Retention: delete records older than a year (by record date) that
-        nobody read for 7 days, then RAISE coverage.loaded_from of affected
-        devices to the horizon so the pruned range is backfillable again."""
-        table, stamp_col = _table(period_type)
-        cutoff = date.today() - timedelta(days=RETENTION_DAYS)
-        access_cutoff = date.today() - timedelta(days=RETENTION_ACCESS_GRACE_DAYS)
-        result = await self.session.execute(
-            text(
-                f"DELETE FROM {table} "
-                f"WHERE {stamp_col} < :cutoff AND accessed_at < :access_cutoff "
-                f"RETURNING device_id"
-            ),
-            {"cutoff": cutoff, "access_cutoff": access_cutoff},
-        )
-        pruned_ids = {row[0] for row in result}
-        if pruned_ids:
-            await self.session.execute(
-                text(
-                    "UPDATE dpd_device_coverage SET loaded_from = :cutoff "
-                    "WHERE period_type = :pt AND device_id = ANY(:ids) "
-                    "AND loaded_from < :cutoff"
-                ),
-                {"cutoff": cutoff, "pt": period_type, "ids": list(pruned_ids)},
-            )
-        return len(pruned_ids)
 
     async def get_coverage(
         self, device_ids: List[int], period_type: str

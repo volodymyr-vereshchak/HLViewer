@@ -142,3 +142,14 @@ from .dpd_cache_model import (
     DpdDeviceCoverage,
     DpdRefreshJob,
 )
+
+# GSM polling (docs/plans/gsm-polling.md). Same reason as the block above:
+# a model outside the package is a table alembic proposes to drop.
+from .polling_model import (
+    PollAgent,
+    PollAgentDevice,
+    PollAttempt,
+    PollDevice,
+    PollLog,
+    PollSettings,
+)
