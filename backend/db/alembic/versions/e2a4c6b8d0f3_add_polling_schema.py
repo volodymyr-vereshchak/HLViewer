@@ -38,17 +38,24 @@ def upgrade() -> None:
     # ── Which driver can speak to a corrector model ──────────────────────────
     # On the model, not on the poll card: it is a property of the make, and
     # retyping it per device invites a typo that looks like a dead meter.
-    # Seeded for the families the Ask2 drivers cover; ТКБ, smart104 and ТАНДЕМ
-    # appear in none of those assemblies and stay NULL, which is the truth
-    # rather than an omission.
+    # Seeded for the families the Ask2 drivers cover. ТКБ, smart104 and ТАНДЕМ
+    # appear in none of the 27 protocols across those assemblies and stay NULL,
+    # which is the truth rather than an omission. ФЛОУТЕК-ТМ stays NULL too,
+    # but for the opposite reason: several drivers could be it (999/1000 ВР-1,
+    # 1062 ТМ-3-4, 1070/1071 ВР-2) and only a live device can say which.
     op.add_column(
         "corector_type", sa.Column("protocol_id", sa.Integer(), nullable=True)
     )
+    # Protocol.Id, which is what Global.Protocols.Find matches against — NOT
+    # Protocol.DeviceUId (54, 52, 7), which names the device family and would
+    # match nothing. The two sit on consecutive lines in every driver, and
+    # picking the wrong one gives a card that simply never finds its driver.
     for pattern, protocol in (
-        ("ВЕГА%", 54),
-        ("КПЛГ%", 52),
-        ("Універсал%", 7),
-        ("ПК-В%", 77),
+        ("ВЕГА%", 1054),
+        ("КПЛГ%", 1052),
+        ("Універсал-01%", 71),
+        ("Універсал-02%", 72),
+        ("ПК-В%", 1077),
     ):
         op.execute(
             f"UPDATE corector_type SET protocol_id = {protocol} "
