@@ -59,11 +59,21 @@ class PollAgent(HlBaseModel, table=True):
 
 
 class PollDevice(HlBaseModel, table=True):
-    """A corrector card: how to reach it, and what happened last time.
+    """What to dial, and what happened last time it was dialled.
 
-    This is the device, not the line. Correctors live in the database in three
-    shapes, so exactly one of three references is set — see
-    `ck_poll_device_single_target`. Same idiom as `virtual_line_member`.
+    The card belongs to the SITE, not to the corrector standing there: the
+    modem is at the site and the correctors behind it get replaced. Which
+    device to read is decided when the agent asks for its plan — whichever is
+    installed at that moment — and the reply is checked against it: the device
+    reports its serial, and a poll that reaches a different one writes nothing
+    and is raised as an error for the operator to settle. Either the
+    replacement was never entered, or the call reached the wrong site; both
+    are worse than a missing reading.
+
+    Two kinds of site, exactly one of them set (`ck_poll_device_single_target`,
+    the `virtual_line_member` idiom): an enterprise metering point, or a DPD
+    line. ЛУМГ correctors are not polled over GSM at all — Ask2 keeps doing
+    that and writing its hostlib files.
 
     The link fields are a deliberate copy of `ask2cfg.xml`, adapter and radio
     included, even though neither is used today. Otherwise migrating the
@@ -74,25 +84,19 @@ class PollDevice(HlBaseModel, table=True):
     __tablename__ = "poll_device"
     __table_args__ = (
         CheckConstraint(
-            "(gas_volume_calc_id IS NOT NULL)::int "
-            "+ (dpd_line_id IS NOT NULL)::int "
-            "+ (dpd_device_id IS NOT NULL)::int = 1",
+            "(enterprise_id IS NOT NULL) <> (dpd_line_id IS NOT NULL)",
             name="ck_poll_device_single_target",
         ),
-        # One card per corrector. The indexes are partial because two of the
-        # three target columns are always NULL, and a plain unique index would
-        # then allow only one such row in the whole table.
+        # One card per site. The indexes are partial because one of the two
+        # target columns is always NULL, and a plain unique index would then
+        # allow only one such row in the whole table.
         Index(
-            "uq_poll_device_calc", "gas_volume_calc_id",
-            unique=True, postgresql_where=Column("gas_volume_calc_id").isnot(None),
+            "uq_poll_device_enterprise", "enterprise_id",
+            unique=True, postgresql_where=Column("enterprise_id").isnot(None),
         ),
         Index(
             "uq_poll_device_dpd_line", "dpd_line_id",
             unique=True, postgresql_where=Column("dpd_line_id").isnot(None),
-        ),
-        Index(
-            "uq_poll_device_dpd_device", "dpd_device_id",
-            unique=True, postgresql_where=Column("dpd_device_id").isnot(None),
         ),
         # What the agent's plan query filters on: enabled, automatic, overdue.
         Index("idx_poll_device_due", "enabled", "auto_poll", "last_poll_at"),
@@ -100,17 +104,13 @@ class PollDevice(HlBaseModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True, sa_type=BigInteger)
 
-    # ── Target: exactly one of the three ─────────────────────────────────────
-    gas_volume_calc_id: Optional[int] = Field(
-        default=None, foreign_key="gas_volume_calc.id", ondelete="CASCADE",
+    # ── Target: the site, exactly one of the two ─────────────────────────────
+    enterprise_id: Optional[int] = Field(
+        default=None, foreign_key="enterprise.id", ondelete="CASCADE",
         sa_type=BigInteger,
     )
     dpd_line_id: Optional[int] = Field(
         default=None, foreign_key="dpd_line.id", ondelete="CASCADE",
-        sa_type=BigInteger,
-    )
-    dpd_device_id: Optional[int] = Field(
-        default=None, foreign_key="dpd_device.id", ondelete="CASCADE",
         sa_type=BigInteger,
     )
 
@@ -140,9 +140,16 @@ class PollDevice(HlBaseModel, table=True):
     tcp_port: Optional[int] = Field(default=None)
 
     # ── Protocol ─────────────────────────────────────────────────────────────
-    # Ask2 driver id (1070 Floutec BP-2, 1052 KPLG, 1054 Vega…). Seeded from
-    # the calculator type on import, edited by hand afterwards.
+    # Ask2 driver id (1070 Floutec BP-2, 1052 KPLG, 1054 Vega…). To be filled
+    # in from the corrector type through the corector_type → gas_vol_calc_type
+    # bridge rather than asked for; the bridge arrives with step 2.
     protocol_id: Optional[int] = Field(default=None)
+    # The address in the request frame. Every driver sends it and checks it in
+    # the reply — Vega puts it in byte 0 of a Modbus frame and refuses an
+    # answer that comes back under another address ("помилка адреси"). With one
+    # device on a line it stays at its default, which is why it looks nominal,
+    # but sending the wrong one looks exactly like a dead meter. Filled in, not
+    # asked: for a ЛУМГ corrector it is the number in the hostlib file name.
     device_address: Optional[int] = Field(default=None)
     # No access code or password here. In these protocols they buy the right to
     # WRITE — set the clock, change the contract hour, load an FHP passport —
@@ -155,8 +162,11 @@ class PollDevice(HlBaseModel, table=True):
     pause_between_ms: int = Field(default=400)
     repeat_count: int = Field(default=3)
     preamble_count: int = Field(default=0)
-    # NULL = as far back as it goes: the driver asks our IPollDataService stub
-    # for the last stored date and caps the start at the first of last month.
+    # NULL = everything the device still holds, which is the intended setting.
+    # A GSM poll has no backfill: the corrector keeps weeks of archive and once
+    # that has rolled over the readings are gone for good, unlike the DPD API
+    # which can always be asked again. So the first poll of a device takes the
+    # whole archive, and a window nobody polled stays empty forever.
     depth_days: Optional[int] = Field(default=None)
     priority: int = Field(default=0)
     note: Optional[str] = Field(default=None, max_length=500)

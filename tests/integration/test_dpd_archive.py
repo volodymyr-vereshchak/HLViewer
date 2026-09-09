@@ -105,17 +105,16 @@ async def make_enterprise(branch_id):
         await session.commit()
 
     async def _make(ser_num: int, installed_from=None, removed_at=None,
-                    in_dpd: bool = True) -> dict:
+                    poll_dpd: bool = True) -> dict:
         async with async_session_factory() as session:
             ent = Enterprise(
                 enterprise_name=f"ent-{ser_num}",
                 active=True, enabled=True, branch_id=branch_id, line_id=None,
+                poll_dpd=poll_dpd, poll_gsm=not poll_dpd,
             )
             session.add(ent)
             await session.flush()
-            device = DpdDevice(
-                ser_num=ser_num, mf_dev=1, type_dev=3, ch_num=0, in_dpd=in_dpd,
-            )
+            device = DpdDevice(ser_num=ser_num, mf_dev=1, type_dev=3, ch_num=0)
             session.add(device)
             await session.flush()
             entry = EnterpriseDevice(
@@ -468,16 +467,16 @@ class TestRefreshJob:
         status = await dpd_archive_refresh.read_status()
         assert status["status"] == "done"
 
-    async def test_a_gsm_only_corrector_is_never_asked_about(
+    async def test_a_gsm_only_point_is_never_asked_about(
         self, mocker, make_enterprise, branch_id
     ):
-        """A corrector the modem reads and DPD does not serve.
+        """A point the modem reads and DPD does not serve.
 
-        It has a row in the corrector registry like any other, so without the
-        flag the refresh would ask the DPD API about it twice a day, forever,
-        and get nothing back."""
+        It has correctors and archives like any other, so without the flag the
+        refresh would ask the DPD API about it twice a day, forever, and get
+        nothing back."""
         served = await make_enterprise(101)
-        await make_enterprise(202, in_dpd=False)
+        await make_enterprise(202, poll_dpd=False)
         asked: list[int] = []
 
         async def get_volumes(devices, date_from, date_to, *, type_request,
@@ -498,7 +497,7 @@ class TestRefreshJob:
 
         assert await dpd_archive_refresh.run_refresh() is True
 
-        assert set(asked) == {101}, "the GSM-only corrector must not be asked about"
+        assert set(asked) == {101}, "the GSM-only point must not be asked about"
         # And it gets no coverage row, so nothing later thinks DPD has it.
         assert await coverage_of(served["device_id"], "daily") is not None
 

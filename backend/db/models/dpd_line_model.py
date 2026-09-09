@@ -14,7 +14,9 @@ the old one.
 from datetime import date, datetime
 from typing import List, Optional
 
-from sqlalchemy import BigInteger, Column, ForeignKey, Index, UniqueConstraint
+from sqlalchemy import (
+    BigInteger, CheckConstraint, Column, ForeignKey, Index, UniqueConstraint,
+)
 from sqlmodel import Field, Relationship, SQLModel
 
 from .base_model import HlBaseModel
@@ -29,12 +31,18 @@ class DpdLineBase(HlBaseModel):
     active: bool = Field(default=True)
     include_in_trends: bool = Field(default=False)
     include_in_report: bool = Field(default=False)
+    # Same pair as an enterprise, for the same reason: a DPD line can be read
+    # through the API, through a modem, or both. At least one must be on
+    # (ck_dpd_line_some_poll).
+    poll_dpd: bool = Field(default=True)
+    poll_gsm: bool = Field(default=False)
 
 
 class DpdLine(DpdLineBase, table=True):
     __tablename__ = "dpd_line"
     __table_args__ = (
         UniqueConstraint("branch_id", "name", name="uq_dpd_line_branch_name"),
+        CheckConstraint("poll_dpd OR poll_gsm", name="ck_dpd_line_some_poll"),
         Index("ix_dpd_line_branch", "branch_id"),
         # Created by a migration but never declared here, which is why
         # `alembic check` kept proposing to drop it.

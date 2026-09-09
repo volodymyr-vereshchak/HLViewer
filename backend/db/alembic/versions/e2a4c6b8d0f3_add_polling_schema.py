@@ -35,13 +35,28 @@ _ARCHIVES = ("dpd_daily_archive", "dpd_hourly_archive")
 
 
 def upgrade() -> None:
-    # ── A corrector can be ours over GSM and unknown to DPD ──────────────────
+    # ── How a site is read: through the DPD API, a modem, or both ────────────
+    # On the point and the line rather than on the corrector, because the modem
+    # is: one sits at the site and the correctors behind it get replaced.
     # Everything that existed before the GSM poll came from DPD, which the
-    # default states; the flag only ever goes false by hand.
-    op.add_column(
-        "dpd_device",
-        sa.Column("in_dpd", sa.Boolean(), nullable=False, server_default=sa.true()),
-    )
+    # defaults state.
+    for table, check in (
+        ("enterprise", "ck_enterprise_some_poll"),
+        ("dpd_line", "ck_dpd_line_some_poll"),
+    ):
+        op.add_column(
+            table,
+            sa.Column("poll_dpd", sa.Boolean(), nullable=False,
+                      server_default=sa.true()),
+        )
+        op.add_column(
+            table,
+            sa.Column("poll_gsm", sa.Boolean(), nullable=False,
+                      server_default=sa.false()),
+        )
+        # Neither one on means nobody reads it, which `active` already says
+        # deliberately — this would say it by accident.
+        op.create_check_constraint(check, table, "poll_dpd OR poll_gsm")
 
     # ── DPD archives: keep everything, remember who wrote it ─────────────────
     for table in _ARCHIVES:
@@ -84,10 +99,10 @@ def upgrade() -> None:
     op.create_table(
         "poll_device",
         sa.Column("id", sa.BigInteger(), nullable=False),
-        # Exactly one target of three.
-        sa.Column("gas_volume_calc_id", sa.BigInteger(), nullable=True),
+        # The site, exactly one of two. ЛУМГ correctors are not polled over
+        # GSM at all — Ask2 keeps doing that.
+        sa.Column("enterprise_id", sa.BigInteger(), nullable=True),
         sa.Column("dpd_line_id", sa.BigInteger(), nullable=True),
-        sa.Column("dpd_device_id", sa.BigInteger(), nullable=True),
         # Schedule.
         sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column("auto_poll", sa.Boolean(), nullable=False, server_default=sa.true()),
@@ -151,11 +166,9 @@ def upgrade() -> None:
         sa.Column("polling_since", sa.DateTime(), nullable=True),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("updated_at", sa.DateTime(), nullable=False),
-        sa.ForeignKeyConstraint(["gas_volume_calc_id"], ["gas_volume_calc.id"],
+        sa.ForeignKeyConstraint(["enterprise_id"], ["enterprise.id"],
                                 ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["dpd_line_id"], ["dpd_line.id"],
-                                ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["dpd_device_id"], ["dpd_device.id"],
                                 ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["last_agent_id"], ["poll_agent.id"],
                                 ondelete="SET NULL"),
@@ -168,21 +181,16 @@ def upgrade() -> None:
     op.create_check_constraint(
         "ck_poll_device_single_target",
         "poll_device",
-        "(gas_volume_calc_id IS NOT NULL)::int "
-        "+ (dpd_line_id IS NOT NULL)::int "
-        "+ (dpd_device_id IS NOT NULL)::int = 1",
+        "(enterprise_id IS NOT NULL) <> (dpd_line_id IS NOT NULL)",
     )
-    # One card per corrector. Partial, because two of the three target columns
-    # are always NULL and a plain unique index would allow only one such row.
-    op.create_index("uq_poll_device_calc", "poll_device", ["gas_volume_calc_id"],
+    # One card per site. Partial, because one of the two target columns is
+    # always NULL and a plain unique index would allow only one such row.
+    op.create_index("uq_poll_device_enterprise", "poll_device", ["enterprise_id"],
                     unique=True,
-                    postgresql_where=sa.text("gas_volume_calc_id IS NOT NULL"))
+                    postgresql_where=sa.text("enterprise_id IS NOT NULL"))
     op.create_index("uq_poll_device_dpd_line", "poll_device", ["dpd_line_id"],
                     unique=True,
                     postgresql_where=sa.text("dpd_line_id IS NOT NULL"))
-    op.create_index("uq_poll_device_dpd_device", "poll_device", ["dpd_device_id"],
-                    unique=True,
-                    postgresql_where=sa.text("dpd_device_id IS NOT NULL"))
     op.create_index("idx_poll_device_due", "poll_device",
                     ["enabled", "auto_poll", "last_poll_at"])
 
@@ -248,7 +256,13 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_column("dpd_device", "in_dpd")
+    for table, check in (
+        ("enterprise", "ck_enterprise_some_poll"),
+        ("dpd_line", "ck_dpd_line_some_poll"),
+    ):
+        op.drop_constraint(check, table, type_="check")
+        op.drop_column(table, "poll_gsm")
+        op.drop_column(table, "poll_dpd")
     op.drop_table("poll_settings")
     op.drop_index("idx_poll_attempt_device_started", table_name="poll_attempt")
     op.drop_table("poll_attempt")
@@ -256,9 +270,8 @@ def downgrade() -> None:
     op.drop_table("poll_log")
     op.drop_table("poll_agent_device")
     op.drop_index("idx_poll_device_due", table_name="poll_device")
-    op.drop_index("uq_poll_device_dpd_device", table_name="poll_device")
     op.drop_index("uq_poll_device_dpd_line", table_name="poll_device")
-    op.drop_index("uq_poll_device_calc", table_name="poll_device")
+    op.drop_index("uq_poll_device_enterprise", table_name="poll_device")
     op.drop_constraint("ck_poll_device_single_target", "poll_device", type_="check")
     op.drop_table("poll_device")
     op.drop_index("ix_poll_agent_branch_id", table_name="poll_agent")

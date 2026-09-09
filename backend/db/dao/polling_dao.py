@@ -1,4 +1,4 @@
-"""DAO for the GSM polling registry: agents, device cards, default hours.
+"""DAO for the GSM polling registry: agents, site cards, default hours.
 
 Step 1 of docs/plans/gsm-polling.md — the settings side only. What an agent
 asks for and reports back has its own endpoints and its own step.
@@ -11,9 +11,12 @@ from typing import Dict, List, Optional
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.db.models.enterprise_model import DpdDevice
 from backend.db.models.dpd_line_model import DpdLine
-from backend.db.models.gas_volume_calc_model import GasVolumeCalc
+from backend.db.models.enterprise_model import (
+    DpdDevice,
+    Enterprise,
+    EnterpriseDevice,
+)
 from backend.db.models.polling_model import (
     PollAgent,
     PollAgentDevice,
@@ -21,10 +24,15 @@ from backend.db.models.polling_model import (
     PollSettings,
 )
 
-# The three shapes a corrector takes in this database, and the column that
-# points at each. Kept in one place because the CHECK constraint, the API and
-# the label lookup all have to agree on the same list.
-TARGET_COLUMNS = ("gas_volume_calc_id", "dpd_line_id", "dpd_device_id")
+# The two kinds of site a card can point at, and the column for each. Kept in
+# one place because the CHECK constraint, the API and the label lookup all have
+# to agree on the same list.
+TARGET_COLUMNS = ("enterprise_id", "dpd_line_id")
+
+TARGET_FIELDS = {
+    "enterprise": PollDevice.enterprise_id,
+    "dpd_line": PollDevice.dpd_line_id,
+}
 
 
 def generate_agent_key() -> str:
@@ -49,57 +57,82 @@ class PollingDao:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    # ── Device cards ─────────────────────────────────────────────────────────
+    # ── Site cards ───────────────────────────────────────────────────────────
 
     async def list_devices(self) -> List[Dict]:
-        """Every card with the name of what it points at and who polls it.
+        """Every card with the site it points at, who polls it, and — for an
+        enterprise — the corrector standing there now.
 
-        The label comes from a different table per target kind, so this is
-        three outer joins rather than one: correctors are not one entity in
-        this database, and pretending otherwise is what the CHECK constraint
-        exists to prevent.
+        That last column is what the poll is actually about: the card names a
+        site, the modem dials it, and the device that answers has to be the one
+        we expect. Showing it here is what lets an operator notice a
+        replacement nobody entered before the agent reports it as an error.
         """
         rows = (await self.session.execute(
             select(
                 PollDevice,
-                GasVolumeCalc.name,
+                Enterprise.enterprise_name,
+                Enterprise.poll_dpd,
+                Enterprise.poll_gsm,
                 DpdLine.name,
-                DpdDevice.ser_num,
-                DpdDevice.in_dpd,
+                DpdLine.poll_dpd,
+                DpdLine.poll_gsm,
             )
-            .outerjoin(GasVolumeCalc,
-                       GasVolumeCalc.id == PollDevice.gas_volume_calc_id)
+            .outerjoin(Enterprise, Enterprise.id == PollDevice.enterprise_id)
             .outerjoin(DpdLine, DpdLine.id == PollDevice.dpd_line_id)
-            .outerjoin(DpdDevice, DpdDevice.id == PollDevice.dpd_device_id)
             .order_by(PollDevice.id)
         )).all()
 
         assignments = await self.assignments()
+        installed = await self.installed_correctors()
         result = []
-        for card, calc_name, line_name, ser_num, in_dpd in rows:
-            if card.gas_volume_calc_id is not None:
-                kind, label = "calc", calc_name
-            elif card.dpd_line_id is not None:
-                kind, label = "dpd_line", line_name
+        for (card, ent_name, ent_dpd, ent_gsm,
+             line_name, line_dpd, line_gsm) in rows:
+            if card.enterprise_id is not None:
+                kind, label = "enterprise", ent_name
+                poll_dpd, poll_gsm = ent_dpd, ent_gsm
+                device = installed.get(card.enterprise_id)
             else:
-                kind, label = "dpd_device", (
-                    f"№{ser_num}" if ser_num is not None else None
-                )
+                kind, label = "dpd_line", line_name
+                poll_dpd, poll_gsm = line_dpd, line_gsm
+                device = None
             result.append({
                 "card": card,
                 "target_kind": kind,
                 "target_label": label,
+                "poll_dpd": poll_dpd,
+                "poll_gsm": poll_gsm,
+                "device_id": device[0] if device else None,
+                "device_ser_num": device[1] if device else None,
                 "agent_ids": assignments.get(card.id, []),
-                # Only meaningful for an enterprise corrector; None elsewhere
-                # says "the question does not apply" rather than "no".
-                "in_dpd": in_dpd if card.dpd_device_id is not None else None,
             })
         return result
 
+    async def installed_correctors(self) -> Dict[int, tuple]:
+        """point id -> (device id, serial) of the corrector fitted right now.
+
+        The one still in force is the last entry of the point's history, the
+        way every other read of this data resolves it. A point between
+        correctors has no entry and is simply absent: there is nothing to dial
+        for, and the plan must say so rather than guess.
+        """
+        rows = (await self.session.execute(
+            select(
+                EnterpriseDevice.enterprise_id,
+                DpdDevice.id,
+                DpdDevice.ser_num,
+            )
+            .join(DpdDevice, DpdDevice.id == EnterpriseDevice.device_id)
+            .where(EnterpriseDevice.removed_at.is_(None))
+            .order_by(EnterpriseDevice.installed_from)
+        )).all()
+        # Ordered by install moment, so the last write per point wins.
+        return {ent_id: (dev_id, ser) for ent_id, dev_id, ser in rows}
+
     async def assignments(self) -> Dict[int, List[int]]:
-        """device id -> agents that took it. Empty list means nobody did, and
-        a device nobody took is never polled — the one case the UI has to
-        show loudly, because it looks exactly like "everything is fine"."""
+        """card id -> agents that took it. Empty list means nobody did, and a
+        site nobody took is never polled — the one case the UI has to show
+        loudly, because it looks exactly like "everything is fine"."""
         rows = (await self.session.execute(
             select(PollAgentDevice.poll_device_id, PollAgentDevice.agent_id)
         )).all()
@@ -112,13 +145,8 @@ class PollingDao:
         return await self.session.get(PollDevice, device_id)
 
     async def find_by_target(self, kind: str, target_id: int) -> Optional[PollDevice]:
-        column = {
-            "calc": PollDevice.gas_volume_calc_id,
-            "dpd_line": PollDevice.dpd_line_id,
-            "dpd_device": PollDevice.dpd_device_id,
-        }[kind]
         return (await self.session.execute(
-            select(PollDevice).where(column == target_id)
+            select(PollDevice).where(TARGET_FIELDS[kind] == target_id)
         )).scalars().first()
 
     async def create_device(self, data: Dict) -> PollDevice:
@@ -147,20 +175,30 @@ class PollingDao:
         card.manual_requested_at = None
         card.manual_requested_by = None
 
-    async def set_in_dpd(self, card: PollDevice, in_dpd: bool) -> None:
-        """Mark the corrector as known (or not) to the DPD system.
+    async def set_poll_paths(
+        self, card: PollDevice, poll_dpd: Optional[bool], poll_gsm: Optional[bool]
+    ) -> None:
+        """Set how the site is read, on the site itself.
 
-        The flag belongs to the device, not to the poll card, but this is where
-        an operator decides it: they are setting a corrector up for the modem
-        precisely because DPD does not serve it. Making them find a second
-        screen to say so would mean the DPD refresh keeps asking about a device
-        that will never answer.
+        The pair belongs to the point (or the line), not to the poll card, but
+        this is where an operator decides it: they are setting a modem up
+        precisely because the API does not serve that site. Sending them to a
+        second screen to say so would leave the DPD refresh asking forever.
+
+        Both off is refused by the database (`ck_*_some_poll`), and rightly: a
+        site nobody reads is what `active` says deliberately.
         """
-        if card.dpd_device_id is None:
+        target = (
+            await self.session.get(Enterprise, card.enterprise_id)
+            if card.enterprise_id is not None
+            else await self.session.get(DpdLine, card.dpd_line_id)
+        )
+        if target is None:
             return
-        device = await self.session.get(DpdDevice, card.dpd_device_id)
-        if device is not None:
-            device.in_dpd = in_dpd
+        if poll_dpd is not None:
+            target.poll_dpd = poll_dpd
+        if poll_gsm is not None:
+            target.poll_gsm = poll_gsm
 
     # ── Agents ───────────────────────────────────────────────────────────────
 

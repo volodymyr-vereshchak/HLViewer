@@ -31,7 +31,7 @@ router = APIRouter(
     dependencies=[Depends(get_current_user)],
 )
 
-TARGET_KINDS = ("calc", "dpd_line", "dpd_device")
+TARGET_KINDS = ("enterprise", "dpd_line")
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
@@ -76,22 +76,19 @@ class PollDeviceLink(BaseModel):
 
 
 class PollDeviceCreate(PollDeviceLink):
-    gas_volume_calc_id: Optional[int] = None
+    enterprise_id: Optional[int] = None
     dpd_line_id: Optional[int] = None
-    dpd_device_id: Optional[int] = None
-    # Belongs to the corrector, offered here because this is where it is
-    # decided. Ignored for the other two target kinds.
-    in_dpd: Optional[bool] = None
+    # Belong to the site, offered here because this is where they are decided.
+    poll_dpd: Optional[bool] = None
+    poll_gsm: Optional[bool] = None
 
     @model_validator(mode="after")
     def exactly_one_target(self):
-        targets = [self.gas_volume_calc_id, self.dpd_line_id, self.dpd_device_id]
-        if sum(t is not None for t in targets) != 1:
+        if (self.enterprise_id is None) == (self.dpd_line_id is None):
             # The database says the same thing, but an IntegrityError here
             # would reach the operator as "500" instead of a sentence.
             raise ValueError(
-                "Вкажіть рівно одну ціль: прилад ЛУМГ, лінію ДПД або "
-                "коректор промисловості"
+                "Вкажіть рівно одну ціль: підприємство або лінію ДПД"
             )
         return self
 
@@ -130,19 +127,23 @@ class PollDeviceUpdate(BaseModel):
     enabled: Optional[bool] = None
     auto_poll: Optional[bool] = None
     poll_times: Optional[List[str]] = None
-    in_dpd: Optional[bool] = None
+    poll_dpd: Optional[bool] = None
+    poll_gsm: Optional[bool] = None
 
 
 class PollDeviceRead(PollDeviceLink):
     id: int
-    gas_volume_calc_id: Optional[int] = None
+    enterprise_id: Optional[int] = None
     dpd_line_id: Optional[int] = None
-    dpd_device_id: Optional[int] = None
     target_kind: str
     target_label: Optional[str] = None
-    # Whether DPD knows this corrector. None = not an enterprise corrector, so
-    # the question does not apply.
-    in_dpd: Optional[bool] = None
+    # How the site is read. Both may be on; at least one always is.
+    poll_dpd: bool = True
+    poll_gsm: bool = False
+    # The corrector standing at the point right now — what the modem expects to
+    # find. None for a DPD line, and for a point currently without one.
+    device_id: Optional[int] = None
+    device_ser_num: Optional[int] = None
     # Which agents took this device. Empty means nobody polls it at all.
     agent_ids: List[int] = Field(default_factory=list)
 
@@ -208,8 +209,11 @@ def _read(row: dict) -> PollDeviceRead:
         **card.model_dump(exclude={"created_at", "updated_at"}),
         target_kind=row["target_kind"],
         target_label=row["target_label"],
+        poll_dpd=row["poll_dpd"],
+        poll_gsm=row["poll_gsm"],
+        device_id=row["device_id"],
+        device_ser_num=row["device_ser_num"],
         agent_ids=row["agent_ids"],
-        in_dpd=row["in_dpd"],
     )
 
 
@@ -259,17 +263,17 @@ async def create_device(
     _valid_times(body.poll_times)
     dao = PollingDao(session)
     payload = body.model_dump()
-    in_dpd = payload.pop("in_dpd", None)
+    poll_dpd = payload.pop("poll_dpd", None)
+    poll_gsm = payload.pop("poll_gsm", None)
     try:
         card = await dao.create_device(payload)
-        if in_dpd is not None:
-            await dao.set_in_dpd(card, in_dpd)
+        await dao.set_poll_paths(card, poll_dpd, poll_gsm)
         await session.commit()
     except IntegrityError:
         await session.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Для цього коректора вже є картка опитування",
+            detail="Для цього об'єкта вже є картка опитування",
         )
     return await _reread(dao, card.id)
 
@@ -306,9 +310,10 @@ async def update_device(
     patch = body.model_dump(exclude_unset=True)
     if "poll_times" in patch:
         _valid_times(patch["poll_times"])
-    in_dpd = patch.pop("in_dpd", None)
-    if in_dpd is not None:
-        await dao.set_in_dpd(card, in_dpd)
+    poll_dpd = patch.pop("poll_dpd", None)
+    poll_gsm = patch.pop("poll_gsm", None)
+    if poll_dpd is not None or poll_gsm is not None:
+        await dao.set_poll_paths(card, poll_dpd, poll_gsm)
     await dao.update_device(card, patch)
     await session.commit()
     return await _reread(dao, device_id)

@@ -8,38 +8,56 @@ worth pinning here is who may do what and what the API refuses to tell:
   * an agent key exists in clear exactly once, in the response that creates it.
 """
 
+from datetime import datetime
+
 import pytest
 import pytest_asyncio
 
 from backend.db.engine import async_session_factory
-from backend.db.models.enterprise_model import DpdDevice
-from backend.db.models.gas_volume_calc_model import GasVolumeCalc
+from backend.db.models.dpd_line_model import DpdLine
+from backend.db.models.enterprise_model import (
+    DpdDevice, Enterprise, EnterpriseDevice,
+)
 from backend.db.models.grmu_branch_model import GrmuBranch
-from backend.db.models.lumg_model import Lumg
 from backend.db.models.polling_model import PollAgent
 
 
 @pytest_asyncio.fixture
 async def targets(seed_users) -> dict:
+    """One site of each kind: a metering point and a DPD line."""
     async with async_session_factory() as session:
         branch = GrmuBranch(name="Тестова філія")
         session.add(branch)
         await session.flush()
-        lumg = Lumg(name="ЛУМГ", branch_id=branch.id)
-        session.add(lumg)
-        await session.flush()
-        calc = GasVolumeCalc(
-            name="Флоутек-1", lumg_id=lumg.id, address=1, c_time=1
+        point = Enterprise(
+            enterprise_name="Завод А", branch_id=branch.id,
+            active=True, enabled=True,
         )
-        device = DpdDevice(ser_num=555001, ch_num=0)
-        session.add(calc)
-        session.add(device)
+        line = DpdLine(name="Лінія 1", branch_id=branch.id)
+        session.add(point)
+        session.add(line)
         await session.commit()
         return {
             "branch_id": branch.id,
-            "calc_id": calc.id,
-            "dpd_device_id": device.id,
+            "enterprise_id": point.id,
+            "dpd_line_id": line.id,
         }
+
+
+async def _fit(enterprise_id: int, ser_num: int, removed: bool = False) -> None:
+    """Put a corrector at the point, optionally already taken off again."""
+    async with async_session_factory() as session:
+        device = DpdDevice(ser_num=ser_num, ch_num=0)
+        session.add(device)
+        await session.flush()
+        session.add(EnterpriseDevice(
+            enterprise_id=enterprise_id,
+            device_id=device.id,
+            installed_from=datetime(2026, 1, 1, 7) if not removed
+            else datetime(2025, 1, 1, 7),
+            removed_at=datetime(2026, 1, 1, 7) if removed else None,
+        ))
+        await session.commit()
 
 
 async def make_card(client, **body) -> dict:
@@ -53,52 +71,48 @@ class TestDeviceCards:
     async def test_create_and_list(self, admin_client, targets):
         card = await make_card(
             admin_client,
-            gas_volume_calc_id=targets["calc_id"],
+            enterprise_id=targets["enterprise_id"],
             phone="0501234567",
             protocol_id=1070,
         )
-        assert card["target_kind"] == "calc"
-        assert card["target_label"] == "Флоутек-1"
+        assert card["target_kind"] == "enterprise"
+        assert card["target_label"] == "Завод А"
         # Nobody has taken it yet, and that means it is never polled.
         assert card["agent_ids"] == []
 
         listed = (await admin_client.get("/polling/devices")).json()
         assert [c["id"] for c in listed] == [card["id"]]
 
-    async def test_an_enterprise_corrector_is_labelled_by_serial(
-        self, admin_client, targets
-    ):
-        card = await make_card(
-            admin_client, dpd_device_id=targets["dpd_device_id"]
-        )
+    async def test_a_dpd_line_is_named_by_its_line(self, admin_client, targets):
+        card = await make_card(admin_client, dpd_line_id=targets["dpd_line_id"])
         assert (card["target_kind"], card["target_label"]) == (
-            "dpd_device", "№555001",
+            "dpd_line", "Лінія 1",
         )
 
     async def test_a_card_must_name_exactly_one_target(self, admin_client, targets):
         for body in (
             {},
-            {"gas_volume_calc_id": targets["calc_id"],
-             "dpd_device_id": targets["dpd_device_id"]},
+            {"enterprise_id": targets["enterprise_id"],
+             "dpd_line_id": targets["dpd_line_id"]},
         ):
             resp = await admin_client.post("/polling/devices", json=body)
             # 422 from the schema, not 500 from the CHECK constraint: the
             # operator gets a sentence rather than a database error.
             assert resp.status_code == 422, resp.text
 
-    async def test_a_second_card_for_the_same_corrector_is_a_conflict(
+    async def test_a_second_card_for_the_same_site_is_a_conflict(
         self, admin_client, targets
     ):
-        await make_card(admin_client, gas_volume_calc_id=targets["calc_id"])
+        await make_card(admin_client, enterprise_id=targets["enterprise_id"])
         resp = await admin_client.post(
-            "/polling/devices", json={"gas_volume_calc_id": targets["calc_id"]}
+            "/polling/devices", json={"enterprise_id": targets["enterprise_id"]}
         )
         assert resp.status_code == 409
 
     async def test_update_changes_only_what_was_sent(self, admin_client, targets):
         card = await make_card(
             admin_client,
-            gas_volume_calc_id=targets["calc_id"],
+            enterprise_id=targets["enterprise_id"],
             phone="0501234567",
             repeat_count=2,
         )
@@ -112,14 +126,14 @@ class TestDeviceCards:
     async def test_an_unknown_field_is_refused(self, admin_client, targets):
         # The connection speed moved to the agent; a client still sending it
         # is out of date, and saying so beats storing it where nothing reads.
-        card = await make_card(admin_client, gas_volume_calc_id=targets["calc_id"])
+        card = await make_card(admin_client, enterprise_id=targets["enterprise_id"])
         resp = await admin_client.put(
             f"/polling/devices/{card['id']}", json={"baud": 9600}
         )
         assert resp.status_code == 422
 
     async def test_poll_hours_are_validated(self, admin_client, targets):
-        card = await make_card(admin_client, gas_volume_calc_id=targets["calc_id"])
+        card = await make_card(admin_client, enterprise_id=targets["enterprise_id"])
         ok = await admin_client.put(
             f"/polling/devices/{card['id']}", json={"poll_times": ["06:00", "18:30"]}
         )
@@ -131,7 +145,7 @@ class TestDeviceCards:
         assert bad.status_code == 400
 
     async def test_delete(self, admin_client, targets):
-        card = await make_card(admin_client, gas_volume_calc_id=targets["calc_id"])
+        card = await make_card(admin_client, enterprise_id=targets["enterprise_id"])
         assert (await admin_client.delete(
             f"/polling/devices/{card['id']}"
         )).status_code == 204
@@ -173,7 +187,7 @@ class TestAgents:
         assert resp.status_code == 409
 
     async def test_an_agent_picks_its_own_devices(self, admin_client, targets):
-        card = await make_card(admin_client, gas_volume_calc_id=targets["calc_id"])
+        card = await make_card(admin_client, enterprise_id=targets["enterprise_id"])
         agent = (await admin_client.post(
             "/polling/agents", json={"name": "АРМ"}
         )).json()
@@ -191,9 +205,9 @@ class TestAgents:
     async def test_the_set_is_replaced_whole(self, admin_client, targets):
         # Operators divide the fleet by ticking boxes, so a save is the whole
         # set: unticking has to actually untick.
-        first = await make_card(admin_client, gas_volume_calc_id=targets["calc_id"])
+        first = await make_card(admin_client, enterprise_id=targets["enterprise_id"])
         second = await make_card(
-            admin_client, dpd_device_id=targets["dpd_device_id"]
+            admin_client, dpd_line_id=targets["dpd_line_id"]
         )
         agent = (await admin_client.post(
             "/polling/agents", json={"name": "АРМ"}
@@ -210,7 +224,7 @@ class TestAgents:
         assert resp.json() == [second["id"]]
 
     async def test_deleting_an_agent_leaves_its_devices(self, admin_client, targets):
-        card = await make_card(admin_client, gas_volume_calc_id=targets["calc_id"])
+        card = await make_card(admin_client, enterprise_id=targets["enterprise_id"])
         agent = (await admin_client.post(
             "/polling/agents", json={"name": "АРМ"}
         )).json()
@@ -230,47 +244,88 @@ class TestAgents:
 
 
 @pytest.mark.asyncio
-class TestGsmOnlyCorrectors:
-    """A corrector can be ours over the modem and unknown to DPD.
+class TestHowASiteIsRead:
+    """A site can be read through the DPD API, through a modem, or both.
 
-    It still needs a row in the corrector registry, but asking the DPD API
-    about it costs a request per refresh and can never answer anything — so
-    the flag that keeps it out is set here, where somebody is configuring the
-    modem for it precisely because DPD does not serve it.
+    The pair lives on the point (or the line), not on the corrector, because
+    the modem does: one sits at the site and the correctors behind it get
+    replaced. It is set from the poll card because that is the moment somebody
+    decides it — they are configuring a modem precisely because the API does
+    not serve that site.
     """
 
-    async def test_a_corrector_is_assumed_to_be_in_dpd(self, admin_client, targets):
+    async def test_a_site_is_assumed_to_be_on_dpd(self, admin_client, targets):
         # Everything that existed before the GSM poll came from DPD.
-        card = await make_card(admin_client, dpd_device_id=targets["dpd_device_id"])
-        assert card["in_dpd"] is True
+        card = await make_card(admin_client, enterprise_id=targets["enterprise_id"])
+        assert (card["poll_dpd"], card["poll_gsm"]) == (True, False)
 
-    async def test_a_card_can_declare_it_gsm_only(self, admin_client, targets):
+    async def test_a_card_can_declare_the_site_gsm_only(self, admin_client, targets):
         card = await make_card(
-            admin_client, dpd_device_id=targets["dpd_device_id"], in_dpd=False
+            admin_client,
+            enterprise_id=targets["enterprise_id"],
+            poll_dpd=False,
+            poll_gsm=True,
         )
-        assert card["in_dpd"] is False
+        assert (card["poll_dpd"], card["poll_gsm"]) == (False, True)
 
         async with async_session_factory() as session:
-            device = await session.get(DpdDevice, targets["dpd_device_id"])
-            # The flag belongs to the corrector, not to the poll card.
-            assert device.in_dpd is False
+            point = await session.get(Enterprise, targets["enterprise_id"])
+            # The flags belong to the point, not to the poll card.
+            assert (point.poll_dpd, point.poll_gsm) == (False, True)
+
+    async def test_both_paths_at_once(self, admin_client, targets):
+        card = await make_card(
+            admin_client, enterprise_id=targets["enterprise_id"], poll_gsm=True
+        )
+        assert (card["poll_dpd"], card["poll_gsm"]) == (True, True)
 
     async def test_it_can_be_switched_back(self, admin_client, targets):
         card = await make_card(
-            admin_client, dpd_device_id=targets["dpd_device_id"], in_dpd=False
+            admin_client,
+            enterprise_id=targets["enterprise_id"],
+            poll_dpd=False,
+            poll_gsm=True,
         )
         resp = await admin_client.put(
-            f"/polling/devices/{card['id']}", json={"in_dpd": True}
+            f"/polling/devices/{card['id']}", json={"poll_dpd": True}
         )
-        assert resp.json()["in_dpd"] is True
+        assert resp.json()["poll_dpd"] is True
 
-    async def test_the_question_does_not_apply_to_a_lumg_corrector(
+    async def test_a_dpd_line_carries_the_same_pair(self, admin_client, targets):
+        card = await make_card(
+            admin_client, dpd_line_id=targets["dpd_line_id"], poll_gsm=True
+        )
+        assert (card["poll_dpd"], card["poll_gsm"]) == (True, True)
+
+
+@pytest.mark.asyncio
+class TestTheCorrectorAtThePoint:
+    """The card names a site; which corrector answers is decided at poll time.
+
+    The list shows the one fitted now, because that is what the modem expects
+    to find and what a reply is checked against — a poll that reaches a
+    different serial writes nothing and is raised for the operator.
+    """
+
+    async def test_a_point_without_a_corrector_says_so(self, admin_client, targets):
+        card = await make_card(admin_client, enterprise_id=targets["enterprise_id"])
+        assert card["device_id"] is None
+        assert card["device_ser_num"] is None
+
+    async def test_the_fitted_corrector_is_shown(self, admin_client, targets):
+        await _fit(targets["enterprise_id"], 555001)
+        card = await make_card(admin_client, enterprise_id=targets["enterprise_id"])
+        assert card["device_ser_num"] == 555001
+
+    async def test_a_replacement_moves_the_card_to_the_new_one(
         self, admin_client, targets
     ):
-        # A ЛУМГ corrector is not a DPD device at all; null says so, where
-        # `false` would read as "excluded from DPD".
-        card = await make_card(admin_client, gas_volume_calc_id=targets["calc_id"])
-        assert card["in_dpd"] is None
+        # Nothing about the card changes when a corrector is swapped: the
+        # phone belongs to the site, and the poll follows whatever is fitted.
+        await _fit(targets["enterprise_id"], 555001, removed=True)
+        await _fit(targets["enterprise_id"], 555002)
+        card = await make_card(admin_client, enterprise_id=targets["enterprise_id"])
+        assert card["device_ser_num"] == 555002
 
 
 @pytest.mark.asyncio
@@ -303,7 +358,7 @@ class TestWhoMayDoWhat:
     ):
         """The decision that motivated the exception in the auth middleware:
         every other write here is admin-only, this one is not."""
-        card = await make_card(admin_client, gas_volume_calc_id=targets["calc_id"])
+        card = await make_card(admin_client, enterprise_id=targets["enterprise_id"])
 
         resp = await viewer_client.post(f"/polling/devices/{card['id']}/poll")
         assert resp.status_code == 202, resp.text
@@ -312,7 +367,7 @@ class TestWhoMayDoWhat:
     async def test_a_viewer_may_cancel_the_request_they_made(
         self, admin_client, viewer_client, targets
     ):
-        card = await make_card(admin_client, gas_volume_calc_id=targets["calc_id"])
+        card = await make_card(admin_client, enterprise_id=targets["enterprise_id"])
         await viewer_client.post(f"/polling/devices/{card['id']}/poll")
         resp = await viewer_client.post(
             f"/polling/devices/{card['id']}/poll", params={"cancel": True}
@@ -323,18 +378,18 @@ class TestWhoMayDoWhat:
     async def test_a_viewer_may_look_at_the_list(
         self, admin_client, viewer_client, targets
     ):
-        await make_card(admin_client, gas_volume_calc_id=targets["calc_id"])
+        await make_card(admin_client, enterprise_id=targets["enterprise_id"])
         assert (await viewer_client.get("/polling/devices")).status_code == 200
 
     async def test_a_viewer_may_not_change_settings(
         self, admin_client, viewer_client, targets
     ):
-        card = await make_card(admin_client, gas_volume_calc_id=targets["calc_id"])
+        card = await make_card(admin_client, enterprise_id=targets["enterprise_id"])
         assert (await viewer_client.put(
             f"/polling/devices/{card['id']}", json={"baud": 2400}
         )).status_code == 403
         assert (await viewer_client.post(
-            "/polling/devices", json={"dpd_device_id": targets["dpd_device_id"]}
+            "/polling/devices", json={"dpd_line_id": targets["dpd_line_id"]}
         )).status_code == 403
         assert (await viewer_client.delete(
             f"/polling/devices/{card['id']}"
@@ -350,7 +405,7 @@ class TestWhoMayDoWhat:
     ):
         card = await make_card(
             admin_client,
-            gas_volume_calc_id=targets["calc_id"],
+            enterprise_id=targets["enterprise_id"],
             phone="0501234567",
         )
         assert (await viewer_client.get(
