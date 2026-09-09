@@ -35,6 +35,26 @@ _ARCHIVES = ("dpd_daily_archive", "dpd_hourly_archive")
 
 
 def upgrade() -> None:
+    # ── Which driver can speak to a corrector model ──────────────────────────
+    # On the model, not on the poll card: it is a property of the make, and
+    # retyping it per device invites a typo that looks like a dead meter.
+    # Seeded for the families the Ask2 drivers cover; ТКБ, smart104 and ТАНДЕМ
+    # appear in none of those assemblies and stay NULL, which is the truth
+    # rather than an omission.
+    op.add_column(
+        "corector_type", sa.Column("protocol_id", sa.Integer(), nullable=True)
+    )
+    for pattern, protocol in (
+        ("ВЕГА%", 54),
+        ("КПЛГ%", 52),
+        ("Універсал%", 7),
+        ("ПК-В%", 77),
+    ):
+        op.execute(
+            f"UPDATE corector_type SET protocol_id = {protocol} "
+            f"WHERE model_name ILIKE '{pattern}'"
+        )
+
     # ── DPD archives: keep everything, remember who wrote it ─────────────────
     for table in _ARCHIVES:
         op.add_column(
@@ -233,6 +253,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_column("corector_type", "protocol_id")
     op.drop_table("poll_settings")
     op.drop_index("idx_poll_attempt_device_started", table_name="poll_attempt")
     op.drop_table("poll_attempt")

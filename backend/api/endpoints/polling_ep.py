@@ -48,7 +48,6 @@ class PollDeviceLink(BaseModel):
     tcp_host: Optional[str] = None
     tcp_port: Optional[int] = None
 
-    protocol_id: Optional[int] = None
     device_address: Optional[int] = None
     answer_timeout_sec: int = 7
     pause_between_ms: int = 400
@@ -102,7 +101,6 @@ class PollDeviceUpdate(BaseModel):
     dial_prefix: Optional[str] = None
     tcp_host: Optional[str] = None
     tcp_port: Optional[int] = None
-    protocol_id: Optional[int] = None
     device_address: Optional[int] = None
     answer_timeout_sec: Optional[int] = None
     pause_between_ms: Optional[int] = None
@@ -142,6 +140,9 @@ class PollDeviceRead(PollDeviceLink):
     # False when the corrector this card names is no longer fitted — a
     # replacement entered in Підприємства and not here.
     still_installed: bool = True
+    # Taken from the corrector's model, never typed here. None means no Ask2
+    # driver covers that model, which for part of this fleet is the truth.
+    protocol_id: Optional[int] = None
     # Which agents took this device. Empty means nobody polls it at all.
     agent_ids: List[int] = Field(default_factory=list)
 

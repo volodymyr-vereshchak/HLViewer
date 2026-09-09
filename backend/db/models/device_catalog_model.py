@@ -66,6 +66,16 @@ class CorectorType(SQLModel, table=True):
     )
     model_name: str = Field(index=True)    # e.g. "ВЕГА-1.01"
     type_dev: int                           # DPD device type code
+    # Which Ask2 driver can talk to this model over a modem: 7 Універсал,
+    # 33 Флоутек ВР-1, 52 КПЛГ, 54 ВЕГА, 70 Флоутек ВР-2, 77 ПК-В.
+    #
+    # Here rather than on the poll card, because it is a property of the model
+    # and asking an operator to retype it per device is asking for a typo that
+    # looks like a dead meter. NULL means no driver is known — and for a large
+    # part of this fleet that is the truth rather than an omission: ТКБ,
+    # smart104 and ТАНДЕМ appear in none of the Ask2 driver assemblies, so
+    # those models cannot be polled this way at all.
+    protocol_id: Optional[int] = Field(default=None)
 
 
 class CorectorTypeRead(SQLModel):
@@ -73,15 +83,18 @@ class CorectorTypeRead(SQLModel):
     manufacturer_id: int
     model_name: str
     type_dev: int
+    protocol_id: Optional[int] = None
 
 
 class CorectorTypeCreate(SQLModel):
     manufacturer_id: int
     model_name: str
     type_dev: int
+    protocol_id: Optional[int] = None
 
 
 class CorectorTypeUpdate(SQLModel):
     manufacturer_id: Optional[int] = None
     model_name: Optional[str] = None
     type_dev: Optional[int] = None
+    protocol_id: Optional[int] = None

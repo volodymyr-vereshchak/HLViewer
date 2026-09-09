@@ -11,6 +11,7 @@ from typing import Dict, List, Optional
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.db.models.device_catalog_model import CorectorType
 from backend.db.models.dpd_line_model import DpdLine, DpdLineDevice
 from backend.db.models.enterprise_model import (
     DpdDevice,
@@ -168,13 +169,38 @@ class PollingDao:
             select(PollDevice).where(TARGET_FIELDS[kind] == target_id)
         )).scalars().first()
 
+    async def protocol_of_device(self, device_id: int) -> Optional[int]:
+        """The driver that can speak to this corrector, from its model.
+
+        Per model, not per device: it is a property of the make, and asking an
+        operator to retype it on every card invites a typo that looks exactly
+        like a dead meter. NULL is a real answer for a good part of this fleet
+        — ТКБ, smart104 and ТАНДЕМ appear in none of the Ask2 drivers.
+        """
+        return (await self.session.execute(
+            select(CorectorType.protocol_id)
+            .join(DpdDevice, DpdDevice.corector_type_id == CorectorType.id)
+            .where(DpdDevice.id == device_id)
+        )).scalars().first()
+
     async def create_device(self, data: Dict) -> PollDevice:
+        if data.get("protocol_id") is None and data.get("dpd_device_id"):
+            data["protocol_id"] = await self.protocol_of_device(
+                data["dpd_device_id"]
+            )
         card = PollDevice(**data)
         self.session.add(card)
         await self.session.flush()
         return card
 
     async def update_device(self, card: PollDevice, patch: Dict) -> PollDevice:
+        # Repointing at another corrector re-reads the driver: a replacement is
+        # often a different model, and a card left on the old driver would dial
+        # the new device in a language it does not speak.
+        if "dpd_device_id" in patch and patch["dpd_device_id"]:
+            patch["protocol_id"] = await self.protocol_of_device(
+                patch["dpd_device_id"]
+            )
         for key, value in patch.items():
             setattr(card, key, value)
         await self.session.flush()

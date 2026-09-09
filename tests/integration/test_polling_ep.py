@@ -14,6 +14,7 @@ import pytest
 import pytest_asyncio
 
 from backend.db.engine import async_session_factory
+from backend.db.models.device_catalog_model import CorectorType, Manufacturer
 from backend.db.models.dpd_line_model import DpdLine
 from sqlalchemy import select
 
@@ -36,9 +37,17 @@ async def targets(seed_users) -> dict:
             active=True, enabled=True,
         )
         line = DpdLine(name="Лінія 1", branch_id=branch.id)
-        device = DpdDevice(ser_num=555001, ch_num=0)
+        mfr = Manufacturer(short_name="Радміртех", full_name="Радміртех", mf_dev=1)
         session.add(point)
         session.add(line)
+        session.add(mfr)
+        await session.flush()
+        ct = CorectorType(manufacturer_id=mfr.id, model_name="ВЕГА-1.01", type_dev=5)
+        other = CorectorType(manufacturer_id=mfr.id, model_name="КПЛГ-1.01Р", type_dev=2)
+        session.add(ct)
+        session.add(other)
+        await session.flush()
+        device = DpdDevice(ser_num=555001, ch_num=0, corector_type_id=ct.id)
         session.add(device)
         await session.flush()
         session.add(EnterpriseDevice(
@@ -51,14 +60,28 @@ async def targets(seed_users) -> dict:
             "enterprise_id": point.id,
             "dpd_line_id": line.id,
             "dpd_device_id": device.id,
+            "corector_type_id": ct.id,
+            "other_type_id": other.id,
         }
 
 
-async def _replace(enterprise_id: int, old_device_id: int, ser_num: int) -> int:
+async def _set_protocol(corector_type_id: int, protocol_id: int) -> None:
+    async with async_session_factory() as session:
+        ct = await session.get(CorectorType, corector_type_id)
+        ct.protocol_id = protocol_id
+        await session.commit()
+
+
+async def _replace(
+    enterprise_id: int, old_device_id: int, ser_num: int,
+    corector_type_id: int | None = None,
+) -> int:
     """Swap the corrector at a point: the old one is taken off, a new one is
     fitted. Returns the new device id."""
     async with async_session_factory() as session:
-        device = DpdDevice(ser_num=ser_num, ch_num=0)
+        device = DpdDevice(
+            ser_num=ser_num, ch_num=0, corector_type_id=corector_type_id,
+        )
         session.add(device)
         await session.flush()
         old = (await session.execute(
@@ -88,7 +111,6 @@ class TestDeviceCards:
             admin_client,
             dpd_device_id=targets["dpd_device_id"],
             phone="0501234567",
-            protocol_id=1070,
         )
         assert card["target_kind"] == "dpd_device"
         # The label says where the corrector stands; the serial is what the
@@ -259,6 +281,45 @@ class TestAgents:
         # The device survives and is now nobody's — which is exactly the state
         # the UI has to shout about.
         assert [c["agent_ids"] for c in listed] == [[]]
+
+
+@pytest.mark.asyncio
+class TestTheDriverComesFromTheModel:
+    """Which driver can dial a corrector is a property of its model, so it is
+    set once in Типи коректорів and never typed on a card. Retyping it per
+    device invites a typo, and a wrong driver looks exactly like a dead
+    meter."""
+
+    async def test_the_card_takes_the_driver_of_its_model(
+        self, admin_client, targets
+    ):
+        await _set_protocol(targets["corector_type_id"], 54)
+        card = await make_card(admin_client, dpd_device_id=targets["dpd_device_id"])
+        assert card["protocol_id"] == 54
+
+    async def test_a_model_without_a_driver_says_nothing(
+        self, admin_client, targets
+    ):
+        # ТКБ, smart104 and ТАНДЕМ appear in none of the Ask2 driver
+        # assemblies: null here is the truth, not a missing setting.
+        card = await make_card(admin_client, dpd_device_id=targets["dpd_device_id"])
+        assert card["protocol_id"] is None
+
+    async def test_repointing_re_reads_the_driver(self, admin_client, targets):
+        # A replacement is often a different model, and a card left on the old
+        # driver would dial the new device in a language it does not speak.
+        await _set_protocol(targets["corector_type_id"], 54)
+        card = await make_card(admin_client, dpd_device_id=targets["dpd_device_id"])
+        new_id = await _replace(
+            targets["enterprise_id"], targets["dpd_device_id"], 555002,
+            corector_type_id=targets["other_type_id"],
+        )
+        await _set_protocol(targets["other_type_id"], 52)
+
+        resp = await admin_client.put(
+            f"/polling/devices/{card['id']}", json={"dpd_device_id": new_id}
+        )
+        assert resp.json()["protocol_id"] == 52
 
 
 @pytest.mark.asyncio
