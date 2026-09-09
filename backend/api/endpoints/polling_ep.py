@@ -31,7 +31,7 @@ router = APIRouter(
     dependencies=[Depends(get_current_user)],
 )
 
-TARGET_KINDS = ("enterprise", "dpd_line")
+TARGET_KINDS = ("dpd_device", "dpd_line")
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
@@ -76,19 +76,16 @@ class PollDeviceLink(BaseModel):
 
 
 class PollDeviceCreate(PollDeviceLink):
-    enterprise_id: Optional[int] = None
+    dpd_device_id: Optional[int] = None
     dpd_line_id: Optional[int] = None
-    # Belong to the site, offered here because this is where they are decided.
-    poll_dpd: Optional[bool] = None
-    poll_gsm: Optional[bool] = None
 
     @model_validator(mode="after")
     def exactly_one_target(self):
-        if (self.enterprise_id is None) == (self.dpd_line_id is None):
+        if (self.dpd_device_id is None) == (self.dpd_line_id is None):
             # The database says the same thing, but an IntegrityError here
             # would reach the operator as "500" instead of a sentence.
             raise ValueError(
-                "Вкажіть рівно одну ціль: підприємство або лінію ДПД"
+                "Вкажіть рівно одну ціль: коректор підприємства або лінію ДПД"
             )
         return self
 
@@ -127,23 +124,24 @@ class PollDeviceUpdate(BaseModel):
     enabled: Optional[bool] = None
     auto_poll: Optional[bool] = None
     poll_times: Optional[List[str]] = None
-    poll_dpd: Optional[bool] = None
-    poll_gsm: Optional[bool] = None
+    # Repointing the card at another serial IS how a replacement is recorded
+    # here: same phone, new corrector, and the poll follows it from now on.
+    dpd_device_id: Optional[int] = None
 
 
 class PollDeviceRead(PollDeviceLink):
     id: int
-    enterprise_id: Optional[int] = None
+    dpd_device_id: Optional[int] = None
     dpd_line_id: Optional[int] = None
     target_kind: str
+    # Where the corrector stands: the metering point, or the DPD line.
     target_label: Optional[str] = None
-    # How the site is read. Both may be on; at least one always is.
-    poll_dpd: bool = True
-    poll_gsm: bool = False
-    # The corrector standing at the point right now — what the modem expects to
-    # find. None for a DPD line, and for a point currently without one.
-    device_id: Optional[int] = None
-    device_ser_num: Optional[int] = None
+    # What the modem expects to hear back. A reply from any other serial is
+    # refused, so this is the whole point of the card.
+    ser_num: Optional[int] = None
+    # False when the corrector this card names is no longer fitted — a
+    # replacement entered in Підприємства and not here.
+    still_installed: bool = True
     # Which agents took this device. Empty means nobody polls it at all.
     agent_ids: List[int] = Field(default_factory=list)
 
@@ -209,10 +207,8 @@ def _read(row: dict) -> PollDeviceRead:
         **card.model_dump(exclude={"created_at", "updated_at"}),
         target_kind=row["target_kind"],
         target_label=row["target_label"],
-        poll_dpd=row["poll_dpd"],
-        poll_gsm=row["poll_gsm"],
-        device_id=row["device_id"],
-        device_ser_num=row["device_ser_num"],
+        ser_num=row["ser_num"],
+        still_installed=row["still_installed"],
         agent_ids=row["agent_ids"],
     )
 
@@ -262,18 +258,14 @@ async def create_device(
 ):
     _valid_times(body.poll_times)
     dao = PollingDao(session)
-    payload = body.model_dump()
-    poll_dpd = payload.pop("poll_dpd", None)
-    poll_gsm = payload.pop("poll_gsm", None)
     try:
-        card = await dao.create_device(payload)
-        await dao.set_poll_paths(card, poll_dpd, poll_gsm)
+        card = await dao.create_device(body.model_dump())
         await session.commit()
     except IntegrityError:
         await session.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Для цього об'єкта вже є картка опитування",
+            detail="Для цього коректора вже є картка опитування",
         )
     return await _reread(dao, card.id)
 
@@ -310,12 +302,24 @@ async def update_device(
     patch = body.model_dump(exclude_unset=True)
     if "poll_times" in patch:
         _valid_times(patch["poll_times"])
-    poll_dpd = patch.pop("poll_dpd", None)
-    poll_gsm = patch.pop("poll_gsm", None)
-    if poll_dpd is not None or poll_gsm is not None:
-        await dao.set_poll_paths(card, poll_dpd, poll_gsm)
-    await dao.update_device(card, patch)
-    await session.commit()
+    if "dpd_device_id" in patch and card.dpd_line_id is not None:
+        # A line's card follows the line; its corrector comes from the line's
+        # own history and there is nothing here to repoint.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Картка лінії ДПД не прив'язується до коректора вручну",
+        )
+    try:
+        # update_device flushes, so the unique index fires here rather than at
+        # commit — both have to be inside the same guard.
+        await dao.update_device(card, patch)
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Для цього коректора вже є картка опитування",
+        )
     return await _reread(dao, device_id)
 
 

@@ -17,7 +17,7 @@ date therefore needs no re-poll — only a different slice.
 from datetime import datetime
 from typing import List, Optional
 
-from sqlalchemy import BigInteger, CheckConstraint, Column, ForeignKey, Index
+from sqlalchemy import BigInteger, Column, ForeignKey, Index
 from sqlmodel import Field, Relationship, SQLModel, UniqueConstraint
 
 
@@ -73,17 +73,6 @@ class EnterpriseBase(SQLModel):
     dpd_line_id: Optional[int] = Field(default=None, foreign_key="dpd_line.id", ondelete="SET NULL", sa_type=BigInteger)
     active: bool = Field(default=True)    # our flag for inclusion in queries
     enabled: bool = Field(default=True)   # metering point status from DPD
-    # How this point's readings are obtained. Both may be on; at least one
-    # must be (ck_enterprise_some_poll), because a point served by neither is
-    # a point nobody reads — and `active` already exists to switch a point off
-    # deliberately, which is a different statement.
-    #
-    # They are on the POINT rather than on the corrector because the modem is:
-    # one sits at the site and the correctors behind it get replaced. On the
-    # corrector, every replacement would need the phone typed in again, and
-    # the first time somebody forgot, the point would simply go quiet.
-    poll_dpd: bool = Field(default=True)
-    poll_gsm: bool = Field(default=False)
 
 
 class Enterprise(EnterpriseBase, table=True):
@@ -92,11 +81,6 @@ class Enterprise(EnterpriseBase, table=True):
         # Created by a migration but never declared here, which is why
         # `alembic check` kept proposing to drop it.
         Index("ix_enterprise_dpd_line", "dpd_line_id"),
-        # Declared here as well as in the migration on purpose: tests build the
-        # schema from SQLModel.metadata and production from Alembic, so a
-        # constraint that lives in only one of them is never tested where it
-        # matters or never enforced where it counts.
-        CheckConstraint("poll_dpd OR poll_gsm", name="ck_enterprise_some_poll"),
     )
 
     id: Optional[int] = Field(default=None, primary_key=True, sa_type=BigInteger)

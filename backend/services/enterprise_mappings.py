@@ -459,22 +459,18 @@ async def get_assignments_for_device_db(
 async def get_devices_for_branch_db(
     branch_id: int, session, range_from=None, range_to=None
 ) -> list[dict]:
-    """Assignments of a branch's active enterprises that DPD serves.
+    """All assignments of a branch's active enterprises — the scheduler
+    refresh works branch-by-branch (DPD credentials are per branch).
 
-    The scheduler refresh works branch-by-branch (DPD credentials are per
-    branch) and the alarms report follows the same list, so both go through
-    here — and both ask the DPD API. A point read only over GSM still has
-    correctors and archives like any other, but asking the API about it costs a
-    request per refresh and can never answer anything. `poll_dpd` is what keeps
-    it out; reads of the archive are unaffected, since the rows the modem wrote
-    are in the same tables.
+    Everything is asked about, including correctors that are also read by a
+    modem: a device can be served by both, and deciding here which source a
+    point belongs to would mean maintaining that answer in two places.
     """
     from backend.db.models.enterprise_model import Enterprise
 
     return await _query_assignments_db(
         session,
         Enterprise.branch_id == branch_id,
-        Enterprise.poll_dpd.is_(True),
         range_from=range_from,
         range_to=range_to,
     )

@@ -59,21 +59,25 @@ class PollAgent(HlBaseModel, table=True):
 
 
 class PollDevice(HlBaseModel, table=True):
-    """What to dial, and what happened last time it was dialled.
+    """A phone number bound to the corrector it reaches.
 
-    The card belongs to the SITE, not to the corrector standing there: the
-    modem is at the site and the correctors behind it get replaced. Which
-    device to read is decided when the agent asks for its plan — whichever is
-    installed at that moment — and the reply is checked against it: the device
-    reports its serial, and a poll that reaches a different one writes nothing
-    and is raised as an error for the operator to settle. Either the
-    replacement was never entered, or the call reached the wrong site; both
-    are worse than a missing reading.
+    The card names the CORRECTOR, and the operator moves it when the device is
+    replaced: same phone, new serial, and from that moment the modem reads the
+    new one. The point's own history stays continuous in `enterprise_device`,
+    which is where it belongs — the poll has no opinion about it.
 
-    Two kinds of site, exactly one of them set (`ck_poll_device_single_target`,
-    the `virtual_line_member` idiom): an enterprise metering point, or a DPD
-    line. ЛУМГ correctors are not polled over GSM at all — Ask2 keeps doing
-    that and writing its hostlib files.
+    Binding to the corrector rather than to the site is what makes the reply
+    checkable. The device reports its serial; if it is not the one this card
+    names, nothing is written and the operator is told, because that is either
+    a replacement nobody entered or a call that reached the wrong place.
+
+    Two kinds of corrector, exactly one set (`ck_poll_device_single_target`,
+    the `virtual_line_member` idiom): one standing at an enterprise metering
+    point (`dpd_device`), or one on a DPD line — whose history keeps the serial
+    inline rather than as a device row, so the card points at the line and the
+    expected serial is read from its current entry. ЛУМГ correctors are not
+    polled over GSM at all: Ask2 keeps doing that and writing its hostlib
+    files.
 
     The link fields are a deliberate copy of `ask2cfg.xml`, adapter and radio
     included, even though neither is used today. Otherwise migrating the
@@ -84,15 +88,15 @@ class PollDevice(HlBaseModel, table=True):
     __tablename__ = "poll_device"
     __table_args__ = (
         CheckConstraint(
-            "(enterprise_id IS NOT NULL) <> (dpd_line_id IS NOT NULL)",
+            "(dpd_device_id IS NOT NULL) <> (dpd_line_id IS NOT NULL)",
             name="ck_poll_device_single_target",
         ),
-        # One card per site. The indexes are partial because one of the two
-        # target columns is always NULL, and a plain unique index would then
-        # allow only one such row in the whole table.
+        # One card per corrector. The indexes are partial because one of the
+        # two target columns is always NULL, and a plain unique index would
+        # then allow only one such row in the whole table.
         Index(
-            "uq_poll_device_enterprise", "enterprise_id",
-            unique=True, postgresql_where=Column("enterprise_id").isnot(None),
+            "uq_poll_device_dpd_device", "dpd_device_id",
+            unique=True, postgresql_where=Column("dpd_device_id").isnot(None),
         ),
         Index(
             "uq_poll_device_dpd_line", "dpd_line_id",
@@ -104,9 +108,11 @@ class PollDevice(HlBaseModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True, sa_type=BigInteger)
 
-    # ── Target: the site, exactly one of the two ─────────────────────────────
-    enterprise_id: Optional[int] = Field(
-        default=None, foreign_key="enterprise.id", ondelete="CASCADE",
+    # ── Target: the corrector, exactly one of the two kinds ──────────────────
+    # Editable, unlike most foreign keys here: repointing the card at the new
+    # serial IS how a replacement is recorded on this screen.
+    dpd_device_id: Optional[int] = Field(
+        default=None, foreign_key="dpd_device.id", ondelete="CASCADE",
         sa_type=BigInteger,
     )
     dpd_line_id: Optional[int] = Field(

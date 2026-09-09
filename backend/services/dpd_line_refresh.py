@@ -371,9 +371,6 @@ async def run_update_all() -> None:
     try:
         async with async_session_factory() as session:
             lines = await DpdLineDao(session).get_all(active=True)
-        # A line read only over GSM has no answers waiting in the API, and
-        # asking anyway costs a request per line per run, forever.
-        lines = [line for line in lines if line.poll_dpd]
         if not lines:
             return
         by_branch: dict[int, list[DpdLine]] = {}

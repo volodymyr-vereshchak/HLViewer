@@ -104,13 +104,11 @@ async def make_enterprise(branch_id):
         )
         await session.commit()
 
-    async def _make(ser_num: int, installed_from=None, removed_at=None,
-                    poll_dpd: bool = True) -> dict:
+    async def _make(ser_num: int, installed_from=None, removed_at=None) -> dict:
         async with async_session_factory() as session:
             ent = Enterprise(
                 enterprise_name=f"ent-{ser_num}",
                 active=True, enabled=True, branch_id=branch_id, line_id=None,
-                poll_dpd=poll_dpd, poll_gsm=not poll_dpd,
             )
             session.add(ent)
             await session.flush()
@@ -466,40 +464,6 @@ class TestRefreshJob:
         assert await coverage_of(dev["device_id"], "hourly") == window_from
         status = await dpd_archive_refresh.read_status()
         assert status["status"] == "done"
-
-    async def test_a_gsm_only_point_is_never_asked_about(
-        self, mocker, make_enterprise, branch_id
-    ):
-        """A point the modem reads and DPD does not serve.
-
-        It has correctors and archives like any other, so without the flag the
-        refresh would ask the DPD API about it twice a day, forever, and get
-        nothing back."""
-        served = await make_enterprise(101)
-        await make_enterprise(202, poll_dpd=False)
-        asked: list[int] = []
-
-        async def get_volumes(devices, date_from, date_to, *, type_request,
-                              **kwargs):
-            asked.extend(d["serNum"] for d in devices)
-            return daily_records(devices, [D_OLD5]) if type_request == "daily" else []
-
-        client = mocker.AsyncMock()
-        client.get_volumes = get_volumes
-        mocker.patch(
-            "backend.services.dpd_archive_refresh.DPDClient.for_branch",
-            mocker.AsyncMock(return_value=client),
-        )
-        mocker.patch(
-            "backend.services.dpd_archive_refresh._branch_ids_with_credentials",
-            mocker.AsyncMock(return_value=[branch_id]),
-        )
-
-        assert await dpd_archive_refresh.run_refresh() is True
-
-        assert set(asked) == {101}, "the GSM-only point must not be asked about"
-        # And it gets no coverage row, so nothing later thinks DPD has it.
-        assert await coverage_of(served["device_id"], "daily") is not None
 
     async def test_shared_corrector_is_polled_once_for_the_whole_window(
         self, mocker, make_enterprise, branch_id
