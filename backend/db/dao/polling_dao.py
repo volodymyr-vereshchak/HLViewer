@@ -57,6 +57,19 @@ def hash_agent_key(key: str) -> str:
     return hashlib.sha256(key.encode()).hexdigest()
 
 
+def _storable(message: str) -> str:
+    """A log line Postgres will accept as text.
+
+    The drivers log answers exactly as they came off the wire, and a device's
+    identity block is padded with NULs. Postgres rejects a NUL inside text, so
+    one such line fails the whole request — and the request is the report of a
+    poll that has already happened and cannot be repeated. Sanitising here as
+    well as in the agent, because a log endpoint that an agent can crash with
+    a byte is an endpoint that will be crashed.
+    """
+    return "".join(" " if c < " " else c for c in message)[:1000]
+
+
 class PollingDao:
     """Reads and writes the polling registry. Commits are the caller's."""
 
@@ -445,7 +458,7 @@ class PollingDao:
                 poll_device_id=device_id,
                 seq=seq,
                 level=str(line.get("level", "info"))[:8],
-                message=str(line.get("message", "")),
+                message=_storable(str(line.get("message", ""))),
             ))
         await self.session.flush()
         return highest

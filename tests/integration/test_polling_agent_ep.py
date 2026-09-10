@@ -333,6 +333,32 @@ class TestAWholeSession:
             )).scalars())
         assert [line.message for line in lines] == ["дзвоню знову"]
 
+    async def test_a_raw_wire_dump_does_not_break_the_log(
+        self, anon_client, session_ready
+    ):
+        """A driver's own trace carries the bytes it read, NUL padding and all.
+
+        Postgres refuses NUL inside text, and the request carrying it is the
+        report of a call that already happened and cannot be repeated — so
+        losing it to a 500 loses the only account of the failure.
+        """
+        agent, card = session_ready["agent"], session_ready["card"]
+        resp = await anon_client.post(
+            f"/polling/agent/devices/{card['id']}/log",
+            json={"reset": True, "lines": [
+                {"seq": 1, "message": "<-- VegaCoL\x00\x01!\x00\x00 2311"},
+            ]},
+            headers=key(agent),
+        )
+        assert resp.status_code == 200
+
+        async with async_session_factory() as session:
+            stored = list((await session.execute(
+                select(PollLog).where(PollLog.poll_device_id == card["id"])
+            )).scalars())
+        assert "\x00" not in stored[0].message
+        assert "VegaCoL" in stored[0].message and "2311" in stored[0].message
+
 
 @pytest.mark.asyncio
 class TestWhatTheProtocolRefuses:

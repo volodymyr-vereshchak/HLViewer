@@ -287,7 +287,9 @@ class PollLog(SQLModel, table=True):
     )
     seq: int = Field(default=0)
     ts: datetime = Field(default_factory=datetime.now)
-    level: str = Field(default="info", max_length=8)  # info | warn | error
+    # info | warn | error, plus debug for the driver's own trace, which is
+    # attached only when a session failed.
+    level: str = Field(default="info", max_length=8)
     message: str = Field(sa_column=Column(Text, nullable=False))
 
 
