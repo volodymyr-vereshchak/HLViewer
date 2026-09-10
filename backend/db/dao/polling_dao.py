@@ -8,7 +8,7 @@ import secrets
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.models.device_catalog_model import CorectorType, Manufacturer
@@ -21,7 +21,9 @@ from backend.db.models.enterprise_model import (
 from backend.db.models.polling_model import (
     PollAgent,
     PollAgentDevice,
+    PollAttempt,
     PollDevice,
+    PollLog,
     PollSettings,
 )
 from backend.services.poll_validation import (
@@ -331,6 +333,173 @@ class PollingDao:
                 PollAgentDevice(agent_id=agent_id, poll_device_id=device_id)
             )
         await self.session.flush()
+
+    async def archive_coverage(self, card_ids: List[int]) -> Dict[int, Dict]:
+        """card id -> {"hourly": last stamp, "daily": last day} already stored.
+
+        This is where an incremental poll comes from, and there is deliberately
+        no coverage table to keep in step: the answer is MAX() over the archive
+        itself. DPD needed one because it backfills into the PAST through a
+        metered API; a modem only ever reads forward from the last record, so a
+        separate ledger could only drift from what is actually stored.
+        """
+        if not card_ids:
+            return {}
+        rows = (await self.session.execute(
+            text(
+                """
+                SELECT p.id,
+                       (SELECT MAX(h.stamp) FROM dpd_hourly_archive h
+                         WHERE h.device_id = p.dpd_device_id)  AS dev_hour,
+                       (SELECT MAX(d.day) FROM dpd_daily_archive d
+                         WHERE d.device_id = p.dpd_device_id)  AS dev_day,
+                       (SELECT MAX(lh.stamp) FROM dpd_line_hourly_archive lh
+                         WHERE lh.dpd_line_id = p.dpd_line_id) AS line_hour,
+                       (SELECT MAX(ld.day) FROM dpd_line_daily_archive ld
+                         WHERE ld.dpd_line_id = p.dpd_line_id) AS line_day
+                FROM poll_device p
+                WHERE p.id = ANY(:ids)
+                """
+            ),
+            {"ids": card_ids},
+        )).all()
+        out: Dict[int, Dict] = {}
+        for card_id, dev_hour, dev_day, line_hour, line_day in rows:
+            day = dev_day or line_day
+            out[card_id] = {
+                "hourly": dev_hour or line_hour,
+                # The daily archive keys by date; the agent wants a moment.
+                "daily": datetime.combine(day, datetime.min.time()) if day else None,
+            }
+        return out
+
+    # ── What an agent does ───────────────────────────────────────────────────
+
+    async def agent_by_key(self, key: str) -> Optional[PollAgent]:
+        """The agent presenting this key, if it is active.
+
+        Only the hash is stored, so this is a lookup by hash rather than a
+        comparison — there is nothing to compare against.
+        """
+        return (await self.session.execute(
+            select(PollAgent)
+            .where(PollAgent.key_hash == hash_agent_key(key))
+            .where(PollAgent.active.is_(True))
+        )).scalars().first()
+
+    async def touch_agent(
+        self, agent: PollAgent, version: Optional[str], host: Optional[str]
+    ) -> None:
+        """Heartbeat plus self-description. `last_seen_at` is how the admin
+        screen decides an agent has gone quiet — there is nothing else to ask."""
+        agent.last_seen_at = datetime.now()
+        if version:
+            agent.version = version[:32]
+        if host:
+            agent.host = host[:255]
+
+    async def claim(self, device_id: int, agent_id: int) -> bool:
+        """Take a device for the length of one session.
+
+        Needed for exactly one case: a device two operators both ticked, whose
+        agents both decide at the same moment that it is overdue. One atomic
+        UPDATE settles it — nothing returned means somebody else is already
+        dialling, and this agent moves on.
+
+        A claim releases itself after twenty minutes, which is what makes an
+        agent switched off mid-session cost nothing: no cleanup, no lease
+        renewal, no way for a crashed machine to hold a device forever.
+        """
+        result = await self.session.execute(
+            text(
+                "UPDATE poll_device "
+                "SET polling_agent_id = :agent, polling_since = now() "
+                "WHERE id = :device "
+                "  AND (polling_since IS NULL "
+                "       OR polling_since < now() - interval '20 minutes') "
+                "RETURNING id"
+            ),
+            {"agent": agent_id, "device": device_id},
+        )
+        return result.first() is not None
+
+    async def release(self, card: PollDevice) -> None:
+        card.polling_agent_id = None
+        card.polling_since = None
+
+    async def clear_log(self, device_id: int) -> None:
+        """A new session replaces the old log rather than adding to it: this
+        screen answers "what is happening now", and the history of failures
+        lives in poll_attempt as one row each."""
+        await self.session.execute(
+            delete(PollLog).where(PollLog.poll_device_id == device_id)
+        )
+
+    async def append_log(self, device_id: int, lines: List[Dict]) -> int:
+        """Returns the highest seq stored, which the agent resumes from."""
+        highest = 0
+        for line in lines:
+            seq = int(line.get("seq", 0))
+            highest = max(highest, seq)
+            self.session.add(PollLog(
+                poll_device_id=device_id,
+                seq=seq,
+                level=str(line.get("level", "info"))[:8],
+                message=str(line.get("message", "")),
+            ))
+        await self.session.flush()
+        return highest
+
+    async def read_log(self, device_id: int, after_seq: int = 0) -> List[PollLog]:
+        return list((await self.session.execute(
+            select(PollLog)
+            .where(PollLog.poll_device_id == device_id)
+            .where(PollLog.seq > after_seq)
+            .order_by(PollLog.seq)
+        )).scalars())
+
+    async def finish(
+        self,
+        card: PollDevice,
+        agent_id: int,
+        *,
+        status: str,
+        error_code: Optional[str],
+        error_text: Optional[str],
+        rows: Optional[Dict],
+        duration_ms: Optional[int],
+        connect_ms: Optional[int],
+    ) -> None:
+        """Record the outcome of one session.
+
+        `last_poll_at` moves only on success, and it is the only thing the
+        schedule reads: a failed attempt must leave the device overdue, so the
+        next agent tries again rather than treating the failure as done.
+        """
+        now = datetime.now()
+        card.last_attempt_at = now
+        card.last_status = status
+        card.last_error_code = error_code
+        card.last_error_text = error_text
+        card.last_agent_id = agent_id
+        card.last_rows = rows or {}
+        card.last_duration_ms = duration_ms
+        card.last_connect_ms = connect_ms
+        if status == "ok":
+            card.last_poll_at = now
+            # The request has been served; leaving it would poll forever.
+            card.manual_requested_at = None
+            card.manual_requested_by = None
+        self.session.add(PollAttempt(
+            poll_device_id=card.id,
+            agent_id=agent_id,
+            started_at=now,
+            finished_at=now,
+            status=status,
+            error_code=error_code,
+            rows=rows or {},
+        ))
+        await self.release(card)
 
     # ── Default hours ────────────────────────────────────────────────────────
 

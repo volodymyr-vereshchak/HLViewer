@@ -39,6 +39,7 @@ from backend.api.endpoints import edit_type_ep
 from backend.api.endpoints import config_ep
 from backend.api.endpoints import logs_ep
 from backend.api.endpoints import polling_ep
+from backend.api.endpoints import polling_agent_ep
 from backend.telegram_notifier.telegram_norifier import TelegramBot
 from backend.db.engine import async_session_factory
 from backend.db.models.app_user_model import AppUser
@@ -310,6 +311,13 @@ async def auth_guard(request: Request, call_next):
     if method == "OPTIONS" or path in _PUBLIC_PATHS:
         return await call_next(request)
 
+    # An agent is a service: it has no cookie and authenticates with a key it
+    # presents in a header. These routes are exempt from the session check and
+    # NOT from any check — every one of them resolves the key itself, which is
+    # why the exemption is a prefix rather than a hole.
+    if path.startswith(polling_agent_ep.AGENT_PATH_PREFIX):
+        return await call_next(request)
+
     claims = decode_jwt(request.cookies.get(COOKIE_NAME))
     if claims is None:
         return NaNSafeJSONResponse(status_code=401, content={"detail": "Not authenticated"})
@@ -399,3 +407,4 @@ app.include_router(edit_type_ep.edit_type_router)
 app.include_router(config_ep.router)
 app.include_router(logs_ep.router)
 app.include_router(polling_ep.router)
+app.include_router(polling_agent_ep.router)
