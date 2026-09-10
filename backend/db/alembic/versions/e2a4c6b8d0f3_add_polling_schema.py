@@ -114,7 +114,7 @@ def upgrade() -> None:
         # Link.
         sa.Column("channel", sa.String(length=8), nullable=False, server_default="com"),
         sa.Column("is_modem", sa.Boolean(), nullable=False, server_default=sa.true()),
-        sa.Column("phone", sa.String(length=32), nullable=True),
+        sa.Column("phone", sa.String(length=16), nullable=True),
         sa.Column("init_str", sa.String(length=64), nullable=False,
                   server_default="AT&F"),
         sa.Column("dial_prefix", sa.String(length=16), nullable=False,
@@ -130,7 +130,8 @@ def upgrade() -> None:
                   server_default="400"),
         sa.Column("repeat_count", sa.Integer(), nullable=False, server_default="3"),
         sa.Column("preamble_count", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("depth_days", sa.Integer(), nullable=True),
+        # 0…5, 0 first. A range rather than a free integer: it is a queue
+        # order somebody compares by eye.
         sa.Column("priority", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("note", sa.String(length=500), nullable=True),
         # Modem (a copy of cask2.Devices.COMChannel).

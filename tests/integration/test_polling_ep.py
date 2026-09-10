@@ -110,7 +110,7 @@ class TestDeviceCards:
         card = await make_card(
             admin_client,
             dpd_device_id=targets["dpd_device_id"],
-            phone="0501234567",
+            phone="+380501234567",
         )
         assert card["target_kind"] == "dpd_device"
         # The label says where the corrector stands; the serial is what the
@@ -153,7 +153,7 @@ class TestDeviceCards:
         card = await make_card(
             admin_client,
             dpd_device_id=targets["dpd_device_id"],
-            phone="0501234567",
+            phone="+380501234567",
             repeat_count=2,
         )
         resp = await admin_client.put(
@@ -161,7 +161,7 @@ class TestDeviceCards:
         )
         assert resp.status_code == 200, resp.text
         assert resp.json()["repeat_count"] == 5
-        assert resp.json()["phone"] == "0501234567"
+        assert resp.json()["phone"] == "+380501234567"
 
     async def test_an_unknown_field_is_refused(self, admin_client, targets):
         # The connection speed moved to the agent; a client still sending it
@@ -175,12 +175,43 @@ class TestDeviceCards:
     async def test_poll_hours_are_validated(self, admin_client, targets):
         card = await make_card(admin_client, dpd_device_id=targets["dpd_device_id"])
         ok = await admin_client.put(
-            f"/polling/devices/{card['id']}", json={"poll_times": ["06:00", "18:30"]}
+            f"/polling/devices/{card['id']}", json={"poll_times": ["18:30", "06:00"]}
         )
         assert ok.status_code == 200
+        # Sorted on the way in: the list is read as a daily rhythm.
+        assert ok.json()["poll_times"] == ["06:00", "18:30"]
         # "25:00" would be a slot the agent silently never reaches.
         bad = await admin_client.put(
             f"/polling/devices/{card['id']}", json={"poll_times": ["25:00"]}
+        )
+        assert bad.status_code == 400
+
+    async def test_the_phone_is_normalised(self, admin_client, targets):
+        # However it was written down, the agent gets one shape to dial.
+        card = await make_card(
+            admin_client,
+            dpd_device_id=targets["dpd_device_id"],
+            phone=" 050 123-45-67 ",
+        )
+        assert card["phone"] == "+380501234567"
+
+    async def test_a_number_that_cannot_be_dialled_is_refused(
+        self, admin_client, targets
+    ):
+        # Otherwise it surfaces as "no dialtone" on somebody else's machine.
+        resp = await admin_client.post(
+            "/polling/devices",
+            json={"dpd_device_id": targets["dpd_device_id"], "phone": "050123456"},
+        )
+        assert resp.status_code == 400
+
+    async def test_priority_is_a_range(self, admin_client, targets):
+        card = await make_card(
+            admin_client, dpd_device_id=targets["dpd_device_id"], priority=5
+        )
+        assert card["priority"] == 5
+        bad = await admin_client.put(
+            f"/polling/devices/{card['id']}", json={"priority": 9}
         )
         assert bad.status_code == 400
 
@@ -323,6 +354,50 @@ class TestTheDriverComesFromTheModel:
 
 
 @pytest.mark.asyncio
+class TestTheNetworkAddress:
+    """Only Floutek gives an operator a real choice: several correctors share
+    one line there. Everywhere else the address is sent and checked but is
+    always the default, so it is filled in rather than asked for."""
+
+    async def test_a_non_floutek_card_gets_the_default(self, admin_client, targets):
+        await _set_protocol(targets["corector_type_id"], 1054)  # ВЕГА
+        card = await make_card(
+            admin_client, dpd_device_id=targets["dpd_device_id"], device_address=7
+        )
+        # Typed 7, stored 1: the field is not a choice for this driver, and a
+        # stray value here reads as a dead meter later.
+        assert card["device_address"] == 1
+        assert card["address_matters"] is False
+
+    async def test_a_floutek_card_keeps_what_was_typed(self, admin_client, targets):
+        await _set_protocol(targets["corector_type_id"], 1070)  # Флоутек ВР-2
+        card = await make_card(
+            admin_client, dpd_device_id=targets["dpd_device_id"], device_address=3
+        )
+        assert card["device_address"] == 3
+        assert card["address_matters"] is True
+
+    async def test_repointing_to_another_family_resets_it(
+        self, admin_client, targets
+    ):
+        await _set_protocol(targets["corector_type_id"], 1070)
+        card = await make_card(
+            admin_client, dpd_device_id=targets["dpd_device_id"], device_address=3
+        )
+        new_id = await _replace(
+            targets["enterprise_id"], targets["dpd_device_id"], 555002,
+            corector_type_id=targets["other_type_id"],
+        )
+        await _set_protocol(targets["other_type_id"], 1054)
+
+        resp = await admin_client.put(
+            f"/polling/devices/{card['id']}", json={"dpd_device_id": new_id}
+        )
+        # The new model is not a Floutek, so the old address is not a choice.
+        assert resp.json()["device_address"] == 1
+
+
+@pytest.mark.asyncio
 class TestReplacingTheCorrector:
     """A replacement is recorded by repointing the card: same phone, new
     serial, and the modem reads the new device from then on.
@@ -355,7 +430,7 @@ class TestReplacingTheCorrector:
         self, admin_client, targets
     ):
         card = await make_card(
-            admin_client, dpd_device_id=targets["dpd_device_id"], phone="0501234567"
+            admin_client, dpd_device_id=targets["dpd_device_id"], phone="+380501234567"
         )
         new_id = await _replace(
             targets["enterprise_id"], targets["dpd_device_id"], 555002
@@ -368,7 +443,7 @@ class TestReplacingTheCorrector:
         assert resp.json()["ser_num"] == 555002
         assert resp.json()["still_installed"] is True
         # The phone belongs to the site and stays where it was.
-        assert resp.json()["phone"] == "0501234567"
+        assert resp.json()["phone"] == "+380501234567"
 
     async def test_two_cards_cannot_name_one_corrector(self, admin_client, targets):
         first = await make_card(
@@ -473,7 +548,7 @@ class TestWhoMayDoWhat:
         card = await make_card(
             admin_client,
             dpd_device_id=targets["dpd_device_id"],
-            phone="0501234567",
+            phone="+380501234567",
         )
         assert (await viewer_client.get(
             f"/polling/devices/{card['id']}"

@@ -24,6 +24,9 @@ from backend.db.models.polling_model import (
     PollDevice,
     PollSettings,
 )
+from backend.services.poll_validation import (
+    DEFAULT_DEVICE_ADDRESS, address_matters,
+)
 
 # The two kinds of corrector a card can point at, and the column for each.
 # Kept in one place because the CHECK constraint, the API and the label lookup
@@ -188,6 +191,9 @@ class PollingDao:
             data["protocol_id"] = await self.protocol_of_device(
                 data["dpd_device_id"]
             )
+        data["device_address"] = self._address_for(
+            data.get("protocol_id"), data.get("device_address")
+        )
         card = PollDevice(**data)
         self.session.add(card)
         await self.session.flush()
@@ -201,10 +207,33 @@ class PollingDao:
             patch["protocol_id"] = await self.protocol_of_device(
                 patch["dpd_device_id"]
             )
+            # The new model may not be a Floutek, in which case whatever
+            # address the old one needed is no longer a choice.
+            patch["device_address"] = self._address_for(
+                patch["protocol_id"], patch.get("device_address")
+            )
+        elif "device_address" in patch:
+            patch["device_address"] = self._address_for(
+                card.protocol_id, patch["device_address"]
+            )
         for key, value in patch.items():
             setattr(card, key, value)
         await self.session.flush()
         return card
+
+    @staticmethod
+    def _address_for(protocol_id: Optional[int], typed: Optional[int]) -> int:
+        """The network address to store.
+
+        Only Floutek gives an operator a real choice — several correctors share
+        one line there. Every other driver still sends the address and checks
+        it in the reply, but with one device per line it is always the default,
+        so it is filled in rather than asked for: a typo in a field nobody
+        needed to touch looks exactly like a dead meter.
+        """
+        if address_matters(protocol_id) and typed is not None:
+            return typed
+        return DEFAULT_DEVICE_ADDRESS
 
     async def delete_device(self, card: PollDevice) -> None:
         await self.session.delete(card)

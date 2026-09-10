@@ -135,7 +135,11 @@ class PollDevice(HlBaseModel, table=True):
     # ── Link ─────────────────────────────────────────────────────────────────
     channel: str = Field(default="com", max_length=8)  # com | tcp
     is_modem: bool = Field(default=True)
-    phone: Optional[str] = Field(default=None, max_length=32)
+    # Always +380 and nine digits (see services/poll_validation). The agent
+    # hands this straight to ATDP, and a modem does not guess: "050…" reaches
+    # nothing, and the failure surfaces as "no dialtone" on somebody else's
+    # machine hours later.
+    phone: Optional[str] = Field(default=None, max_length=16)
     init_str: str = Field(default="AT&F", max_length=64)
     dial_prefix: str = Field(default="ATDP", max_length=16)
     # No baud. Ask2 kept it per device (COMChannel.bitRate belongs to Calc),
@@ -168,12 +172,15 @@ class PollDevice(HlBaseModel, table=True):
     pause_between_ms: int = Field(default=400)
     repeat_count: int = Field(default=3)
     preamble_count: int = Field(default=0)
-    # NULL = everything the device still holds, which is the intended setting.
-    # A GSM poll has no backfill: the corrector keeps weeks of archive and once
-    # that has rolled over the readings are gone for good, unlike the DPD API
-    # which can always be asked again. So the first poll of a device takes the
-    # whole archive, and a window nobody polled stays empty forever.
-    depth_days: Optional[int] = Field(default=None)
+    # No depth setting. The first poll of a device takes everything its archive
+    # still holds, and later ones fill in the days and hours that are missing —
+    # the driver asks our stub for the last stored date and reads from there.
+    # A number of days would only ever be a way to fetch less than everything,
+    # and a GSM poll has no second chance: the corrector keeps weeks, so a
+    # window nobody polled in time is gone for good.
+    #
+    # 0…5, 0 first — a queue order an operator compares by eye rather than a
+    # free integer, because "priority 900" says nothing about where it sits.
     priority: int = Field(default=0)
     note: Optional[str] = Field(default=None, max_length=500)
 

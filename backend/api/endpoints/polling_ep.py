@@ -24,6 +24,14 @@ from backend.db.dao.polling_dao import PollingDao
 from backend.db.engine import get_session
 from backend.db.models.app_user_model import AppUser
 from backend.db.models.polling_model import PollDevice
+from backend.services.poll_validation import (
+    DEFAULT_DEVICE_ADDRESS,
+    PollValidationError,
+    address_matters,
+    normalise_phone,
+    validate_poll_times,
+    validate_priority,
+)
 
 router = APIRouter(
     prefix="/polling",
@@ -53,7 +61,6 @@ class PollDeviceLink(BaseModel):
     pause_between_ms: int = 400
     repeat_count: int = 3
     preamble_count: int = 0
-    depth_days: Optional[int] = None
     priority: int = 0
     note: Optional[str] = None
 
@@ -106,7 +113,6 @@ class PollDeviceUpdate(BaseModel):
     pause_between_ms: Optional[int] = None
     repeat_count: Optional[int] = None
     preamble_count: Optional[int] = None
-    depth_days: Optional[int] = None
     priority: Optional[int] = None
     note: Optional[str] = None
     modem_connect_timeout_sec: Optional[int] = None
@@ -143,6 +149,10 @@ class PollDeviceRead(PollDeviceLink):
     # Taken from the corrector's model, never typed here. None means no Ask2
     # driver covers that model, which for part of this fleet is the truth.
     protocol_id: Optional[int] = None
+    # Whether the network address is a real choice for this driver — only for
+    # Floutek, where several correctors share a line. Everywhere else it stays
+    # at its default and the form has no business asking.
+    address_matters: bool = False
     # Which agents took this device. Empty means nobody polls it at all.
     agent_ids: List[int] = Field(default_factory=list)
 
@@ -210,6 +220,7 @@ def _read(row: dict) -> PollDeviceRead:
         target_label=row["target_label"],
         ser_num=row["ser_num"],
         still_installed=row["still_installed"],
+        address_matters=address_matters(card.protocol_id),
         agent_ids=row["agent_ids"],
     )
 
@@ -225,18 +236,25 @@ async def _reread(dao: PollingDao, device_id: int) -> PollDeviceRead:
     return _read(next(r for r in rows if r["card"].id == device_id))
 
 
-def _valid_times(poll_times: Optional[List[str]]) -> None:
-    """"25:00" is not a time, and the agent would silently never reach it."""
-    for value in poll_times or []:
-        try:
-            hour, minute = value.split(":")
-            if not (0 <= int(hour) <= 23 and 0 <= int(minute) <= 59):
-                raise ValueError
-        except (ValueError, AttributeError):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Некоректний час опитування: {value!r}. Очікується HH:MM",
-            )
+def _clean(payload: dict) -> dict:
+    """Normalise what the operator typed, or answer with a sentence.
+
+    Everything here fails on somebody else's machine hours later if it gets
+    through — an undialable number, a slot the agent never reaches — so it is
+    refused at the door rather than stored.
+    """
+    try:
+        if "phone" in payload:
+            payload["phone"] = normalise_phone(payload["phone"])
+        if "poll_times" in payload:
+            payload["poll_times"] = validate_poll_times(payload["poll_times"])
+        if "priority" in payload:
+            payload["priority"] = validate_priority(payload["priority"])
+    except PollValidationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)
+        )
+    return payload
 
 
 # ── Device cards ──────────────────────────────────────────────────────────────
@@ -257,10 +275,9 @@ async def list_devices(session: AsyncSession = Depends(get_session)):
 async def create_device(
     body: PollDeviceCreate, session: AsyncSession = Depends(get_session)
 ):
-    _valid_times(body.poll_times)
     dao = PollingDao(session)
     try:
-        card = await dao.create_device(body.model_dump())
+        card = await dao.create_device(_clean(body.model_dump()))
         await session.commit()
     except IntegrityError:
         await session.rollback()
@@ -300,9 +317,7 @@ async def update_device(
     card = await dao.get_device(device_id)
     if card is None:
         raise HTTPException(status_code=404, detail="Картку опитування не знайдено")
-    patch = body.model_dump(exclude_unset=True)
-    if "poll_times" in patch:
-        _valid_times(patch["poll_times"])
+    patch = _clean(body.model_dump(exclude_unset=True))
     if "dpd_device_id" in patch and card.dpd_line_id is not None:
         # A line's card follows the line; its corrector comes from the line's
         # own history and there is nothing here to repoint.
@@ -513,7 +528,7 @@ async def get_schedule(session: AsyncSession = Depends(get_session)):
 async def set_schedule(
     body: ScheduleRead, session: AsyncSession = Depends(get_session)
 ):
-    _valid_times(body.poll_times)
-    settings = await PollingDao(session).set_poll_times(body.poll_times)
+    times = _clean({"poll_times": body.poll_times})["poll_times"]
+    settings = await PollingDao(session).set_poll_times(times)
     await session.commit()
     return ScheduleRead(poll_times=settings.poll_times)
