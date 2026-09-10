@@ -143,6 +143,11 @@ class PollDeviceRead(PollDeviceLink):
     # What the modem expects to hear back. A reply from any other serial is
     # refused, so this is the whole point of the card.
     ser_num: Optional[int] = None
+    # A serial alone does not say what is on the other end of the line, and the
+    # model is what decides the driver, whether the address is a question, and
+    # how the alarm codes are read.
+    model_name: Optional[str] = None
+    manufacturer: Optional[str] = None
     # False when the corrector this card names is no longer fitted — a
     # replacement entered in Підприємства and not here.
     still_installed: bool = True
@@ -219,6 +224,8 @@ def _read(row: dict) -> PollDeviceRead:
         target_kind=row["target_kind"],
         target_label=row["target_label"],
         ser_num=row["ser_num"],
+        model_name=row["model_name"],
+        manufacturer=row["manufacturer"],
         still_installed=row["still_installed"],
         address_matters=address_matters(card.protocol_id),
         agent_ids=row["agent_ids"],

@@ -11,7 +11,7 @@ from typing import Dict, List, Optional
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.db.models.device_catalog_model import CorectorType
+from backend.db.models.device_catalog_model import CorectorType, Manufacturer
 from backend.db.models.dpd_line_model import DpdLine, DpdLineDevice
 from backend.db.models.enterprise_model import (
     DpdDevice,
@@ -72,6 +72,11 @@ class PollingDao:
         corrector it comes from the device row; for a DPD line the history
         keeps the serial inline, so the current entry is read instead.
 
+        The model comes with it, because a serial alone does not say what is on
+        the other end of the line — and the model is what decides the driver,
+        whether the network address is a question, and how the alarm codes are
+        read.
+
         `still_installed` is the quiet failure this screen exists to show. A
         card keeps dialling the corrector it names, so a replacement entered in
         Підприємства and not here means the modem is still calling a device
@@ -81,18 +86,24 @@ class PollingDao:
             select(
                 PollDevice,
                 DpdDevice.ser_num,
+                CorectorType.model_name,
+                Manufacturer.short_name,
                 DpdLine.name,
             )
             .outerjoin(DpdDevice, DpdDevice.id == PollDevice.dpd_device_id)
+            .outerjoin(CorectorType,
+                       CorectorType.id == DpdDevice.corector_type_id)
+            .outerjoin(Manufacturer,
+                       Manufacturer.id == CorectorType.manufacturer_id)
             .outerjoin(DpdLine, DpdLine.id == PollDevice.dpd_line_id)
             .order_by(PollDevice.id)
         )).all()
 
         assignments = await self.assignments()
         at_point = await self.points_of_devices()
-        line_serials = await self.line_serials()
+        line_devices = await self.line_devices()
         result = []
-        for card, ser_num, line_name in rows:
+        for card, ser_num, model_name, mfr_name, line_name in rows:
             if card.dpd_device_id is not None:
                 kind = "dpd_device"
                 point = at_point.get(card.dpd_device_id)
@@ -101,15 +112,20 @@ class PollingDao:
             else:
                 kind = "dpd_line"
                 label = line_name
-                ser_num = line_serials.get(card.dpd_line_id)
                 # A line's card follows the line, and the line's own history
                 # says which corrector is on it — nothing to fall out of date.
+                current = line_devices.get(card.dpd_line_id)
+                ser_num = current[0] if current else None
+                model_name = current[1] if current else None
+                mfr_name = current[2] if current else None
                 still_installed = ser_num is not None
             result.append({
                 "card": card,
                 "target_kind": kind,
                 "target_label": label,
                 "ser_num": ser_num,
+                "model_name": model_name,
+                "manufacturer": mfr_name,
                 "still_installed": still_installed,
                 "agent_ids": assignments.get(card.id, []),
             })
@@ -139,18 +155,28 @@ class PollingDao:
             for device_id, name, removed_at, _ in rows
         }
 
-    async def line_serials(self) -> Dict[int, int]:
-        """dpd line id -> serial of the corrector on it now.
+    async def line_devices(self) -> Dict[int, tuple]:
+        """dpd line id -> (serial, model, manufacturer) of the corrector on it.
 
         A DPD line keeps the corrector identity inline in its history rather
         than as a device row, so there is nothing to point a card at; the card
-        points at the line and the serial is read from the current entry.
+        points at the line and the current entry says what is on it.
         """
         rows = (await self.session.execute(
-            select(DpdLineDevice.dpd_line_id, DpdLineDevice.ser_num)
+            select(
+                DpdLineDevice.dpd_line_id,
+                DpdLineDevice.ser_num,
+                CorectorType.model_name,
+                Manufacturer.short_name,
+            )
+            .outerjoin(CorectorType,
+                       CorectorType.id == DpdLineDevice.corector_type_id)
+            .outerjoin(Manufacturer,
+                       Manufacturer.id == CorectorType.manufacturer_id)
             .order_by(DpdLineDevice.installed_from)
         )).all()
-        return {line_id: ser for line_id, ser in rows}
+        # Ordered by install moment, so the last write per line wins.
+        return {line_id: (ser, model, mfr) for line_id, ser, model, mfr in rows}
 
     async def assignments(self) -> Dict[int, List[int]]:
         """card id -> agents that took it. Empty list means nobody did, and a

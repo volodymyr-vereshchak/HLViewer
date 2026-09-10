@@ -114,9 +114,12 @@ class TestDeviceCards:
         )
         assert card["target_kind"] == "dpd_device"
         # The label says where the corrector stands; the serial is what the
-        # modem will check the reply against.
+        # modem will check the reply against; the model says what will answer.
         assert card["target_label"] == "Завод А"
         assert card["ser_num"] == 555001
+        assert (card["model_name"], card["manufacturer"]) == (
+            "ВЕГА-1.01", "Радміртех",
+        )
         # Nobody has taken it yet, and that means it is never polled.
         assert card["agent_ids"] == []
 
@@ -335,6 +338,19 @@ class TestTheDriverComesFromTheModel:
         # assemblies: null here is the truth, not a missing setting.
         card = await make_card(admin_client, dpd_device_id=targets["dpd_device_id"])
         assert card["protocol_id"] is None
+
+    async def test_the_model_follows_the_corrector(self, admin_client, targets):
+        # A serial alone does not say what answers the call, and the model is
+        # what decides the driver and the alarm dictionary.
+        card = await make_card(admin_client, dpd_device_id=targets["dpd_device_id"])
+        new_id = await _replace(
+            targets["enterprise_id"], targets["dpd_device_id"], 555002,
+            corector_type_id=targets["other_type_id"],
+        )
+        resp = await admin_client.put(
+            f"/polling/devices/{card['id']}", json={"dpd_device_id": new_id}
+        )
+        assert resp.json()["model_name"] == "КПЛГ-1.01Р"
 
     async def test_repointing_re_reads_the_driver(self, admin_client, targets):
         # A replacement is often a different model, and a card left on the old
