@@ -15,6 +15,8 @@ import pytest
 
 from backend.services.poll_schedule import (
     REASON_ALREADY_POLLED,
+    REASON_COOLING_OFF,
+    REASON_GAVE_UP,
     REASON_DISABLED,
     REASON_MANUAL_ONLY,
     REASON_MANUAL_REQUEST,
@@ -41,6 +43,9 @@ def due(**over):
         enabled=True,
         auto_poll=True,
         manual_requested_at=None,
+        last_attempt_at=None,
+        last_status=None,
+        scheduled_failures=None,
     )
     return is_due(**{**base, **over})
 
@@ -145,3 +150,139 @@ class TestOwnHoursVersusGlobal:
     @pytest.mark.parametrize("times", [["23:59"], ["00:00"]])
     def test_the_edges_of_the_day(self, times):
         assert due(poll_times=times, last_poll_at=None)[0] is True
+
+
+class TestAfterAFailure:
+    """A meter that did not answer is not asked again a moment later.
+
+    Without the pause, a device that cannot be reached is redialled as fast as
+    agents fetch their plan — every fifteen seconds, three dial attempts each —
+    for as long as its slot stays unsatisfied. It buys nothing: a line that was
+    dead a minute ago is dead now, and the modem is held busy for every other
+    site meanwhile.
+    """
+
+    def test_a_failed_attempt_is_not_retried_at_once(self):
+        assert due(
+            last_poll_at=at(10, 7),          # older than the 08:00 slot: overdue
+            last_attempt_at=at(10, 11, 58),
+            last_status="error",
+        ) == (False, REASON_COOLING_OFF)
+
+    def test_it_is_retried_once_the_pause_is_over(self):
+        assert due(
+            last_poll_at=at(10, 7),
+            last_attempt_at=at(10, 11, 40),
+            last_status="error",
+        ) == (True, REASON_OVERDUE)
+
+    def test_a_person_asking_again_is_not_made_to_wait(self):
+        # They have just watched it fail and pressed the button anyway. That
+        # is a decision, not a retry storm.
+        assert due(
+            last_attempt_at=at(10, 11, 58),
+            last_status="error",
+            manual_requested_at=at(10, 11, 59),
+        ) == (True, REASON_MANUAL_REQUEST)
+
+    def test_a_successful_poll_is_never_a_reason_to_wait(self):
+        assert due(
+            last_poll_at=at(10, 7),
+            last_attempt_at=at(10, 11, 58),
+            last_status="ok",
+        ) == (True, REASON_OVERDUE)
+
+
+class TestGivingUpUntilTheNextSlot:
+    """Three calls to a line that is not answering, then quiet.
+
+    A quarter of an hour apart, three attempts cover what a retry can fix: a
+    busy line, a meter mid-something, a modem that had not come back yet. The
+    fourth would be the first of a hundred a day, with the modem unavailable
+    to every other site meanwhile.
+    """
+
+    def test_a_third_failure_ends_the_attempts_for_this_slot(self):
+        failures = [at(10, 8, 5), at(10, 8, 20), at(10, 8, 35)]
+        assert due(
+            last_poll_at=at(10, 7),
+            last_attempt_at=at(10, 8, 35),
+            last_status="error",
+            scheduled_failures=failures,
+            now=at(10, 9),
+        ) == (False, REASON_GAVE_UP)
+
+    def test_two_failures_still_leave_one_call(self):
+        assert due(
+            last_poll_at=at(10, 7),
+            last_attempt_at=at(10, 8, 20),
+            last_status="error",
+            scheduled_failures=[at(10, 8, 5), at(10, 8, 20)],
+            now=at(10, 9),
+        ) == (True, REASON_OVERDUE)
+
+    def test_the_next_slot_starts_over(self):
+        # Failed all morning; 16:00 arrives and the site is tried again. The
+        # count is per slot, not a running total, or a site that fails every
+        # morning would never be polled again.
+        failures = [at(10, 8, 5), at(10, 8, 20), at(10, 8, 35)]
+        assert due(
+            last_poll_at=at(10, 7),
+            last_attempt_at=at(10, 8, 35),
+            last_status="error",
+            scheduled_failures=failures,
+            now=at(10, 16, 30),
+        ) == (True, REASON_OVERDUE)
+
+    def test_a_person_can_still_ask(self):
+        failures = [at(10, 8, 5), at(10, 8, 20), at(10, 8, 35)]
+        assert due(
+            last_poll_at=at(10, 7),
+            last_attempt_at=at(10, 8, 35),
+            last_status="error",
+            scheduled_failures=failures,
+            manual_requested_at=at(10, 9),
+            now=at(10, 9),
+        ) == (True, REASON_MANUAL_REQUEST)
+
+
+class TestAManualPollDuringThePause:
+    """Somebody polls by hand while the automatic retry is still waiting.
+
+    Both outcomes have to be right, because this is what an operator actually
+    does after seeing a failure on the screen.
+    """
+
+    def test_a_successful_manual_poll_closes_the_slot(self):
+        # Read at 08:10 by hand, after the 08:00 slot: there is nothing left
+        # for the pending retry to fetch, so it simply does not happen.
+        assert due(
+            last_poll_at=at(10, 8, 10),
+            last_attempt_at=at(10, 8, 10),
+            last_status="ok",
+            scheduled_failures=[at(10, 8, 2)],
+            now=at(10, 8, 20),
+        ) == (False, REASON_ALREADY_POLLED)
+
+    def test_a_failed_manual_poll_restarts_the_pause(self):
+        # It was an attempt like any other: the next automatic one is fifteen
+        # minutes from THIS call, not from the earlier one.
+        assert due(
+            last_poll_at=at(10, 7),
+            last_attempt_at=at(10, 8, 10),
+            last_status="error",
+            scheduled_failures=[at(10, 8, 10), at(10, 8, 2)],
+            now=at(10, 8, 20),
+        ) == (False, REASON_COOLING_OFF)
+
+    def test_a_failed_manual_poll_does_not_count_towards_the_three(self):
+        # Two scheduled failures and one by hand. The hand-made call is not in
+        # the list at all — the schedule still has its third attempt, because
+        # looking at a site that is failing must not remove its retries.
+        assert due(
+            last_poll_at=at(10, 7),
+            last_attempt_at=at(10, 8, 30),
+            last_status="error",
+            scheduled_failures=[at(10, 8, 15), at(10, 8, 2)],
+            now=at(10, 8, 50),
+        ) == (True, REASON_OVERDUE)

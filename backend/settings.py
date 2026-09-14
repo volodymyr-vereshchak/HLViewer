@@ -35,6 +35,14 @@ backend_settings = {
         "ENTERPRISE_MAPPINGS_PATH",
         "backend/data/enterprise_mappings.xlsx"
     ),
+    # Where the built poll agent (.exe) is kept for download from the admin
+    # panel. A build artifact, not source: put it here on the server the same
+    # way the frontend build is put in place.
+    "AGENT_DIST_DIR": os.getenv("AGENT_DIST_DIR", "backend/data/agent"),
+    # One file per site with the log of its last GSM poll. The live log is in
+    # the database and is wiped by the next session; this is what the question
+    # "what did the last call do" is answered from.
+    "POLL_LOG_DIR": os.getenv("POLL_LOG_DIR", "logs/poll"),
     # ── LDAP (domain) authentication ──────────────────────────────────────────
     # LDAP_ENABLED/AUTO_LOGIN are re-read from the environment on every login
     # (see backend/services/ldap_auth.py) so the mode can be flipped per

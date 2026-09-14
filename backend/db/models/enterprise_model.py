@@ -173,13 +173,38 @@ class EnterpriseDeviceRead(EnterpriseDeviceIn):
     bound_to: Optional[datetime] = None
 
 
+class EnterpriseGsm(SQLModel):
+    """The modem standing at this enterprise.
+
+    It lives on the enterprise card because that is where the modem lives: it
+    is bolted to the wall and stays there while correctors come and go. Which
+    corrector to read is not part of it — that is whichever one is fitted at
+    the moment of the call.
+
+    Only three things are worth an operator's attention. The timeouts, retry
+    counts and init string exist on the poll card and keep their defaults;
+    nobody has ever needed to change them, and a box nobody needs collects
+    typos that read as a dead meter.
+    """
+
+    phone: Optional[str] = None
+    #: Poll on a schedule. Off still leaves "poll now" available — those are
+    #: different questions.
+    auto_poll: bool = False
+    #: A list of "HH:MM". Empty means the hours set globally.
+    poll_times: List[str] = []
+
+
 class EnterpriseRead(EnterpriseBase):
     id: int
     devices: List[EnterpriseDeviceRead] = []
+    #: Absent when this enterprise has no modem set up.
+    gsm: Optional[EnterpriseGsm] = None
 
 
 class EnterpriseCreate(EnterpriseBase):
     devices: List[EnterpriseDeviceIn] = []
+    gsm: Optional[EnterpriseGsm] = None
 
 
 class EnterpriseUpdate(SQLModel):
@@ -191,3 +216,6 @@ class EnterpriseUpdate(SQLModel):
     enabled: Optional[bool] = None
     # Absent = leave the history alone; present = replace it wholesale.
     devices: Optional[List[EnterpriseDeviceIn]] = None
+    # Absent = leave the modem settings alone. A phone cleared to empty
+    # removes them, which is how a modem taken off site is recorded.
+    gsm: Optional[EnterpriseGsm] = None

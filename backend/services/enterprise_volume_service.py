@@ -432,7 +432,12 @@ async def _run_backfill(
         })
     # Deduplicate by (device, stamp) — DPD can repeat a record.
     unique = {(r["device_id"], r["stamp"]): r for r in rows}
-    await dao.upsert_records(period_type, list(unique.values()))
+    written = await dao.upsert_records(period_type, list(unique.values()))
+    if events_cb is not None:
+        # What an operator asked for when they pressed «Опитати»: not how much
+        # was fetched — a poll of a month fetches a month every time — but how
+        # much of it was not already here.
+        events_cb({"type": "written", **written})
     # The whole span was ASKED, even where DPD had nothing: coverage lowers
     # to the requested start so the empty stretches are not re-asked forever.
     await dao.lower_loaded_from(list(backfill), period_type, requested_from)

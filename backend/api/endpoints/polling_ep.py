@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +25,8 @@ from backend.db.dao.polling_dao import PollingDao
 from backend.db.engine import get_session
 from backend.db.models.app_user_model import AppUser
 from backend.db.models.polling_model import PollDevice
+from backend.services import poll_journal
+from backend.services.agent_installer import find_installer
 from backend.services.poll_validation import (
     DEFAULT_DEVICE_ADDRESS,
     PollValidationError,
@@ -32,6 +35,7 @@ from backend.services.poll_validation import (
     validate_poll_times,
     validate_priority,
 )
+from backend.settings import backend_settings
 
 router = APIRouter(
     prefix="/polling",
@@ -82,16 +86,20 @@ class PollDeviceLink(BaseModel):
 
 
 class PollDeviceCreate(PollDeviceLink):
+    #: The usual one: the modem stands at the enterprise and the corrector
+    #: under it is whichever is fitted today.
+    enterprise_id: Optional[int] = None
     dpd_device_id: Optional[int] = None
     dpd_line_id: Optional[int] = None
 
     @model_validator(mode="after")
     def exactly_one_target(self):
-        if (self.dpd_device_id is None) == (self.dpd_line_id is None):
+        targets = [self.enterprise_id, self.dpd_device_id, self.dpd_line_id]
+        if sum(target is not None for target in targets) != 1:
             # The database says the same thing, but an IntegrityError here
             # would reach the operator as "500" instead of a sentence.
             raise ValueError(
-                "Вкажіть рівно одну ціль: коректор підприємства або лінію ДПД"
+                "Вкажіть рівно одну ціль: підприємство, коректор або лінію ДПД"
             )
         return self
 
@@ -128,8 +136,9 @@ class PollDeviceUpdate(BaseModel):
     enabled: Optional[bool] = None
     auto_poll: Optional[bool] = None
     poll_times: Optional[List[str]] = None
-    # Repointing the card at another serial IS how a replacement is recorded
-    # here: same phone, new corrector, and the poll follows it from now on.
+    # Repointing a corrector-bound card at another serial IS how a
+    # replacement was recorded here. Enterprise-bound cards need none of it:
+    # the corrector is resolved at poll time from the installation history.
     dpd_device_id: Optional[int] = None
 
 
@@ -138,6 +147,7 @@ class PollDeviceRead(PollDeviceLink):
     dpd_device_id: Optional[int] = None
     dpd_line_id: Optional[int] = None
     target_kind: str
+    enterprise_id: Optional[int] = None
     # Where the corrector stands: the metering point, or the DPD line.
     target_label: Optional[str] = None
     # What the modem expects to hear back. A reply from any other serial is
@@ -177,7 +187,6 @@ class PollDeviceRead(PollDeviceLink):
 
 class PollAgentCreate(BaseModel):
     name: str
-    kind: str = "workstation"
     branch_id: Optional[int] = None
     active: bool = True
 
@@ -186,7 +195,6 @@ class PollAgentUpdate(BaseModel):
     model_config = {"extra": "forbid"}
 
     name: Optional[str] = None
-    kind: Optional[str] = None
     branch_id: Optional[int] = None
     active: Optional[bool] = None
 
@@ -194,13 +202,17 @@ class PollAgentUpdate(BaseModel):
 class PollAgentRead(BaseModel):
     id: int
     name: str
-    kind: str
     branch_id: Optional[int] = None
     active: bool
     last_seen_at: Optional[datetime] = None
     version: Optional[str] = None
     host: Optional[str] = None
     device_count: int = 0
+    #: Decided here rather than in the browser, and by the same rule that
+    #: refuses an immediate poll with "немає вільного модема". Two rules for
+    #: one fact would eventually disagree, and the screen would be calling an
+    #: agent online while the poll it offers is refused.
+    online: bool = False
 
 
 class PollAgentCreated(PollAgentRead):
@@ -219,15 +231,19 @@ class ScheduleRead(BaseModel):
 
 def _read(row: dict) -> PollDeviceRead:
     card: PollDevice = row["card"]
+    # The driver is the fitted corrector's, not the card's, so an enterprise
+    # card that has had three correctors reports whichever one is there now.
+    protocol_id = row["protocol_id"]
     return PollDeviceRead(
-        **card.model_dump(exclude={"created_at", "updated_at"}),
+        **card.model_dump(exclude={"created_at", "updated_at", "protocol_id"}),
+        protocol_id=protocol_id,
         target_kind=row["target_kind"],
         target_label=row["target_label"],
         ser_num=row["ser_num"],
         model_name=row["model_name"],
         manufacturer=row["manufacturer"],
         still_installed=row["still_installed"],
-        address_matters=address_matters(card.protocol_id),
+        address_matters=address_matters(protocol_id),
         agent_ids=row["agent_ids"],
     )
 
@@ -386,6 +402,242 @@ async def request_poll(
     return {"requested_at": card.manual_requested_at}
 
 
+class EnterprisePollStart(BaseModel):
+    poll_device_id: int
+    ser_num: Optional[int] = None
+    model_name: Optional[str] = None
+    agent_name: Optional[str] = None
+
+
+@router.post(
+    "/enterprises/{enterprise_id}/poll",
+    response_model=EnterprisePollStart,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def poll_enterprise(
+    enterprise_id: int,
+    session: AsyncSession = Depends(get_session),
+    user: AppUser = Depends(get_current_user),
+):
+    """Poll this enterprise over its modem, now.
+
+    Every refusal here is one the operator would otherwise meet as a call that
+    goes nowhere, several minutes later:
+
+      * no modem set up — the enterprise card has no number;
+      * nothing fitted — the correctors were all taken off, so there is
+        nothing behind that phone to read;
+      * no free modem — the agents that took this card are all switched off,
+        and the request would sit unread until somebody came back.
+
+    202 rather than 200: the modem is on somebody else's machine. What starts
+    here is the request; the agent picks it up within seconds and the screen
+    follows it through the session log.
+    """
+    dao = PollingDao(session)
+    card = await dao.gsm_of_enterprise(enterprise_id)
+    if card is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Для цього підприємства не налаштовано модем",
+        )
+
+    fitted = (await dao.correctors_of_enterprises()).get(enterprise_id)
+    if fitted is None:
+        raise HTTPException(
+            status_code=422, detail="Немає встановлених корректорів",
+        )
+    if fitted["protocol_id"] is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Модель «{fitted['model_name'] or '—'}» модемом не опитується",
+        )
+
+    agents = await dao.free_agents_for(card.id)
+    if not agents:
+        raise HTTPException(
+            status_code=422,
+            detail="Немає вільного модема: жоден агент не на зв'язку",
+        )
+
+    await dao.request_manual(card, user.id)
+    # The previous session's journal is deliberately left alone: it is the
+    # only account of the last call, and a request that no agent picks up
+    # would otherwise destroy it for nothing. The watch endpoint knows not to
+    # show it as this call's — see `read_last_log` / `watch_enterprise_poll`.
+    await session.commit()
+    return EnterprisePollStart(
+        poll_device_id=card.id,
+        ser_num=fitted["ser_num"],
+        model_name=fitted["model_name"],
+        agent_name=agents[0].name,
+    )
+
+
+class PollLogLine(BaseModel):
+    seq: int
+    #: None for a line the journal could not date — one written by an older
+    #: version, or by the corrector itself. Shown without a time rather than
+    #: dropped.
+    ts: Optional[datetime] = None
+    level: str
+    message: str
+
+
+class PollWatch(BaseModel):
+    """What the screen shows while a poll runs."""
+
+    poll_device_id: int
+    status: str                       # waiting | polling | ok | error
+    agent_name: Optional[str] = None
+    ser_num: Optional[int] = None
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    error_code: Optional[str] = None
+    error_text: Optional[str] = None
+    rows: dict = Field(default_factory=dict)
+    done: Optional[int] = None
+    total: Optional[int] = None
+    lines: List[PollLogLine] = Field(default_factory=list)
+
+
+@router.get("/enterprises/{enterprise_id}/poll", response_model=PollWatch)
+async def watch_enterprise_poll(
+    enterprise_id: int,
+    after_seq: int = 0,
+    session: AsyncSession = Depends(get_session),
+    _: AppUser = Depends(get_current_user),
+):
+    """Follow a poll as it happens, one screen-refresh at a time.
+
+    `after_seq` is what makes this cheap to call every second: the browser
+    already has the lines it has, and asks only for what came after them.
+
+    The status is derived rather than stored. A card with a holder is being
+    polled; one with a pending request and no holder is waiting for its agent
+    to notice; anything else is the outcome of the last session — which is
+    what an operator who walked away and came back needs to see.
+    """
+    dao = PollingDao(session)
+    card = await dao.gsm_of_enterprise(enterprise_id)
+    if card is None:
+        raise HTTPException(
+            status_code=404, detail="Для цього підприємства не налаштовано модем"
+        )
+
+    if card.polling_agent_id is not None:
+        state = "polling"
+    elif card.manual_requested_at is not None:
+        state = "waiting"
+    elif card.last_status == "ok":
+        state = "ok"
+    elif card.last_status:
+        state = "error"
+    else:
+        state = "waiting"
+
+    agents = {row["agent"].id: row["agent"].name for row in await dao.list_agents()}
+    fitted = (await dao.correctors_of_enterprises()).get(enterprise_id)
+    return PollWatch(
+        poll_device_id=card.id,
+        status=state,
+        agent_name=agents.get(card.polling_agent_id or card.last_agent_id),
+        ser_num=fitted["ser_num"] if fitted else None,
+        started_at=card.polling_since or card.manual_requested_at,
+        finished_at=card.last_attempt_at,
+        error_code=card.last_error_code,
+        error_text=card.last_error_text,
+        rows=card.last_rows or {},
+        done=card.progress_done,
+        total=card.progress_total,
+        lines=[PollLogLine(**line) for line in _session_lines(card, after_seq)],
+    )
+
+
+def _session_lines(card: PollDevice, after_seq: int) -> List[dict]:
+    """The journal of the session the screen is watching — and only that one.
+
+    The file holds the last call, which is usually the one being asked about.
+    The exception is a request nobody has picked up yet: the file is then the
+    *previous* call, and showing it would read as this one already running.
+    """
+    waiting = (card.polling_agent_id is None
+               and card.manual_requested_at is not None
+               and (card.last_attempt_at is None
+                    or card.last_attempt_at < card.manual_requested_at))
+    if waiting:
+        return []
+
+    path = poll_journal.journal_path(
+        backend_settings["POLL_LOG_DIR"], card.enterprise_id, card.id
+    )
+    return poll_journal.read_lines(path, after_seq)
+
+
+class DeviceAgents(BaseModel):
+    agent_ids: List[int]
+
+
+@router.put(
+    "/devices/{device_id}/agents",
+    response_model=List[int],
+    dependencies=[Depends(require_admin)],
+)
+async def set_device_agents(
+    device_id: int,
+    body: DeviceAgents,
+    session: AsyncSession = Depends(get_session),
+):
+    """Which machines dial this enterprise.
+
+    Asked from the monitor, where a row is a site rather than an agent. A site
+    nobody took is never polled, and it looks exactly like a site that is
+    working — which is why the screen shows the column at all.
+    """
+    dao = PollingDao(session)
+    if await dao.get_device(device_id) is None:
+        raise HTTPException(status_code=404, detail="Картку опитування не знайдено")
+    await dao.set_device_agents(device_id, body.agent_ids)
+    await session.commit()
+    return (await dao.assignments()).get(device_id, [])
+
+
+class PollJournal(BaseModel):
+    """The log of the last poll of one site, as it was written down."""
+
+    poll_device_id: int
+    #: None when this site has never been polled from here.
+    text: Optional[str] = None
+    updated_at: Optional[datetime] = None
+
+
+@router.get("/devices/{device_id}/log/last", response_model=PollJournal)
+async def read_last_log(
+    device_id: int,
+    session: AsyncSession = Depends(get_session),
+):
+    """What the last session did — after the live log has been wiped.
+
+    Not admin-only, for the same reason asking for a poll is not: the person
+    who notices a site has gone quiet is rarely the person with the admin
+    role, and this is the first thing they need to look at.
+    """
+    card = await PollingDao(session).get_device(device_id)
+    if card is None:
+        raise HTTPException(status_code=404, detail="Картку опитування не знайдено")
+
+    path = poll_journal.journal_path(
+        backend_settings["POLL_LOG_DIR"], card.enterprise_id, card.id
+    )
+    text = poll_journal.read(path)
+    return PollJournal(
+        poll_device_id=device_id,
+        text=text,
+        updated_at=(datetime.fromtimestamp(path.stat().st_mtime)
+                    if text is not None else None),
+    )
+
+
 # ── Agents ────────────────────────────────────────────────────────────────────
 
 @router.get(
@@ -394,10 +646,72 @@ async def request_poll(
     dependencies=[Depends(require_admin)],
 )
 async def list_agents(session: AsyncSession = Depends(get_session)):
+    alive = datetime.now() - PollingDao.AGENT_SILENCE
     return [
-        PollAgentRead(**row["agent"].model_dump(), device_count=row["device_count"])
+        PollAgentRead(
+            **row["agent"].model_dump(),
+            device_count=row["device_count"],
+            online=bool(row["agent"].last_seen_at
+                        and row["agent"].last_seen_at >= alive),
+        )
         for row in await PollingDao(session).list_agents()
     ]
+
+
+class AgentInstaller(BaseModel):
+    """What the admin panel needs to offer the download, or explain its absence."""
+
+    available: bool
+    filename: Optional[str] = None
+    version: Optional[str] = None
+    size: Optional[int] = None
+    built_at: Optional[datetime] = None
+
+
+@router.get(
+    "/agents/installer/info",
+    response_model=AgentInstaller,
+    dependencies=[Depends(require_admin)],
+)
+async def agent_installer_info():
+    """Is there a build to download, and which one.
+
+    Asked before the button is drawn: an enabled button that answers 404 is
+    worse than a line saying the server has no build yet, because the second
+    tells whoever reads it what to do about it.
+    """
+    found = find_installer(backend_settings["AGENT_DIST_DIR"])
+    if found is None:
+        return AgentInstaller(available=False)
+    return AgentInstaller(
+        available=True,
+        filename=found.filename,
+        version=found.version,
+        size=found.size,
+        built_at=found.built_at,
+    )
+
+
+@router.get("/agents/installer", dependencies=[Depends(require_admin)])
+async def download_agent_installer():
+    """The .exe itself.
+
+    Admin-only, like the rest of this screen — not because the file is a
+    secret (it is useless without a key) but because the machine that polls
+    meters is set up by the person who also issues the key, and offering the
+    download anywhere else invites copies nobody assigned.
+    """
+    found = find_installer(backend_settings["AGENT_DIST_DIR"])
+    if found is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Збірку агента не завантажено на сервер",
+        )
+    return FileResponse(
+        found.path,
+        media_type="application/vnd.microsoft.portable-executable",
+        filename=found.filename,
+    )
 
 
 @router.post(

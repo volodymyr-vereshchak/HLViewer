@@ -29,6 +29,28 @@ REASON_ALREADY_POLLED = "already_polled"
 REASON_MANUAL_REQUEST = "manual_request"
 REASON_NEVER_POLLED = "never_polled"
 REASON_OVERDUE = "overdue"
+REASON_COOLING_OFF = "cooling_off"
+REASON_GAVE_UP = "gave_up"
+
+#: How long a device is left alone after a failed attempt.
+#:
+#: Without it a device that cannot be reached is redialled as fast as agents
+#: ask for their plan — every fifteen seconds, three dial attempts each — for
+#: as long as the slot stays unsatisfied. That is a phone bill and a modem
+#: held busy for every other site, and it buys nothing: a meter that did not
+#: answer a minute ago is answering no differently now. Long enough to matter,
+#: short enough that a line which comes back is still polled within its hour.
+RETRY_PAUSE = timedelta(minutes=15)
+
+#: How many times one scheduled slot is attempted before it is left alone.
+#:
+#: Three calls, a quarter of an hour apart, cover what a retry can actually
+#: fix: a busy line, a meter that was mid-something, a modem that had not come
+#: back yet. After that the answer stops changing, and calling every fifteen
+#: minutes until morning is a hundred pointless calls and a modem the rest of
+#: the fleet cannot use. The site is not forgotten — its next scheduled hour
+#: starts over.
+MAX_ATTEMPTS_PER_SLOT = 3
 
 
 def last_slot(now: datetime, poll_times: List[str]) -> Optional[datetime]:
@@ -67,6 +89,9 @@ def is_due(
     enabled: bool,
     auto_poll: bool,
     manual_requested_at: Optional[datetime] = None,
+    last_attempt_at: Optional[datetime] = None,
+    last_status: Optional[str] = None,
+    scheduled_failures: Optional[List[datetime]] = None,
 ) -> Tuple[bool, str]:
     """Should this device be polled right now, and why (not).
 
@@ -88,11 +113,27 @@ def is_due(
     if not auto_poll:
         return False, REASON_MANUAL_ONLY
 
+    # A failure is retried, but not immediately: see RETRY_PAUSE. Checked
+    # after the manual branch on purpose — somebody who presses «Опитати»
+    # having just watched it fail is allowed to try again at once.
+    if (last_status and last_status != "ok" and last_attempt_at is not None
+            and now - last_attempt_at < RETRY_PAUSE):
+        return False, REASON_COOLING_OFF
+
     slot = last_slot(now, poll_times if poll_times is not None else default_times)
     if slot is None:
         # No hours anywhere: nothing to be late for. Not an error — a device
         # can be kept for manual polling only, with the schedule left empty.
         return False, REASON_NO_SLOTS
+
+    # Tried enough for this slot. Counted per slot rather than in a row, so a
+    # site that fails three times every morning is quiet until the next
+    # scheduled hour instead of being dialled all day. Calls a person asked
+    # for are not in this list: checking a site by hand must not spend the
+    # automatic attempts it still had.
+    failures = sum(1 for at in scheduled_failures or [] if at >= slot)
+    if failures >= MAX_ATTEMPTS_PER_SLOT:
+        return False, REASON_GAVE_UP
 
     if last_poll_at is None:
         return True, REASON_NEVER_POLLED

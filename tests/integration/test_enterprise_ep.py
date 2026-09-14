@@ -836,3 +836,112 @@ class TestEnterpriseVolumes:
             },
         )
         assert resp.status_code == 503
+
+
+class TestTheModemOnTheEnterpriseCard:
+    """The phone belongs to the site, not to the corrector under it."""
+
+    async def test_a_number_and_a_schedule_are_saved_and_read_back(
+        self, admin_client, seed_users
+    ):
+        created = (await admin_client.post("/enterprise-mappings/", json={
+            "enterprise_name": "Завод з модемом",
+            "active": True, "enabled": True,
+        })).json()
+
+        updated = (await admin_client.patch(
+            f"/enterprise-mappings/{created['id']}",
+            json={"gsm": {"phone": "0501234567", "auto_poll": True,
+                          "poll_times": ["18:00", "06:00"]}},
+        )).json()
+
+        # Stored in one shape whatever was typed, and sorted: the list reads
+        # as a daily rhythm, and "18:00, 06:00" makes a reader do arithmetic.
+        assert updated["gsm"]["phone"] == "+380501234567"
+        assert updated["gsm"]["poll_times"] == ["06:00", "18:00"]
+        assert updated["gsm"]["auto_poll"] is True
+
+    async def test_an_undialable_number_is_refused_at_the_card(
+        self, admin_client, seed_users
+    ):
+        """Better a red field now than "no dialtone" in a log tomorrow."""
+        created = (await admin_client.post("/enterprise-mappings/", json={
+            "enterprise_name": "Завод з друкарською помилкою",
+            "active": True, "enabled": True,
+        })).json()
+
+        resp = await admin_client.patch(
+            f"/enterprise-mappings/{created['id']}",
+            json={"gsm": {"phone": "+380501234567", "auto_poll": True,
+                          "poll_times": ["25:00"]}},
+        )
+        assert resp.status_code == 422
+
+    async def test_clearing_the_number_removes_the_modem(
+        self, admin_client, seed_users
+    ):
+        """A card with no number is a scheduled poll that fails every night.
+
+        Removing it says the modem is gone; keeping it would say the site is
+        polled and merely broken.
+        """
+        created = (await admin_client.post("/enterprise-mappings/", json={
+            "enterprise_name": "Завод без модема", "active": True, "enabled": True,
+        })).json()
+        await admin_client.patch(
+            f"/enterprise-mappings/{created['id']}",
+            json={"gsm": {"phone": "+380501234567", "auto_poll": False,
+                          "poll_times": []}},
+        )
+
+        cleared = (await admin_client.patch(
+            f"/enterprise-mappings/{created['id']}",
+            json={"gsm": {"phone": "", "auto_poll": False, "poll_times": []}},
+        )).json()
+        assert cleared["gsm"] is None
+
+    async def test_other_edits_leave_the_modem_alone(
+        self, admin_client, seed_users
+    ):
+        created = (await admin_client.post("/enterprise-mappings/", json={
+            "enterprise_name": "Завод", "active": True, "enabled": True,
+        })).json()
+        await admin_client.patch(
+            f"/enterprise-mappings/{created['id']}",
+            json={"gsm": {"phone": "+380501234567", "auto_poll": True,
+                          "poll_times": ["06:00"]}},
+        )
+
+        renamed = (await admin_client.patch(
+            f"/enterprise-mappings/{created['id']}",
+            json={"enterprise_name": "Завод, перейменований"},
+        )).json()
+        assert renamed["gsm"]["phone"] == "+380501234567"
+
+
+class TestTheListCarriesTheModem:
+    async def test_the_list_says_which_sites_have_one(
+        self, admin_client, seed_users
+    ):
+        """The ДПД/ЖСМ switch on the poll screen is drawn from this list.
+
+        It was added to create and update first and not here, so the switch
+        never appeared: every row came back with no modem, which is exactly
+        what "this site is not dialled" looks like.
+        """
+        with_modem = (await admin_client.post("/enterprise-mappings/", json={
+            "enterprise_name": "Завод із модемом", "active": True, "enabled": True,
+        })).json()
+        await admin_client.patch(
+            f"/enterprise-mappings/{with_modem['id']}",
+            json={"gsm": {"phone": "+380501234567", "auto_poll": True,
+                          "poll_times": ["06:00"]}},
+        )
+        await admin_client.post("/enterprise-mappings/", json={
+            "enterprise_name": "Завод без модема", "active": True, "enabled": True,
+        })
+
+        rows = (await admin_client.get("/enterprise-mappings/")).json()
+        by_name = {r["enterprise_name"]: r for r in rows}
+        assert by_name["Завод із модемом"]["gsm"]["phone"] == "+380501234567"
+        assert by_name["Завод без модема"]["gsm"] is None

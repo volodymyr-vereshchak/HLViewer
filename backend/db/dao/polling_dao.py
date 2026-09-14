@@ -5,7 +5,7 @@ asks for and reports back has its own endpoints and its own step.
 """
 import hashlib
 import secrets
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 from sqlalchemy import delete, func, select, text
@@ -23,19 +23,19 @@ from backend.db.models.polling_model import (
     PollAgentDevice,
     PollAttempt,
     PollDevice,
-    PollLog,
     PollSettings,
 )
 from backend.services.poll_validation import (
-    DEFAULT_DEVICE_ADDRESS, address_matters,
+    DEFAULT_DEVICE_ADDRESS, address_matters, normalise_phone,
 )
 
-# The two kinds of corrector a card can point at, and the column for each.
-# Kept in one place because the CHECK constraint, the API and the label lookup
-# all have to agree on the same list.
-TARGET_COLUMNS = ("dpd_device_id", "dpd_line_id")
+# What a card can point at, and the column for each. Kept in one place
+# because the CHECK constraint, the API and the label lookup all have to agree
+# on the same list.
+TARGET_COLUMNS = ("enterprise_id", "dpd_device_id", "dpd_line_id")
 
 TARGET_FIELDS = {
+    "enterprise": PollDevice.enterprise_id,
     "dpd_device": PollDevice.dpd_device_id,
     "dpd_line": PollDevice.dpd_line_id,
 }
@@ -55,19 +55,6 @@ def hash_agent_key(key: str) -> str:
     A per-request bcrypt verify would cost more than the poll it authorises.
     """
     return hashlib.sha256(key.encode()).hexdigest()
-
-
-def _storable(message: str) -> str:
-    """A log line Postgres will accept as text.
-
-    The drivers log answers exactly as they came off the wire, and a device's
-    identity block is padded with NULs. Postgres rejects a NUL inside text, so
-    one such line fails the whole request — and the request is the report of a
-    poll that has already happened and cannot be repeated. Sanitising here as
-    well as in the agent, because a log endpoint that an agent can crash with
-    a byte is an endpoint that will be crashed.
-    """
-    return "".join(" " if c < " " else c for c in message)[:1000]
 
 
 class PollingDao:
@@ -117,9 +104,23 @@ class PollingDao:
         assignments = await self.assignments()
         at_point = await self.points_of_devices()
         line_devices = await self.line_devices()
+        fitted = await self.correctors_of_enterprises()
+        names = await self.enterprise_names()
         result = []
         for card, ser_num, model_name, mfr_name, line_name in rows:
-            if card.dpd_device_id is not None:
+            protocol_id = None
+            if card.enterprise_id is not None:
+                kind = "enterprise"
+                label = names.get(card.enterprise_id)
+                # Resolved now, not stored: which corrector answers this
+                # phone is a fact about today, not a setting.
+                current = fitted.get(card.enterprise_id)
+                ser_num = current["ser_num"] if current else None
+                model_name = current["model_name"] if current else None
+                mfr_name = current["manufacturer"] if current else None
+                still_installed = current is not None
+                protocol_id = current["protocol_id"] if current else None
+            elif card.dpd_device_id is not None:
                 kind = "dpd_device"
                 point = at_point.get(card.dpd_device_id)
                 label = point[0] if point else None
@@ -137,6 +138,11 @@ class PollingDao:
             result.append({
                 "card": card,
                 "target_kind": kind,
+                # For an enterprise card the driver is a property of the
+                # corrector fitted today, not of the card.
+                "protocol_id": (
+                    protocol_id if kind == "enterprise" else card.protocol_id
+                ),
                 "target_label": label,
                 "ser_num": ser_num,
                 "model_name": model_name,
@@ -145,6 +151,120 @@ class PollingDao:
                 "agent_ids": assignments.get(card.id, []),
             })
         return result
+
+    #: How long an agent may be silent before it is no longer a free modem.
+    #: Three plan fetches at the usual interval: one missed is a hiccup, three
+    #: is a workstation that has gone home.
+    AGENT_SILENCE = timedelta(seconds=60)
+
+    async def free_agents_for(self, card_id: int) -> List[PollAgent]:
+        """Agents that took this card and are alive enough to answer.
+
+        "Immediate" is only true if somebody is listening. An agent whose
+        machine was switched off still holds its assignment, and a request
+        handed to it would sit unread until morning — which the screen would
+        show as a poll that simply never finished.
+        """
+        rows = (await self.session.execute(
+            select(PollAgent)
+            .join(PollAgentDevice, PollAgentDevice.agent_id == PollAgent.id)
+            .where(PollAgentDevice.poll_device_id == card_id)
+            .where(PollAgent.active.is_(True))
+        )).scalars().all()
+        alive = datetime.now() - self.AGENT_SILENCE
+        return [a for a in rows if a.last_seen_at and a.last_seen_at >= alive]
+
+    async def gsm_of_enterprise(self, enterprise_id: int) -> Optional[PollDevice]:
+        return (await self.session.execute(
+            select(PollDevice).where(PollDevice.enterprise_id == enterprise_id)
+        )).scalars().first()
+
+    async def gsm_by_enterprise(self) -> Dict[int, PollDevice]:
+        """Every enterprise that has a modem, in one query.
+
+        The list screen needs this for the whole fleet at once — asking per
+        row would be a query per enterprise, and the industry list runs to
+        hundreds.
+        """
+        rows = (await self.session.execute(
+            select(PollDevice).where(PollDevice.enterprise_id.isnot(None))
+        )).scalars().all()
+        return {card.enterprise_id: card for card in rows}
+
+    async def set_gsm(self, enterprise_id: int, phone: Optional[str],
+                      auto_poll: bool, poll_times: Optional[List[str]]) -> None:
+        """Create, update or remove the modem settings of one enterprise.
+
+        A phone cleared to empty removes the card altogether rather than
+        leaving one that can never dial: a card with no number is a scheduled
+        poll that fails every night for a reason nobody can see from the list.
+        """
+        card = await self.gsm_of_enterprise(enterprise_id)
+        phone = normalise_phone(phone)
+
+        if not phone:
+            if card is not None:
+                await self.session.delete(card)
+            return
+
+        values = {
+            "phone": phone,
+            "auto_poll": auto_poll,
+            "poll_times": poll_times or [],
+            "enabled": True,
+        }
+        if card is None:
+            self.session.add(PollDevice(enterprise_id=enterprise_id, **values))
+        else:
+            for field, value in values.items():
+                setattr(card, field, value)
+        await self.session.flush()
+
+    async def correctors_of_enterprises(self) -> Dict[int, Dict]:
+        """enterprise id -> the corrector standing there right now.
+
+        This is what makes an enterprise-bound card work: the modem is at the
+        site and stays, the corrector under it gets replaced, and nobody has
+        to remember to repoint anything. `removed_at IS NULL` is "still
+        fitted"; where a point somehow has two, the later installation wins.
+
+        An enterprise with nothing fitted is absent from the result, and the
+        poll refuses rather than dialling a site whose corrector was taken
+        away — a call to a modem with no meter behind it looks exactly like a
+        meter that will not answer.
+        """
+        rows = (await self.session.execute(
+            select(
+                EnterpriseDevice.enterprise_id,
+                DpdDevice.id,
+                DpdDevice.ser_num,
+                CorectorType.model_name,
+                CorectorType.protocol_id,
+                Manufacturer.short_name,
+            )
+            .join(DpdDevice, DpdDevice.id == EnterpriseDevice.device_id)
+            .outerjoin(CorectorType,
+                       CorectorType.id == DpdDevice.corector_type_id)
+            .outerjoin(Manufacturer,
+                       Manufacturer.id == CorectorType.manufacturer_id)
+            .where(EnterpriseDevice.removed_at.is_(None))
+            .order_by(EnterpriseDevice.installed_from)
+        )).all()
+        return {
+            enterprise_id: {
+                "device_id": device_id,
+                "ser_num": ser_num,
+                "model_name": model_name,
+                "protocol_id": protocol_id,
+                "manufacturer": mfr,
+            }
+            for enterprise_id, device_id, ser_num, model_name, protocol_id, mfr in rows
+        }
+
+    async def enterprise_names(self) -> Dict[int, str]:
+        return dict((await self.session.execute(
+            select(Enterprise.id, Enterprise.enterprise_name)
+        )).all())
 
     async def points_of_devices(self) -> Dict[int, tuple]:
         """device id -> (point name, is it still fitted there).
@@ -347,6 +467,93 @@ class PollingDao:
             )
         await self.session.flush()
 
+    async def set_device_agents(self, device_id: int, agent_ids: List[int]) -> None:
+        """Replace the machines that poll this one enterprise.
+
+        The mirror of set_agent_devices, and it exists because the monitor
+        screen is a list of enterprises, not of agents: asked from that side,
+        "who dials this site" is one row's question, and answering it through
+        the agent-shaped call would mean rewriting every agent's whole set to
+        move one site between two of them.
+        """
+        await self.session.execute(
+            delete(PollAgentDevice).where(
+                PollAgentDevice.poll_device_id == device_id
+            )
+        )
+        for agent_id in dict.fromkeys(agent_ids):
+            self.session.add(
+                PollAgentDevice(agent_id=agent_id, poll_device_id=device_id)
+            )
+        await self.session.flush()
+
+    async def stored_stamps(
+        self, device_id: int, start: datetime, end: datetime
+    ) -> tuple[list, list]:
+        """What the archive already holds for one corrector in one window.
+
+        Returned as bare stamps rather than counted: the caller is looking for
+        holes, and a count only answers "how many", never "which".
+        """
+        hours = list((await self.session.execute(
+            text("""
+                SELECT stamp FROM dpd_hourly_archive
+                 WHERE device_id = :device AND stamp BETWEEN :start AND :end
+            """),
+            {"device": device_id, "start": start, "end": end},
+        )).scalars())
+        days = list((await self.session.execute(
+            text("""
+                SELECT day FROM dpd_daily_archive
+                 WHERE device_id = :device AND day BETWEEN :start AND :end
+            """),
+            {"device": device_id, "start": start.date(), "end": end.date()},
+        )).scalars())
+        return hours, days
+
+    async def archive_device_of(self, card: PollDevice) -> Optional[int]:
+        """The corrector whose archive this card's readings belong to.
+
+        For an enterprise card that is whatever is fitted there now — the same
+        resolution the plan uses to decide what to dial, so a poll and its
+        storage can never disagree about which meter they are talking about.
+        """
+        if card.dpd_device_id is not None:
+            return card.dpd_device_id
+        if card.enterprise_id is None:
+            return None
+        fitted = (await self.correctors_of_enterprises()).get(card.enterprise_id)
+        return fitted["device_id"] if fitted else None
+
+    async def failed_attempts_since(
+        self, since: datetime
+    ) -> Dict[int, List[datetime]]:
+        """When each card's recent SCHEDULED attempts failed, newest first.
+
+        Calls somebody asked for by hand are left out on purpose: they are a
+        person checking, not the schedule trying, and using them up would mean
+        that looking at a site removes the automatic retries it still had.
+
+        The schedule counts these per slot: three calls to a line that is not
+        answering is as much as a retry can fix, and the fourth is a phone bill
+        with a modem the rest of the fleet cannot use meanwhile.
+
+        One query for the whole fleet — the plan is fetched every fifteen
+        seconds by every agent, so a query per card would be the expensive part
+        of the day.
+        """
+        rows = (await self.session.execute(
+            select(PollAttempt.poll_device_id, PollAttempt.started_at)
+            .where(PollAttempt.started_at >= since)
+            .where(PollAttempt.status != "ok")
+            .where(PollAttempt.manual.is_(False))
+            .order_by(PollAttempt.started_at.desc())
+        )).all()
+        out: Dict[int, List[datetime]] = {}
+        for card_id, started_at in rows:
+            out.setdefault(card_id, []).append(started_at)
+        return out
+
     async def archive_coverage(self, card_ids: List[int]) -> Dict[int, Dict]:
         """card id -> {"hourly": last stamp, "daily": last day} already stored.
 
@@ -363,14 +570,28 @@ class PollingDao:
                 """
                 SELECT p.id,
                        (SELECT MAX(h.stamp) FROM dpd_hourly_archive h
-                         WHERE h.device_id = p.dpd_device_id)  AS dev_hour,
+                         WHERE h.device_id = COALESCE(p.dpd_device_id, fitted.device_id))
+                                                             AS dev_hour,
                        (SELECT MAX(d.day) FROM dpd_daily_archive d
-                         WHERE d.device_id = p.dpd_device_id)  AS dev_day,
+                         WHERE d.device_id = COALESCE(p.dpd_device_id, fitted.device_id))
+                                                             AS dev_day,
                        (SELECT MAX(lh.stamp) FROM dpd_line_hourly_archive lh
                          WHERE lh.dpd_line_id = p.dpd_line_id) AS line_hour,
                        (SELECT MAX(ld.day) FROM dpd_line_daily_archive ld
                          WHERE ld.dpd_line_id = p.dpd_line_id) AS line_day
                 FROM poll_device p
+                -- An enterprise card's coverage is the coverage of whatever
+                -- corrector stands there now. A replacement therefore starts
+                -- from the new serial's own history rather than re-reading
+                -- everything the old one had already delivered.
+                LEFT JOIN LATERAL (
+                    SELECT ed.device_id
+                      FROM enterprise_device ed
+                     WHERE ed.enterprise_id = p.enterprise_id
+                       AND ed.removed_at IS NULL
+                     ORDER BY ed.installed_from DESC
+                     LIMIT 1
+                ) AS fitted ON TRUE
                 WHERE p.id = ANY(:ids)
                 """
             ),
@@ -411,6 +632,17 @@ class PollingDao:
         if host:
             agent.host = host[:255]
 
+    #: How long a claim survives without being finished. Long enough for a
+    #: month of hours down a phone line; short enough that a machine switched
+    #: off mid-session frees the site the same working day.
+    CLAIM_TIMEOUT = timedelta(minutes=20)
+
+    def claim_is_live(self, card: PollDevice, now: datetime) -> bool:
+        """Is somebody dialling this right now."""
+        return (card.polling_agent_id is not None
+                and card.polling_since is not None
+                and now - card.polling_since < self.CLAIM_TIMEOUT)
+
     async def claim(self, device_id: int, agent_id: int) -> bool:
         """Take a device for the length of one session.
 
@@ -423,53 +655,29 @@ class PollingDao:
         agent switched off mid-session cost nothing: no cleanup, no lease
         renewal, no way for a crashed machine to hold a device forever.
         """
+        # The time comes from here, not from the database's now(). Postgres
+        # runs in the container's UTC and the application in Europe/Kyiv, so a
+        # claim stamped by the database and read back by Python looked three
+        # hours old the moment it was made — mutual exclusion still worked
+        # (both ends of that comparison were the database's clock), but every
+        # other reading of polling_since was wrong by the offset.
+        now = datetime.now()
         result = await self.session.execute(
             text(
                 "UPDATE poll_device "
-                "SET polling_agent_id = :agent, polling_since = now() "
+                "SET polling_agent_id = :agent, polling_since = :now "
                 "WHERE id = :device "
-                "  AND (polling_since IS NULL "
-                "       OR polling_since < now() - interval '20 minutes') "
+                "  AND (polling_since IS NULL OR polling_since < :cutoff) "
                 "RETURNING id"
             ),
-            {"agent": agent_id, "device": device_id},
+            {"agent": agent_id, "device": device_id,
+             "now": now, "cutoff": now - self.CLAIM_TIMEOUT},
         )
         return result.first() is not None
 
     async def release(self, card: PollDevice) -> None:
         card.polling_agent_id = None
         card.polling_since = None
-
-    async def clear_log(self, device_id: int) -> None:
-        """A new session replaces the old log rather than adding to it: this
-        screen answers "what is happening now", and the history of failures
-        lives in poll_attempt as one row each."""
-        await self.session.execute(
-            delete(PollLog).where(PollLog.poll_device_id == device_id)
-        )
-
-    async def append_log(self, device_id: int, lines: List[Dict]) -> int:
-        """Returns the highest seq stored, which the agent resumes from."""
-        highest = 0
-        for line in lines:
-            seq = int(line.get("seq", 0))
-            highest = max(highest, seq)
-            self.session.add(PollLog(
-                poll_device_id=device_id,
-                seq=seq,
-                level=str(line.get("level", "info"))[:8],
-                message=_storable(str(line.get("message", ""))),
-            ))
-        await self.session.flush()
-        return highest
-
-    async def read_log(self, device_id: int, after_seq: int = 0) -> List[PollLog]:
-        return list((await self.session.execute(
-            select(PollLog)
-            .where(PollLog.poll_device_id == device_id)
-            .where(PollLog.seq > after_seq)
-            .order_by(PollLog.seq)
-        )).scalars())
 
     async def finish(
         self,
@@ -500,11 +708,21 @@ class PollingDao:
         card.last_connect_ms = connect_ms
         if status == "ok":
             card.last_poll_at = now
-            # The request has been served; leaving it would poll forever.
-            card.manual_requested_at = None
-            card.manual_requested_by = None
+        # Whatever the outcome: the button was pressed once, and the session
+        # it asked for has happened. Clearing it only on success left a failed
+        # manual poll due for ever — the agent redialled every fifteen seconds,
+        # three attempts at a time, until somebody noticed the phone bill. A
+        # failure is reported on the screen; whether to try again is a decision
+        # for the person who pressed the button, and the schedule keeps its own
+        # retry through `last_poll_at`, which still does not move.
+        # Recorded before it is cleared: a call somebody asked for is not one
+        # the schedule made, and the retry budget is the schedule's.
+        was_manual = card.manual_requested_at is not None
+        card.manual_requested_at = None
+        card.manual_requested_by = None
         self.session.add(PollAttempt(
             poll_device_id=card.id,
+            manual=was_manual,
             agent_id=agent_id,
             started_at=now,
             finished_at=now,

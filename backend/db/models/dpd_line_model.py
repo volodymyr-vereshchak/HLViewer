@@ -29,6 +29,11 @@ class DpdLineBase(HlBaseModel):
     active: bool = Field(default=True)
     include_in_trends: bool = Field(default=False)
     include_in_report: bool = Field(default=False)
+    # Which unit this line's pressure is READ in. Not what the archive holds —
+    # every row carries that, as its corrector reported it, and this fleet
+    # reports both МПа and кгс/см², twelve devices within one history. The
+    # screen converts to this one, so a period never mixes them.
+    pressure_unit: str = Field(default="кгс/см²", max_length=16)
 
 
 class DpdLine(DpdLineBase, table=True):

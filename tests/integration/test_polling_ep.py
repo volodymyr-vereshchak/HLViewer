@@ -8,7 +8,8 @@ worth pinning here is who may do what and what the API refuses to tell:
   * an agent key exists in clear exactly once, in the response that creates it.
 """
 
-from datetime import datetime
+import os
+from datetime import datetime, timedelta
 
 import pytest
 import pytest_asyncio
@@ -23,6 +24,7 @@ from backend.db.models.enterprise_model import (
 )
 from backend.db.models.grmu_branch_model import GrmuBranch
 from backend.db.models.polling_model import PollAgent
+from backend.settings import backend_settings
 
 
 @pytest_asyncio.fixture
@@ -573,3 +575,501 @@ class TestWhoMayDoWhat:
     async def test_signing_in_is_still_required(self, anon_client):
         assert (await anon_client.get("/polling/devices")).status_code == 401
         assert (await anon_client.post("/polling/devices/1/poll")).status_code == 401
+
+
+class TestPollingAnEnterpriseNow:
+    """The button in «Опитування промисловості», and everything it refuses.
+
+    Each refusal here is one the operator would otherwise meet as a call that
+    goes nowhere, several minutes later and with nothing to show for it.
+    """
+
+    async def _live_agent(self, admin_client, anon_client, card_id: int) -> dict:
+        agent = (await admin_client.post(
+            "/polling/agents", json={"name": "АРМ біля модема"}
+        )).json()
+        headers = {"X-Agent-Key": agent["key"]}
+        await anon_client.put("/polling/agent/devices",
+                              json={"device_ids": [card_id]}, headers=headers)
+        # Fetching a plan is what marks an agent as being on the line.
+        await anon_client.get("/polling/agent/plan", headers=headers)
+        return {"agent": agent, "headers": headers}
+
+    async def test_a_site_with_no_modem_says_so(self, admin_client, targets):
+        resp = await admin_client.post(
+            f"/polling/enterprises/{targets['enterprise_id']}/poll"
+        )
+        assert resp.status_code == 422
+        assert "не налаштовано модем" in resp.json()["detail"]
+
+    async def test_a_site_with_nothing_fitted_says_so(
+        self, admin_client, anon_client, targets
+    ):
+        await _set_protocol(targets["corector_type_id"], 1054)
+        card = await make_card(
+            admin_client, enterprise_id=targets["enterprise_id"],
+            phone="+380501234567",
+        )
+        await self._live_agent(admin_client, anon_client, card["id"])
+
+        async with async_session_factory() as session:
+            fitted = (await session.execute(
+                select(EnterpriseDevice).where(
+                    EnterpriseDevice.enterprise_id == targets["enterprise_id"]
+                )
+            )).scalars().one()
+            fitted.removed_at = datetime(2026, 6, 1)
+            await session.commit()
+
+        resp = await admin_client.post(
+            f"/polling/enterprises/{targets['enterprise_id']}/poll"
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"] == "Немає встановлених корректорів"
+
+    async def test_no_agent_on_the_line_means_no_immediate_poll(
+        self, admin_client, targets
+    ):
+        """An assignment held by a switched-off machine is not a free modem.
+
+        The request would sit unread until morning, and the screen would show
+        a poll that never finished rather than one that never started.
+        """
+        await _set_protocol(targets["corector_type_id"], 1054)
+        await make_card(
+            admin_client, enterprise_id=targets["enterprise_id"],
+            phone="+380501234567",
+        )
+        resp = await admin_client.post(
+            f"/polling/enterprises/{targets['enterprise_id']}/poll"
+        )
+        assert resp.status_code == 422
+        assert "вільного модема" in resp.json()["detail"]
+
+    async def test_a_model_no_reader_covers_is_refused_before_dialling(
+        self, admin_client, anon_client, targets
+    ):
+        card = await make_card(
+            admin_client, enterprise_id=targets["enterprise_id"],
+            phone="+380501234567",
+        )
+        await self._live_agent(admin_client, anon_client, card["id"])
+        resp = await admin_client.post(
+            f"/polling/enterprises/{targets['enterprise_id']}/poll"
+        )
+        assert resp.status_code == 422
+        assert "модемом не опитується" in resp.json()["detail"]
+
+    async def test_the_request_is_accepted_and_the_log_starts_clean(
+        self, admin_client, anon_client, targets
+    ):
+        await _set_protocol(targets["corector_type_id"], 1054)
+        card = await make_card(
+            admin_client, enterprise_id=targets["enterprise_id"],
+            phone="+380501234567",
+        )
+        live = await self._live_agent(admin_client, anon_client, card["id"])
+
+        # Something from the previous session, which must not linger on the
+        # screen once a new one is asked for.
+        await anon_client.post(f"/polling/agent/devices/{card['id']}/start",
+                               headers=live["headers"])
+        await anon_client.post(
+            f"/polling/agent/devices/{card['id']}/log",
+            json={"lines": [{"seq": 1, "message": "минулого разу: зайнято"}]},
+            headers=live["headers"],
+        )
+        await anon_client.post(
+            f"/polling/agent/devices/{card['id']}/finish",
+            json={"status": "error", "error_code": "busy", "rows": {}},
+            headers=live["headers"],
+        )
+
+        resp = await admin_client.post(
+            f"/polling/enterprises/{targets['enterprise_id']}/poll"
+        )
+        assert resp.status_code == 202
+        assert resp.json()["ser_num"] == 555001
+        assert resp.json()["agent_name"] == "АРМ біля модема"
+
+        watch = (await admin_client.get(
+            f"/polling/enterprises/{targets['enterprise_id']}/poll"
+        )).json()
+        assert watch["status"] == "waiting"
+        assert watch["lines"] == []
+
+    async def test_the_screen_follows_the_session(
+        self, admin_client, anon_client, targets, tmp_path, monkeypatch
+    ):
+        """Lines, progress and outcome, asked for one refresh at a time.
+
+        The lines come from the site's journal file — the same one the monitor
+        shows afterwards — so the test gets a folder of its own.
+        """
+        monkeypatch.setitem(backend_settings, "POLL_LOG_DIR", str(tmp_path))
+        await _set_protocol(targets["corector_type_id"], 1054)
+        card = await make_card(
+            admin_client, enterprise_id=targets["enterprise_id"],
+            phone="+380501234567",
+        )
+        live = await self._live_agent(admin_client, anon_client, card["id"])
+        await admin_client.post(
+            f"/polling/enterprises/{targets['enterprise_id']}/poll"
+        )
+
+        await anon_client.post(f"/polling/agent/devices/{card['id']}/start",
+                               headers=live["headers"])
+        await anon_client.post(
+            f"/polling/agent/devices/{card['id']}/log",
+            json={
+                "lines": [
+                    {"seq": 1, "message": "Набираю: ATDP+380501234567"},
+                    {"seq": 2, "message": "Модем: CONNECT 9600/RLP"},
+                ],
+                "progress": {"done": 7, "total": 49},
+            },
+            headers=live["headers"],
+        )
+
+        watch = (await admin_client.get(
+            f"/polling/enterprises/{targets['enterprise_id']}/poll"
+        )).json()
+        assert watch["status"] == "polling"
+        assert watch["done"] == 7 and watch["total"] == 49
+        assert [l["message"] for l in watch["lines"]] == [
+            "Набираю: ATDP+380501234567", "Модем: CONNECT 9600/RLP",
+        ]
+
+        # The browser already has those two, and says so.
+        later = (await admin_client.get(
+            f"/polling/enterprises/{targets['enterprise_id']}/poll?after_seq=2"
+        )).json()
+        assert later["lines"] == []
+
+
+class TestTheScreenAndTheJournalAreOneFile:
+    """One account of one call, read by both screens.
+
+    The live screen used to read a database copy that was deleted at the start
+    of every session. The file it now reads is the same one the monitor shows
+    afterwards — which is why the one case worth pinning is a request nobody
+    has picked up yet: the file still holds the PREVIOUS call, and showing it
+    would read as this one already running.
+    """
+
+    async def test_a_request_nobody_took_does_not_show_the_last_call(
+        self, admin_client, anon_client, targets, tmp_path, monkeypatch
+    ):
+        monkeypatch.setitem(backend_settings, "POLL_LOG_DIR", str(tmp_path))
+        await _set_protocol(targets["corector_type_id"], 1054)
+        card = await make_card(
+            admin_client, enterprise_id=targets["enterprise_id"],
+            phone="+380501234567",
+        )
+        agent = (await admin_client.post(
+            "/polling/agents", json={"name": "ПК біля модема"})).json()
+        headers = {"X-Agent-Key": agent["key"]}
+        await anon_client.put("/polling/agent/devices",
+                              json={"device_ids": [card["id"]]}, headers=headers)
+        await anon_client.get("/polling/agent/plan", headers=headers)
+
+        # A call that happened and ended.
+        await anon_client.post(
+            f"/polling/agent/devices/{card['id']}/start", headers=headers)
+        await anon_client.post(
+            f"/polling/agent/devices/{card['id']}/log",
+            json={"reset": True, "lines": [
+                {"seq": 1, "level": "error", "message": "Немає лінії"},
+            ]},
+            headers=headers,
+        )
+        await anon_client.post(
+            f"/polling/agent/devices/{card['id']}/finish",
+            json={"status": "error", "error_code": "no_dialtone",
+                  "error_text": "Немає лінії", "rows": {"hour": 0, "day": 0},
+                  "duration_ms": 1000, "connect_ms": 0},
+            headers=headers,
+        )
+
+        # Asked for again; the agent has not picked it up yet.
+        await admin_client.post(
+            f"/polling/enterprises/{targets['enterprise_id']}/poll")
+
+        watch = (await admin_client.get(
+            f"/polling/enterprises/{targets['enterprise_id']}/poll")).json()
+        assert watch["status"] == "waiting"
+        assert watch["lines"] == []
+
+        # And the previous call is still there for the monitor: a request that
+        # nobody answers must not destroy the only account of the last one.
+        journal = (await admin_client.get(
+            f"/polling/devices/{card['id']}/log/last")).json()
+        assert "Немає лінії" in journal["text"]
+
+
+class TestWhatAPollReportsStoring:
+    """«Записано» must mean new, not fetched.
+
+    A DPD poll asks for the same month every time, so counting what came back
+    tells an operator nothing: the number is the same whether the archive
+    gained seven hundred hours or none.
+    """
+
+    async def test_the_upsert_separates_new_rows_from_rewritten_ones(
+        self, admin_client, targets
+    ):
+        from datetime import datetime as dt
+
+        from backend.db.dao.dpd_archive_dao import DpdArchiveDao
+
+        rows = [
+            {"device_id": targets["dpd_device_id"], "stamp": dt(2026, 9, 1, h),
+             "dvst_alwrk": 10.0 + h, "dvwrk_alwrk": 4.0 + h,
+             "press": 2.4, "temper": 20.0, "press_unit": "кгс/см3"}
+            for h in range(3)
+        ]
+        async with async_session_factory() as session:
+            dao = DpdArchiveDao(session)
+            first = await dao.upsert_records("hourly", rows)
+            await session.commit()
+
+            # The same hours again, plus one that is genuinely new.
+            rows.append({**rows[0], "stamp": dt(2026, 9, 1, 3)})
+            second = await dao.upsert_records("hourly", rows)
+            await session.commit()
+
+        assert first == {"inserted": 3, "updated": 0}
+        assert second == {"inserted": 1, "updated": 3}
+
+    async def test_storing_nothing_is_not_an_error(self, targets):
+        from backend.db.dao.dpd_archive_dao import DpdArchiveDao
+
+        async with async_session_factory() as session:
+            assert await DpdArchiveDao(session).upsert_records("hourly", []) == {
+                "inserted": 0, "updated": 0,
+            }
+
+
+class TestWhoDialsThisSite:
+    """Assignment asked from the site's side, which is how the monitor asks."""
+
+    async def test_agents_can_be_set_and_replaced_for_one_site(
+        self, admin_client, targets
+    ):
+        card = await make_card(
+            admin_client, enterprise_id=targets["enterprise_id"],
+            phone="+380501234567",
+        )
+        first = (await admin_client.post(
+            "/polling/agents", json={"name": "АРМ перший"})).json()
+        second = (await admin_client.post(
+            "/polling/agents", json={"name": "АРМ другий"})).json()
+
+        assigned = (await admin_client.put(
+            f"/polling/devices/{card['id']}/agents",
+            json={"agent_ids": [first["id"], second["id"]]},
+        )).json()
+        assert sorted(assigned) == sorted([first["id"], second["id"]])
+
+        # Moving the site to one machine must not need the other's whole set
+        # rewritten — that is the reason this endpoint exists.
+        moved = (await admin_client.put(
+            f"/polling/devices/{card['id']}/agents",
+            json={"agent_ids": [second["id"]]},
+        )).json()
+        assert moved == [second["id"]]
+
+    async def test_a_site_nobody_took_says_so(self, admin_client, targets):
+        card = await make_card(
+            admin_client, enterprise_id=targets["enterprise_id"],
+            phone="+380501234567",
+        )
+        cleared = (await admin_client.put(
+            f"/polling/devices/{card['id']}/agents", json={"agent_ids": []},
+        )).json()
+        assert cleared == []
+
+
+class TestHandingOutTheAgent:
+    """The .exe an operator downloads from the agents screen.
+
+    A build artifact rather than source, so the server may simply not have one
+    — and that has to be an answer, not a 500 and not a broken button.
+    """
+
+    async def test_no_build_on_the_server_is_an_answer(
+        self, admin_client, tmp_path, monkeypatch
+    ):
+        monkeypatch.setitem(backend_settings, "AGENT_DIST_DIR", str(tmp_path))
+
+        info = (await admin_client.get("/polling/agents/installer/info")).json()
+        assert info["available"] is False
+
+        # And the file route says so in words, rather than serving nothing.
+        missing = await admin_client.get("/polling/agents/installer")
+        assert missing.status_code == 404
+        assert "агент" in missing.json()["detail"].lower()
+
+    async def test_the_newest_build_is_the_one_offered(
+        self, admin_client, tmp_path, monkeypatch
+    ):
+        old = tmp_path / "hlv-poller-0.1.0.exe"
+        new = tmp_path / "hlv-poller-0.2.0.exe"
+        old.write_bytes(b"MZ old")
+        new.write_bytes(b"MZ new")
+        os.utime(old, (1_700_000_000, 1_700_000_000))
+        os.utime(new, (1_800_000_000, 1_800_000_000))
+        monkeypatch.setitem(backend_settings, "AGENT_DIST_DIR", str(tmp_path))
+
+        info = (await admin_client.get("/polling/agents/installer/info")).json()
+        assert info["available"] is True
+        assert info["version"] == "0.2.0"
+        assert info["filename"] == "hlv-poller-0.2.0.exe"
+        assert info["size"] == len(b"MZ new")
+
+        got = await admin_client.get("/polling/agents/installer")
+        assert got.status_code == 200
+        assert got.content == b"MZ new"
+        # Named in the response, or the browser saves it as "installer".
+        assert "hlv-poller-0.2.0.exe" in got.headers["content-disposition"]
+
+    async def test_a_viewer_does_not_get_the_agent(self, viewer_client, tmp_path,
+                                                   monkeypatch):
+        (tmp_path / "hlv-poller-0.1.0.exe").write_bytes(b"MZ")
+        monkeypatch.setitem(backend_settings, "AGENT_DIST_DIR", str(tmp_path))
+
+        assert (await viewer_client.get(
+            "/polling/agents/installer")).status_code == 403
+
+
+class TestWhetherAnAgentIsThere:
+    """Online is a fact about the last minute, not about the registry.
+
+    The screen and the refusal «немає вільного модема» have to agree: an agent
+    shown as on the line whose poll is then refused is worse than one shown as
+    offline.
+    """
+
+    async def test_a_silent_agent_is_not_online(self, admin_client):
+        agent = (await admin_client.post(
+            "/polling/agents", json={"name": "АРМ мовчазний"})).json()
+        assert agent["online"] is False           # never been heard from
+
+        async with async_session_factory() as session:
+            row = await session.get(PollAgent, agent["id"])
+            row.last_seen_at = datetime.now() - timedelta(minutes=5)
+            await session.commit()
+
+        listed = (await admin_client.get("/polling/agents")).json()
+        assert [a["online"] for a in listed if a["id"] == agent["id"]] == [False]
+
+    async def test_an_agent_heard_from_just_now_is_online(self, admin_client):
+        agent = (await admin_client.post(
+            "/polling/agents", json={"name": "АРМ живий"})).json()
+
+        async with async_session_factory() as session:
+            row = await session.get(PollAgent, agent["id"])
+            row.last_seen_at = datetime.now() - timedelta(seconds=5)
+            await session.commit()
+
+        listed = (await admin_client.get("/polling/agents")).json()
+        assert [a["online"] for a in listed if a["id"] == agent["id"]] == [True]
+
+
+class TestTheLogOfTheLastPoll:
+    """The file that answers "what did the last call do".
+
+    The live log is wiped when the next session starts — deliberately, since
+    the screen it feeds is about the call happening now. The file is what is
+    left five minutes later, when somebody has to decide whether to send a
+    person out to the meter.
+    """
+
+    async def test_a_site_never_polled_says_so_rather_than_failing(
+        self, admin_client, targets, tmp_path, monkeypatch
+    ):
+        monkeypatch.setitem(backend_settings, "POLL_LOG_DIR", str(tmp_path))
+        card = await make_card(
+            admin_client, enterprise_id=targets["enterprise_id"],
+            phone="+380501234567",
+        )
+
+        body = (await admin_client.get(
+            f"/polling/devices/{card['id']}/log/last")).json()
+        assert body["text"] is None
+
+    async def test_the_session_is_written_and_read_back(
+        self, admin_client, anon_client, targets, tmp_path, monkeypatch
+    ):
+        monkeypatch.setitem(backend_settings, "POLL_LOG_DIR", str(tmp_path))
+        card, headers = await _claimed_card(admin_client, anon_client, targets)
+
+        await anon_client.post(
+            f"/polling/agent/devices/{card['id']}/log",
+            json={"reset": True, "lines": [
+                {"seq": 1, "level": "info", "message": "Набираю +380501234567"},
+            ]},
+            headers=headers,
+        )
+        await anon_client.post(
+            f"/polling/agent/devices/{card['id']}/finish",
+            json={"status": "ok", "error_code": None, "error_text": None,
+                  "rows": {"hour": 24, "day": 1}, "duration_ms": 42000,
+                  "connect_ms": 21000},
+            headers=headers,
+        )
+
+        body = (await admin_client.get(
+            f"/polling/devices/{card['id']}/log/last")).json()
+        assert "Набираю +380501234567" in body["text"]
+        # It opens with who was dialled and ends with the outcome, so neither
+        # has to be inferred from the middle.
+        assert "Завод А" in body["text"]
+        assert "Готово: годин 24, діб 1" in body["text"]
+        assert body["updated_at"] is not None
+
+    async def test_a_new_session_replaces_the_last_one(
+        self, admin_client, anon_client, targets, tmp_path, monkeypatch
+    ):
+        monkeypatch.setitem(backend_settings, "POLL_LOG_DIR", str(tmp_path))
+        card, headers = await _claimed_card(admin_client, anon_client, targets)
+
+        for message in ("Перший дзвінок", "Другий дзвінок"):
+            await anon_client.post(
+                f"/polling/agent/devices/{card['id']}/start", headers=headers)
+            await anon_client.post(
+                f"/polling/agent/devices/{card['id']}/log",
+                json={"reset": True, "lines": [
+                    {"seq": 1, "level": "info", "message": message},
+                ]},
+                headers=headers,
+            )
+            await anon_client.post(
+                f"/polling/agent/devices/{card['id']}/finish",
+                json={"status": "ok", "error_code": None, "error_text": None,
+                      "rows": {"hour": 1, "day": 0}, "duration_ms": 1000,
+                      "connect_ms": 500},
+                headers=headers,
+            )
+
+        text = (await admin_client.get(
+            f"/polling/devices/{card['id']}/log/last")).json()["text"]
+        assert "Другий дзвінок" in text
+        assert "Перший дзвінок" not in text
+
+
+async def _claimed_card(admin_client, anon_client, targets) -> tuple[dict, dict]:
+    """A card with a modem, an agent holding it, and the session started."""
+    card = await make_card(
+        admin_client, enterprise_id=targets["enterprise_id"],
+        phone="+380501234567",
+    )
+    agent = (await admin_client.post(
+        "/polling/agents", json={"name": "АРМ журнальний"})).json()
+    await admin_client.put(
+        f"/polling/devices/{card['id']}/agents", json={"agent_ids": [agent["id"]]},
+    )
+    headers = {"X-Agent-Key": agent["key"]}
+    await anon_client.post(
+        f"/polling/agent/devices/{card['id']}/start", headers=headers)
+    return card, headers

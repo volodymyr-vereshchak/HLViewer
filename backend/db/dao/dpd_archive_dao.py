@@ -153,7 +153,7 @@ class DpdArchiveDao(BasicDao):
 
     async def upsert_records(
         self, period_type: str, rows: List[Dict], source: str = SOURCE_DPD
-    ) -> None:
+    ) -> Dict[str, int]:
         """Bulk insert/update archive rows.
 
         `rows`: dicts with device_id, stamp (datetime; date part is used
@@ -165,9 +165,14 @@ class DpdArchiveDao(BasicDao):
         `source` decides who wins a collision. UNIQUE(device_id, stamp) means
         an hour has room for one row, so "the GSM poll is the truth" has to be
         an UPSERT rule: without it the nightly DPD refresh would silently
-        overwrite what the modem read off the device."""
+        overwrite what the modem read off the device.
+
+        Returns how many rows were new and how many were rewritten. A poll
+        that fetched a month and added two hours has done something quite
+        different from one that added seven hundred, and "fetched 720" says
+        neither."""
         if not rows:
-            return
+            return {"inserted": 0, "updated": 0}
         table, stamp_col = _table(period_type)
         cols = ["device_id", stamp_col, *_VALUE_COLS, "source"]
         col_list = ", ".join(cols)
@@ -190,20 +195,33 @@ class DpdArchiveDao(BasicDao):
         await raw.driver_connection.copy_records_to_table(
             tmp, records=records, columns=cols
         )
+        # The unit is the one column a writer may legitimately not know: a
+        # modem reads the number a corrector stores and, for most families,
+        # nothing that says what it is in. Overwriting a unit ДПД had reported
+        # with that silence leaves the row unreadable — the archive says 0.15
+        # and the column header falls back to кгс/см², a factor of ten out.
         set_clause = ", ".join(
-            f"{c} = EXCLUDED.{c}" for c in (*_VALUE_COLS, "source")
+            f"{c} = COALESCE(EXCLUDED.{c}, {table}.{c})" if c == "press_unit"
+            else f"{c} = EXCLUDED.{c}"
+            for c in (*_VALUE_COLS, "source")
         )
         constraint = (
             "uq_dpd_daily_dev_day" if period_type == "daily"
             else "uq_dpd_hourly_dev_stamp"
         )
-        await self.session.execute(text(
+        # xmax = 0 marks a row this statement inserted rather than updated —
+        # the only way to tell "new data" from "the same data again" without
+        # reading the table first.
+        written = (await self.session.execute(text(
             f"INSERT INTO {table} ({col_list}) SELECT {col_list} FROM {tmp} "
             f"ON CONFLICT ON CONSTRAINT {constraint} DO UPDATE SET {set_clause} "
             f"WHERE {table}.source <> '{SOURCE_GSM}' "
-            f"OR EXCLUDED.source = '{SOURCE_GSM}'"
-        ))
+            f"OR EXCLUDED.source = '{SOURCE_GSM}' "
+            f"RETURNING (xmax = 0) AS inserted"
+        ))).scalars().all()
         await self.session.execute(text(f"DROP TABLE {tmp}"))
+        inserted = sum(1 for new in written if new)
+        return {"inserted": inserted, "updated": len(written) - inserted}
 
     async def get_coverage(
         self, device_ids: List[int], period_type: str

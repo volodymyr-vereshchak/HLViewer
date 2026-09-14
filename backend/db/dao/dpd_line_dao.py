@@ -125,7 +125,14 @@ class DpdLineArchiveDao(BasicDao):
         await raw.driver_connection.copy_records_to_table(
             tmp, records=records, columns=cols
         )
-        set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in _VALUE_COLS)
+        # Same rule as the device archive: a writer that does not know the
+        # unit leaves the field empty, and empty must not overwrite a unit
+        # somebody else reported.
+        set_clause = ", ".join(
+            f"{c} = COALESCE(EXCLUDED.{c}, {table}.{c})" if c == "press_unit"
+            else f"{c} = EXCLUDED.{c}"
+            for c in _VALUE_COLS
+        )
         await self.session.execute(text(
             f"INSERT INTO {table} ({col_list}) SELECT {col_list} FROM {tmp} "
             f"ON CONFLICT ON CONSTRAINT {constraint} DO UPDATE SET {set_clause}"

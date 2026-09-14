@@ -44,6 +44,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from backend.db.models.device_catalog_model import CorectorType, Manufacturer
+from backend.services.pressure_units import PRESSURE_UNIT_DEFAULT
 from backend.db.models.dpd_line_model import DpdLine, DpdLineDevice
 from backend.db.models.enterprise_model import DpdDevice, Enterprise, EnterpriseDevice
 from backend.db.models.gas_route_model import GasRoute, GasRouteMember
@@ -402,6 +403,7 @@ async def export_branch(
             "active": dl.active,
             "include_in_trends": dl.include_in_trends,
             "include_in_report": dl.include_in_report,
+            "pressure_unit": dl.pressure_unit,
             "devices": dpd_devices.get(dl.id, []),
         }
         for dl in dpd_lines
@@ -1348,6 +1350,9 @@ async def _write_dpd_lines(
             "active": bool(item.get("active", True)),
             "include_in_trends": bool(item.get("include_in_trends", False)),
             "include_in_report": bool(item.get("include_in_report", False)),
+            # Bundles written before the line had a unit carry none; the
+            # column is NOT NULL, so they get the default rather than a crash.
+            "pressure_unit": item.get("pressure_unit") or PRESSURE_UNIT_DEFAULT,
         }
         row = existing.get(name)
         if row is None:

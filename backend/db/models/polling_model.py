@@ -43,8 +43,6 @@ class PollAgent(HlBaseModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True, sa_type=BigInteger)
     name: str = Field(max_length=100)
-    # workstation | dedicated — display only; it grants nothing.
-    kind: str = Field(default="workstation", max_length=16)
     key_hash: str = Field(max_length=255)
     branch_id: Optional[int] = Field(
         default=None, foreign_key="grmu_branch.id", ondelete="SET NULL",
@@ -88,7 +86,9 @@ class PollDevice(HlBaseModel, table=True):
     __tablename__ = "poll_device"
     __table_args__ = (
         CheckConstraint(
-            "(dpd_device_id IS NOT NULL) <> (dpd_line_id IS NOT NULL)",
+            "(dpd_device_id IS NOT NULL)::int"
+            " + (dpd_line_id IS NOT NULL)::int"
+            " + (enterprise_id IS NOT NULL)::int = 1",
             name="ck_poll_device_single_target",
         ),
         # One card per corrector. The indexes are partial because one of the
@@ -101,6 +101,10 @@ class PollDevice(HlBaseModel, table=True):
         Index(
             "uq_poll_device_dpd_line", "dpd_line_id",
             unique=True, postgresql_where=Column("dpd_line_id").isnot(None),
+        ),
+        Index(
+            "uq_poll_device_enterprise", "enterprise_id",
+            unique=True, postgresql_where=Column("enterprise_id").isnot(None),
         ),
         # What the agent's plan query filters on: enabled, automatic, overdue.
         Index("idx_poll_device_due", "enabled", "auto_poll", "last_poll_at"),
@@ -117,6 +121,15 @@ class PollDevice(HlBaseModel, table=True):
     )
     dpd_line_id: Optional[int] = Field(
         default=None, foreign_key="dpd_line.id", ondelete="CASCADE",
+        sa_type=BigInteger,
+    )
+    # The third kind, and the one operators actually fill in: the modem stands
+    # at the enterprise, not inside the corrector. Which corrector to read is
+    # then not a setting at all — it is whichever one is installed there now,
+    # resolved at poll time from the device history. A replacement stops being
+    # something anybody has to remember to repoint.
+    enterprise_id: Optional[int] = Field(
+        default=None, foreign_key="enterprise.id", ondelete="CASCADE",
         sa_type=BigInteger,
     )
 
@@ -217,6 +230,13 @@ class PollDevice(HlBaseModel, table=True):
         default_factory=dict,
         sa_column=Column(JSONB, nullable=False, server_default="{}"),
     )
+    # How far the running session has got. Set by the agent as it reads, and
+    # the only thing that turns "дзвоню" into something an operator can wait
+    # through: a poll of a month of hours is seven hundred requests, and a
+    # screen that says nothing for ten minutes reads as a screen that hung.
+    progress_done: Optional[int] = Field(default=None)
+    progress_total: Optional[int] = Field(default=None)
+
     last_duration_ms: Optional[int] = Field(default=None)
     last_connect_ms: Optional[int] = Field(default=None)
 
@@ -267,32 +287,6 @@ class PollAgentDevice(SQLModel, table=True):
     )
 
 
-class PollLog(SQLModel, table=True):
-    """The CURRENT session's log for a device. Past sessions are not kept.
-
-    A new session deletes this device's rows: the watch screen answers "what
-    is happening now". The question "this device has not picked up all week"
-    is answered by `poll_attempt` — one row per attempt instead of the text.
-    """
-
-    __tablename__ = "poll_log"
-    __table_args__ = (
-        # The live log is read incrementally: "everything after seq N".
-        Index("idx_poll_log_device_seq", "poll_device_id", "seq"),
-    )
-
-    id: Optional[int] = Field(default=None, primary_key=True, sa_type=BigInteger)
-    poll_device_id: int = Field(
-        foreign_key="poll_device.id", ondelete="CASCADE", sa_type=BigInteger,
-    )
-    seq: int = Field(default=0)
-    ts: datetime = Field(default_factory=datetime.now)
-    # info | warn | error, plus debug for the driver's own trace, which is
-    # attached only when a session failed.
-    level: str = Field(default="info", max_length=8)
-    message: str = Field(sa_column=Column(Text, nullable=False))
-
-
 class PollAttempt(SQLModel, table=True):
     """One short row per poll attempt.
 
@@ -318,6 +312,10 @@ class PollAttempt(SQLModel, table=True):
     started_at: datetime = Field(default_factory=datetime.now)
     finished_at: Optional[datetime] = Field(default=None)
     status: str = Field(default="error", max_length=8)  # ok | error
+    # Asked for by a person rather than made by the schedule. The retry budget
+    # counts scheduled attempts only: checking a site by hand must not use up
+    # the automatic calls it still had.
+    manual: bool = Field(default=False)
     error_code: Optional[str] = Field(default=None, max_length=32)
     rows: dict = Field(
         default_factory=dict,

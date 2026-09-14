@@ -14,7 +14,8 @@ paths are therefore exempt from the session middleware, and every one of them
 resolves the key itself — an exemption from "must be signed in" would otherwise
 be an exemption from any check at all.
 """
-from datetime import datetime
+from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
@@ -26,7 +27,9 @@ from backend.db.dao.dpd_line_dao import DpdLineArchiveDao
 from backend.db.dao.polling_dao import PollingDao
 from backend.db.engine import get_session
 from backend.db.models.polling_model import PollAgent, PollDevice
+from backend.services import poll_journal
 from backend.services.poll_schedule import is_due
+from backend.settings import backend_settings
 
 router = APIRouter(prefix="/polling/agent", tags=["polling-agent"])
 
@@ -117,11 +120,21 @@ class LogLine(BaseModel):
     message: str
 
 
+class Progress(BaseModel):
+    """How far the session has got, in records."""
+
+    done: int = 0
+    total: int = 0
+
+
 class LogBatch(BaseModel):
     # The first batch of a session replaces what was there: this log answers
     # "what is happening now", not "what has ever happened".
     reset: bool = False
     lines: List[LogLine] = Field(default_factory=list)
+    # Sent as the agent reads, so the screen can show a bar rather than a
+    # spinner that never moves.
+    progress: Optional[Progress] = None
 
 
 class ArchiveRow(BaseModel):
@@ -196,6 +209,9 @@ async def get_plan(
     coverage = await dao.archive_coverage([
         row["card"].id for row in await dao.list_devices()
     ])
+    # A day covers every schedule in use; anything older cannot belong to the
+    # slot being counted.
+    failures = await dao.failed_attempts_since(now - timedelta(days=1))
     await dao.touch_agent(agent, None, None)
     await session.commit()
 
@@ -212,7 +228,26 @@ async def get_plan(
             enabled=card.enabled,
             auto_poll=card.auto_poll,
             manual_requested_at=card.manual_requested_at,
+            last_attempt_at=card.last_attempt_at,
+            last_status=card.last_status,
+            scheduled_failures=failures.get(card.id, []),
         )
+        # An enterprise card whose corrector has been taken away has nothing
+        # to dial for. Saying so here keeps the agent from making a call that
+        # would look, from the far end, exactly like a meter that will not
+        # answer.
+        if not row["still_installed"] and card.enterprise_id is not None:
+            due, reason = False, "немає встановлених корректорів"
+
+        # And a site somebody else is already dialling is not due for this
+        # agent, however overdue it is. The same site is often given to two
+        # machines so that one being switched off does not stop it; calling it
+        # due for both made the loser ask for the plan again the moment it was
+        # refused, as fast as the network allowed, for the length of the other
+        # call. The claim, not the schedule, is what settles this.
+        if due and card.polling_agent_id != agent.id and dao.claim_is_live(card, now):
+            due, reason = False, "опитує інший агент"
+
         last = coverage.get(card.id, {})
         devices.append(PlanDevice(
             id=card.id,
@@ -222,7 +257,7 @@ async def get_plan(
             ser_num=row["ser_num"],
             model_name=row["model_name"],
             label=row["target_label"],
-            protocol_id=card.protocol_id,
+            protocol_id=row["protocol_id"],
             device_address=card.device_address,
             channel=card.channel,
             is_modem=card.is_modem,
@@ -315,14 +350,44 @@ async def push_log(
     session: AsyncSession = Depends(get_session),
 ):
     dao = PollingDao(session)
-    await _agent_card(dao, agent, device_id)
+    # This is also a heartbeat, and the only one there is during a call.
+    # `/state` is sent between sessions, so an agent reading a ВЕГА — a hundred
+    # seconds for a day of hours, and an hour for a first fill — went quiet for
+    # longer than AGENT_SILENCE and showed as offline on the very screen that
+    # was watching it work. The progress of that read arrives here every few
+    # seconds anyway; nothing extra has to be sent.
+    await dao.touch_agent(agent, None, None)
+    card = await _agent_card(dao, agent, device_id)
+    lines = [line.model_dump() for line in body.lines]
+    path = _journal_of(card)
     if body.reset:
-        await dao.clear_log(device_id)
-    highest = await dao.append_log(
-        device_id, [line.model_dump() for line in body.lines]
-    )
+        card.progress_done = None
+        card.progress_total = None
+        # One file per session: the screen that follows the call reads this
+        # same file, so the previous session must not still be in it.
+        poll_journal.start(path, await _journal_title(dao, card, agent))
+    if body.progress is not None:
+        card.progress_done = body.progress.done
+        card.progress_total = body.progress.total
+    poll_journal.append(path, lines)
     await session.commit()
-    return {"last_seq": highest}
+    return {"last_seq": max((line.get("seq", 0) for line in lines), default=0)}
+
+
+def _journal_of(card: PollDevice) -> Path:
+    return poll_journal.journal_path(
+        backend_settings["POLL_LOG_DIR"], card.enterprise_id, card.id
+    )
+
+
+async def _journal_title(dao: PollingDao, card: PollDevice,
+                         agent: PollAgent) -> str:
+    """The line a file opens with: who was dialled, by which machine."""
+    name = None
+    if card.enterprise_id is not None:
+        name = (await dao.enterprise_names()).get(card.enterprise_id)
+    return (f"Опитування: {name or f'картка {card.id}'}"
+            f"{f', {card.phone}' if card.phone else ''}, агент «{agent.name}»")
 
 
 @router.post("/devices/{device_id}/data")
@@ -367,12 +432,29 @@ async def push_data(
     if not body.rows:
         return {"stored": 0}
 
-    if card.dpd_device_id is not None:
+    # Where the readings go. An enterprise card names no corrector, so the
+    # archive is the one of whatever is fitted there now — the same resolution
+    # the plan used to decide what to dial. Without this the rows fell through
+    # to the line archive and were refused by a NOT NULL, after the call had
+    # already been made.
+    # Named apart from `device_id`, which is the CARD in this handler: the
+    # two are different things and one of them is in the URL.
+    archive_device_id = card.dpd_device_id
+    if archive_device_id is None and card.enterprise_id is not None:
+        fitted = (await dao.correctors_of_enterprises()).get(card.enterprise_id)
+        if fitted is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Немає встановлених корректорів — дані не збережено",
+            )
+        archive_device_id = fitted["device_id"]
+
+    if archive_device_id is not None:
         await DpdArchiveDao(session).upsert_records(
             body.period_type,
             [
                 {
-                    "device_id": card.dpd_device_id,
+                    "device_id": archive_device_id,
                     "stamp": r.stamp,
                     "dvst_alwrk": r.volume,
                     "dvwrk_alwrk": r.volume_work,
@@ -427,6 +509,12 @@ async def finish_session(
         rows=body.rows,
         duration_ms=body.duration_ms,
         connect_ms=body.connect_ms,
+    )
+    # The file ends with the answer, so it does not have to be inferred from
+    # the last thing that happened to be logged.
+    poll_journal.finish(
+        _journal_of(card), body.status, body.error_text, body.rows,
+        body.duration_ms,
     )
     await session.commit()
     return {"ok": True}

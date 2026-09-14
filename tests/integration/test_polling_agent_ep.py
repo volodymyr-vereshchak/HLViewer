@@ -25,7 +25,8 @@ from backend.db.models.enterprise_model import (
     DpdDevice, Enterprise, EnterpriseDevice,
 )
 from backend.db.models.grmu_branch_model import GrmuBranch
-from backend.db.models.polling_model import PollDevice, PollLog
+from backend.db.models.polling_model import PollAgent, PollDevice
+from backend.settings import backend_settings
 
 MARCH = datetime(2026, 3, 10, 7)
 
@@ -285,6 +286,19 @@ class TestAWholeSession:
             assert stored.last_attempt_at is not None
             assert stored.last_error_code == "no_carrier"
 
+        # Not this minute, though: a line that was dead a moment ago is dead
+        # now, and redialling at plan speed is a phone bill, not a retry.
+        plan = (await anon_client.get(
+            "/polling/agent/plan", headers=key(agent)
+        )).json()
+        assert plan["devices"][0]["due"] is False
+        assert plan["devices"][0]["due_reason"] == "cooling_off"
+
+        async with async_session_factory() as session:
+            stored = await session.get(PollDevice, card["id"])
+            stored.last_attempt_at = datetime.now() - timedelta(minutes=20)
+            await session.commit()
+
         plan = (await anon_client.get(
             "/polling/agent/plan", headers=key(agent)
         )).json()
@@ -304,9 +318,67 @@ class TestAWholeSession:
         listed = (await admin_client.get("/polling/devices")).json()
         assert listed[0]["manual_requested_at"] is None
 
-    async def test_the_log_is_replaced_each_session(
-        self, anon_client, session_ready
+    async def test_a_failed_manual_request_is_cleared_as_well(
+        self, admin_client, anon_client, session_ready
     ):
+        """The button is one call, not a standing order.
+
+        Cleared only on success, a manual request that failed stayed newer
+        than `last_poll_at` for ever — and that is exactly what the plan reads
+        to decide a device is due. The agent redialled every fifteen seconds,
+        three attempts a time, and nothing in the loop could end it: each
+        failure left the state that caused it. Whether to try again is the
+        decision of whoever pressed the button and watched it fail.
+        """
+        agent, card = session_ready["agent"], session_ready["card"]
+        await admin_client.post(f"/polling/devices/{card['id']}/poll")
+        await anon_client.post(
+            f"/polling/agent/devices/{card['id']}/finish",
+            json={"status": "error", "error_code": "no_carrier",
+                  "error_text": "No Carrier Detect"},
+            headers=key(agent),
+        )
+
+        listed = (await admin_client.get("/polling/devices")).json()
+        assert listed[0]["manual_requested_at"] is None
+
+        plan = (await anon_client.get(
+            "/polling/agent/plan", headers=key(agent)
+        )).json()
+        assert plan["devices"][0]["due"] is False
+
+    async def test_the_progress_of_a_long_read_keeps_the_agent_online(
+        self, anon_client, session_ready, tmp_path, monkeypatch
+    ):
+        """A call is the one time an agent cannot say hello.
+
+        `/state` goes between sessions, and a ВЕГА takes a hundred seconds for
+        a day of hours — an hour for a first fill, one Modbus frame per record.
+        The screen watching that poll used to show the agent offline while it
+        was working, because nothing else touched `last_seen_at`.
+        """
+        monkeypatch.setitem(backend_settings, "POLL_LOG_DIR", str(tmp_path))
+        agent, card = session_ready["agent"], session_ready["card"]
+
+        async with async_session_factory() as session:
+            row = await session.get(PollAgent, agent["id"])
+            row.last_seen_at = datetime.now() - timedelta(minutes=5)
+            await session.commit()
+
+        await anon_client.post(
+            f"/polling/agent/devices/{card['id']}/log",
+            json={"lines": [], "progress": {"done": 120, "total": 720}},
+            headers=key(agent),
+        )
+
+        async with async_session_factory() as session:
+            row = await session.get(PollAgent, agent["id"])
+            assert datetime.now() - row.last_seen_at < timedelta(seconds=30)
+
+    async def test_the_log_is_replaced_each_session(
+        self, anon_client, session_ready, tmp_path, monkeypatch
+    ):
+        monkeypatch.setitem(backend_settings, "POLL_LOG_DIR", str(tmp_path))
         agent, card = session_ready["agent"], session_ready["card"]
         await anon_client.post(
             f"/polling/agent/devices/{card['id']}/log",
@@ -327,21 +399,21 @@ class TestAWholeSession:
             json={"reset": True, "lines": [{"seq": 1, "message": "дзвоню знову"}]},
             headers=key(agent),
         )
-        async with async_session_factory() as session:
-            lines = list((await session.execute(
-                select(PollLog).where(PollLog.poll_device_id == card["id"])
-            )).scalars())
-        assert [line.message for line in lines] == ["дзвоню знову"]
+        text = _journal(tmp_path, session_ready)
+        assert "дзвоню знову" in text
+        assert "CONNECT 9600" not in text
 
     async def test_a_raw_wire_dump_does_not_break_the_log(
-        self, anon_client, session_ready
+        self, anon_client, session_ready, tmp_path, monkeypatch
     ):
         """A driver's own trace carries the bytes it read, NUL padding and all.
 
-        Postgres refuses NUL inside text, and the request carrying it is the
-        report of a call that already happened and cannot be repeated — so
-        losing it to a 500 loses the only account of the failure.
+        A control byte inside a line would split or truncate it for every
+        reader afterwards, and the request carrying it is the report of a call
+        that already happened and cannot be repeated — so losing it to a 500
+        loses the only account of the failure.
         """
+        monkeypatch.setitem(backend_settings, "POLL_LOG_DIR", str(tmp_path))
         agent, card = session_ready["agent"], session_ready["card"]
         resp = await anon_client.post(
             f"/polling/agent/devices/{card['id']}/log",
@@ -352,12 +424,16 @@ class TestAWholeSession:
         )
         assert resp.status_code == 200
 
-        async with async_session_factory() as session:
-            stored = list((await session.execute(
-                select(PollLog).where(PollLog.poll_device_id == card["id"])
-            )).scalars())
-        assert "\x00" not in stored[0].message
-        assert "VegaCoL" in stored[0].message and "2311" in stored[0].message
+        text = _journal(tmp_path, session_ready)
+        assert "\x00" not in text
+        assert "VegaCoL" in text and "2311" in text
+
+
+def _journal(folder, session_ready) -> str:
+    """The site's journal file, whatever it is named for this card."""
+    written = list(folder.glob("*.log"))
+    assert len(written) == 1, written
+    return written[0].read_text(encoding="utf-8")
 
 
 @pytest.mark.asyncio
@@ -496,3 +572,267 @@ class TestIncrementalReading:
             json=payload, headers=key(agent),
         )
         assert len(await archive_rows("daily")) == 1
+
+
+@pytest.mark.asyncio
+class TestACardThatFollowsTheEnterprise:
+    """The modem is at the site; the corrector under it gets replaced."""
+
+    async def test_the_plan_names_the_corrector_fitted_today(
+        self, admin_client, anon_client, fleet
+    ):
+        agent = await make_agent(admin_client)
+        card = await make_card(
+            admin_client, enterprise_id=fleet["enterprise_id"],
+            phone="+380501234567",
+        )
+        await anon_client.put("/polling/agent/devices",
+                              json={"device_ids": [card["id"]]}, headers=key(agent))
+
+        plan = (await anon_client.get("/polling/agent/plan", headers=key(agent))).json()
+        assert len(plan["devices"]) == 1
+        device = plan["devices"][0]
+        assert device["ser_num"] == 555001
+        # Nothing set this on the card: it comes from the corrector's model.
+        assert device["protocol_id"] == 1054
+
+    async def test_a_replacement_needs_nobody_to_repoint_anything(
+        self, admin_client, anon_client, fleet
+    ):
+        """The old corrector comes off, a new one goes on, the card is untouched.
+
+        This is the whole reason the card names the enterprise. Under the old
+        arrangement the card kept the old serial, and the readings from the new
+        meter arrived under a name that had left the site.
+        """
+        agent = await make_agent(admin_client)
+        card = await make_card(
+            admin_client, enterprise_id=fleet["enterprise_id"],
+            phone="+380501234567",
+        )
+        await anon_client.put("/polling/agent/devices",
+                              json={"device_ids": [card["id"]]}, headers=key(agent))
+
+        async with async_session_factory() as session:
+            fitted = (await session.execute(
+                select(EnterpriseDevice).where(
+                    EnterpriseDevice.enterprise_id == fleet["enterprise_id"]
+                )
+            )).scalars().one()
+            fitted.removed_at = datetime(2026, 6, 1)
+            newer = DpdDevice(ser_num=555002, ch_num=0,
+                              corector_type_id=None)
+            session.add(newer)
+            await session.flush()
+            session.add(EnterpriseDevice(
+                enterprise_id=fleet["enterprise_id"], device_id=newer.id,
+                installed_from=datetime(2026, 6, 1),
+            ))
+            await session.commit()
+
+        plan = (await anon_client.get("/polling/agent/plan", headers=key(agent))).json()
+        assert plan["devices"][0]["ser_num"] == 555002
+
+    async def test_a_site_with_nothing_fitted_is_not_dialled(
+        self, admin_client, anon_client, fleet
+    ):
+        """A call to a modem with no meter behind it looks like a dead meter.
+
+        Better to say why before the phone is picked up.
+        """
+        agent = await make_agent(admin_client)
+        card = await make_card(
+            admin_client, enterprise_id=fleet["enterprise_id"],
+            phone="+380501234567",
+        )
+        await anon_client.put("/polling/agent/devices",
+                              json={"device_ids": [card["id"]]}, headers=key(agent))
+
+        async with async_session_factory() as session:
+            fitted = (await session.execute(
+                select(EnterpriseDevice).where(
+                    EnterpriseDevice.enterprise_id == fleet["enterprise_id"]
+                )
+            )).scalars().one()
+            fitted.removed_at = datetime(2026, 6, 1)
+            await session.commit()
+
+        device = (await anon_client.get(
+            "/polling/agent/plan", headers=key(agent)
+        )).json()["devices"][0]
+        assert device["due"] is False
+        assert device["due_reason"] == "немає встановлених корректорів"
+        assert device["ser_num"] is None
+
+    async def test_a_card_needs_exactly_one_target(self, admin_client, fleet):
+        resp = await admin_client.post("/polling/devices", json={
+            "enterprise_id": fleet["enterprise_id"],
+            "dpd_device_id": fleet["device_id"],
+        })
+        assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+class TestGivingUpOnALineThatWillNotAnswer:
+    """Three calls per scheduled slot, then quiet until the next one.
+
+    The retry pause alone still meant a dead line was dialled four times an
+    hour until somebody noticed. Three attempts cover what a retry can fix;
+    after that the answer stops changing.
+    """
+
+    async def test_the_fourth_attempt_is_not_offered(
+        self, admin_client, anon_client, session_ready
+    ):
+        agent, card = session_ready["agent"], session_ready["card"]
+        headers = key(agent)
+
+        for _ in range(3):
+            await anon_client.post(
+                f"/polling/agent/devices/{card['id']}/start", headers=headers)
+            await anon_client.post(
+                f"/polling/agent/devices/{card['id']}/finish",
+                json={"status": "error", "error_code": "no_carrier",
+                      "error_text": "No Carrier Detect", "rows": {},
+                      "duration_ms": 1000, "connect_ms": 0},
+                headers=headers,
+            )
+            # The pause between attempts is not what is being tested here.
+            async with async_session_factory() as session:
+                stored = await session.get(PollDevice, card["id"])
+                stored.last_attempt_at = datetime.now() - timedelta(minutes=20)
+                await session.commit()
+
+        plan = (await anon_client.get(
+            "/polling/agent/plan", headers=headers)).json()
+        assert plan["devices"][0]["due"] is False
+        assert plan["devices"][0]["due_reason"] == "gave_up"
+
+    async def test_a_manual_failure_does_not_spend_the_budget(
+        self, admin_client, anon_client, session_ready
+    ):
+        """Checking a failing site by hand must not remove its retries.
+
+        Otherwise the operator who looks at the problem is the reason the
+        schedule stops trying — which is exactly backwards.
+        """
+        agent, card = session_ready["agent"], session_ready["card"]
+        headers = key(agent)
+
+        # Two scheduled failures, and one the operator asked for in between.
+        for manual in (False, True, False):
+            if manual:
+                await admin_client.post(f"/polling/devices/{card['id']}/poll")
+            await anon_client.post(
+                f"/polling/agent/devices/{card['id']}/start", headers=headers)
+            await anon_client.post(
+                f"/polling/agent/devices/{card['id']}/finish",
+                json={"status": "error", "error_code": "no_carrier",
+                      "error_text": "No Carrier Detect", "rows": {},
+                      "duration_ms": 1000, "connect_ms": 0},
+                headers=headers,
+            )
+            async with async_session_factory() as session:
+                stored = await session.get(PollDevice, card["id"])
+                stored.last_attempt_at = datetime.now() - timedelta(minutes=20)
+                await session.commit()
+
+        # Three calls have been made, but only two of them were the schedule's.
+        plan = (await anon_client.get(
+            "/polling/agent/plan", headers=headers)).json()
+        assert plan["devices"][0]["due"] is True
+
+    async def test_a_person_may_still_ask_for_it(
+        self, admin_client, anon_client, session_ready
+    ):
+        """Somebody who knows the line is back does not wait for a slot."""
+        agent, card = session_ready["agent"], session_ready["card"]
+        headers = key(agent)
+
+        for _ in range(3):
+            await anon_client.post(
+                f"/polling/agent/devices/{card['id']}/start", headers=headers)
+            await anon_client.post(
+                f"/polling/agent/devices/{card['id']}/finish",
+                json={"status": "error", "error_code": "no_carrier",
+                      "error_text": "No Carrier Detect", "rows": {},
+                      "duration_ms": 1000, "connect_ms": 0},
+                headers=headers,
+            )
+
+        await admin_client.post(f"/polling/devices/{card['id']}/poll")
+
+        plan = (await anon_client.get(
+            "/polling/agent/plan", headers=headers)).json()
+        assert plan["devices"][0]["due"] is True
+        assert plan["devices"][0]["due_reason"] == "manual_request"
+
+
+@pytest.mark.asyncio
+class TestTwoAgentsOnOneSite:
+    """The same site given to two machines — the shape that makes a poll
+    survive one of them being switched off.
+
+    Nothing divides the sites between agents: both see the same plan and the
+    claim settles who dials. What has to hold is that the one who loses the
+    race is told, rather than left asking again as fast as the network allows.
+    """
+
+    async def test_a_site_being_dialled_is_not_due_for_the_other_agent(
+        self, admin_client, anon_client, fleet
+    ):
+        first = await make_agent(admin_client, "АРМ перший")
+        second = await make_agent(admin_client, "АРМ другий")
+        card = await make_card(
+            admin_client, enterprise_id=fleet["enterprise_id"],
+            phone="+380501234567", auto_poll=True, poll_times=["00:01"],
+        )
+        for agent in (first, second):
+            await anon_client.put(
+                "/polling/agent/devices",
+                json={"device_ids": [card["id"]]}, headers=key(agent),
+            )
+
+        # The first one takes it.
+        assert (await anon_client.post(
+            f"/polling/agent/devices/{card['id']}/start", headers=key(first),
+        )).status_code == 200
+
+        plan = (await anon_client.get(
+            "/polling/agent/plan", headers=key(second))).json()
+        assert plan["devices"][0]["due"] is False
+        assert plan["devices"][0]["due_reason"] == "опитує інший агент"
+
+        # And the holder still sees its own session as its work to do.
+        mine = (await anon_client.get(
+            "/polling/agent/plan", headers=key(first))).json()
+        assert mine["devices"][0]["due"] is True
+
+    async def test_the_site_comes_back_when_the_session_ends(
+        self, admin_client, anon_client, fleet
+    ):
+        first = await make_agent(admin_client, "АРМ перший")
+        second = await make_agent(admin_client, "АРМ другий")
+        card = await make_card(
+            admin_client, enterprise_id=fleet["enterprise_id"],
+            phone="+380501234567", auto_poll=True, poll_times=["00:01"],
+        )
+        for agent in (first, second):
+            await anon_client.put(
+                "/polling/agent/devices",
+                json={"device_ids": [card["id"]]}, headers=key(agent),
+            )
+        await anon_client.post(
+            f"/polling/agent/devices/{card['id']}/start", headers=key(first))
+        await anon_client.post(
+            f"/polling/agent/devices/{card['id']}/finish",
+            json={"status": "ok", "error_code": None, "error_text": None,
+                  "rows": {"hour": 1, "day": 0}, "duration_ms": 1000,
+                  "connect_ms": 500},
+            headers=key(first),
+        )
+
+        plan = (await anon_client.get(
+            "/polling/agent/plan", headers=key(second))).json()
+        # Polled, so not due — but for the schedule's reason, not the claim's.
+        assert plan["devices"][0]["due_reason"] != "опитує інший агент"

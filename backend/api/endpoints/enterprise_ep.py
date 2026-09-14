@@ -146,6 +146,21 @@ class EnterpriseRouter:
             ),
         )
         self.router.add_api_route(
+            path="/enterprise/poll/stream",
+            tags=["enterprise"],
+            endpoint=self.stream_enterprise_poll,
+            methods=["GET"],
+            summary="Poll one enterprise from DPD into the archive",
+            description=(
+                "Fetching, not reading: both granularities for the whole range "
+                "are polled from the DPD API and written to the archive, and "
+                "what comes back is how many records landed — not a table. "
+                "Viewing the archive is a separate screen and a separate "
+                "request, because the two are separate questions: one is "
+                "«піди візьми дані», the other «покажи, що є»."
+            ),
+        )
+        self.router.add_api_route(
             path="/enterprise/volumes/stream",
             tags=["enterprise"],
             endpoint=self.stream_enterprise_volumes,
@@ -222,6 +237,117 @@ class EnterpriseRouter:
             ),
         )
 
+
+    async def stream_enterprise_poll(
+        self,
+        enterprise_id: int = Query(..., description="Підприємство, яке опитуємо"),
+        from_date: str = Query(..., description="Start date (YYYY-MM-DD)"),
+        to_date: str = Query(..., description="End date (YYYY-MM-DD)"),
+        session: AsyncSession = Depends(get_session),
+    ) -> StreamingResponse:
+        """Poll one enterprise from DPD and store what comes back.
+
+        Both granularities, always. An operator who polled only the daily
+        archive and looked at the hourly one an hour later would find a hole
+        and no way to tell it from a corrector that had stopped reporting.
+        """
+        from backend.db.models.enterprise_model import Enterprise
+        from backend.services.enterprise_mappings import _query_assignments_db
+
+        date_from, date_to = parse_date_range(from_date, to_date)
+        devices = await _query_assignments_db(
+            session,
+            Enterprise.id == enterprise_id,
+            range_from=date_from,
+            range_to=date_to,
+            # The poll screen is the one place a deactivated point may still be
+            # read: somebody is looking at it precisely because it stopped.
+            include_inactive=True,
+        )
+        return StreamingResponse(
+            self._poll_events(devices, date_from, date_to),
+            media_type="application/x-ndjson",
+            headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+        )
+
+    @staticmethod
+    async def _poll_events(devices, date_from, date_to):
+        """Progress for each granularity, then what was stored.
+
+        Same NDJSON shape the volumes stream uses, so the browser reads both
+        with one parser: `progress` while it runs, then one final event.
+        """
+        from backend.api.main import _sanitize_nan
+
+        def dump(event) -> str:
+            return json.dumps(
+                _sanitize_nan(event), ensure_ascii=False,
+                allow_nan=False, separators=(",", ":"),
+            ) + chr(10)
+
+        if not devices:
+            yield dump({
+                "type": "error",
+                "message": "Немає встановлених корректорів за цей період",
+            })
+            return
+
+        stored: dict = {}
+        for period_type in ("daily", "hourly"):
+            queue: asyncio.Queue = asyncio.Queue()
+            latest = {"progress": None, "dirty": False}
+
+            fresh = {"inserted": 0, "updated": 0}
+
+            def events_cb(event, _latest=latest, _queue=queue,
+                          _period=period_type, _fresh=fresh):
+                if event.get("type") == "progress":
+                    _latest["progress"] = {**event, "period": _period}
+                    _latest["dirty"] = True
+                elif event.get("type") == "written":
+                    # Several calls can write within one poll — a backfill per
+                    # corrector that stood at this point — so they add up.
+                    _fresh["inserted"] += event.get("inserted", 0)
+                    _fresh["updated"] += event.get("updated", 0)
+                else:
+                    _queue.put_nowait({**event, "period": _period})
+
+            task = asyncio.create_task(fetch_dpd_volumes(
+                devices, date_from, date_to, period_type,
+                events_cb=events_cb, live=True,
+            ))
+            while not task.done():
+                await asyncio.sleep(0.1)
+                while not queue.empty():
+                    yield dump(queue.get_nowait())
+                if latest["dirty"]:
+                    latest["dirty"] = False
+                    yield dump(latest["progress"])
+            while not queue.empty():
+                yield dump(queue.get_nowait())
+
+            try:
+                volumes = task.result()
+            except Exception as error:              # noqa: BLE001
+                logger.error("DPD poll failed for %s: %s", period_type, error)
+                yield dump({
+                    "type": "error", "period": period_type, "message": str(error),
+                })
+                return
+            # New rows, not fetched ones. A poll of a month fetches a month
+            # every time; what the operator is waiting to hear is how much of
+            # it was not already here. Zero is a real answer worth printing —
+            # it means the archive was already current, which is different
+            # from a poll that failed.
+            stored[period_type] = fresh["inserted"]
+            yield dump({
+                "type": "stored", "period": period_type,
+                "records": fresh["inserted"],
+                "rewritten": fresh["updated"],
+                "fetched": len(volumes),
+            })
+
+        yield dump({"type": "done", "stored": stored})
 
     async def stream_enterprise_volumes(
         self,
@@ -733,6 +859,45 @@ enterprise_router = EnterpriseRouter().router
 _crud_router = APIRouter(tags=["enterprise"])
 
 
+async def _save_gsm(session, enterprise_id: int, gsm) -> None:
+    """Write the modem settings, refusing a number no modem can dial.
+
+    The refusal belongs here rather than in the browser: a card saved with
+    "050…" would look right on the screen and fail every night with "no
+    dialtone", which reads exactly like a dead line.
+    """
+    from backend.db.dao.polling_dao import PollingDao
+    from backend.services.poll_validation import (
+        PollValidationError, validate_poll_times,
+    )
+
+    try:
+        times = validate_poll_times(gsm.poll_times)
+        await PollingDao(session).set_gsm(
+            enterprise_id, gsm.phone, gsm.auto_poll, times
+        )
+    except PollValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error))
+
+
+async def _read_enterprise(session, dao, ent) -> EnterpriseRead:
+    from backend.db.dao.polling_dao import PollingDao
+    from backend.db.models.enterprise_model import EnterpriseGsm
+
+    card = await PollingDao(session).gsm_of_enterprise(ent.id)
+    return EnterpriseRead(
+        **ent.model_dump(),
+        devices=[
+            EnterpriseDeviceRead(**d) for d in await dao.get_history_resolved(ent.id)
+        ],
+        gsm=None if card is None else EnterpriseGsm(
+            phone=card.phone,
+            auto_poll=card.auto_poll,
+            poll_times=card.poll_times or [],
+        ),
+    )
+
+
 @_crud_router.get(
     "/enterprise-mappings/",
     response_model=List[EnterpriseRead],
@@ -753,15 +918,29 @@ async def list_enterprises(
     if branch_ids is not None:
         stmt = stmt.where(Enterprise.branch_id.in_(branch_ids))
 
+    from backend.db.dao.polling_dao import PollingDao
+    from backend.db.models.enterprise_model import EnterpriseGsm
+
     dao = EnterpriseDao(session=session)
+    # One query for the whole fleet: the switch between ДПД and ЖСМ on the
+    # poll screen is drawn from this, and asking per row would be a query per
+    # enterprise down a list that runs to hundreds.
+    modems = await PollingDao(session).gsm_by_enterprise()
+
     result = []
     for ent in (await session.execute(stmt)).scalars().all():
+        card = modems.get(ent.id)
         result.append(EnterpriseRead(
             **ent.model_dump(),
             devices=[
                 EnterpriseDeviceRead(**d)
                 for d in await dao.get_history_resolved(ent.id)
             ],
+            gsm=None if card is None else EnterpriseGsm(
+                phone=card.phone,
+                auto_poll=card.auto_poll,
+                poll_times=card.poll_times or [],
+            ),
         ))
     return result
 
@@ -808,18 +987,15 @@ def _check_single_line(data) -> None:
 async def create_enterprise(data: EnterpriseCreate, session: AsyncSession = Depends(get_session)):
     _check_single_line(data)
     dao = EnterpriseDao(session=session)
-    ent = Enterprise(**data.model_dump(exclude={"devices"}))
+    ent = Enterprise(**data.model_dump(exclude={"devices", "gsm"}))
     session.add(ent)
     await session.flush()
     await _validate_history(dao, ent.id, data.devices)
     await dao.replace_history(ent.id, data.devices)
+    if data.gsm is not None:
+        await _save_gsm(session, ent.id, data.gsm)
     await session.commit()
-    return EnterpriseRead(
-        **ent.model_dump(),
-        devices=[
-            EnterpriseDeviceRead(**d) for d in await dao.get_history_resolved(ent.id)
-        ],
-    )
+    return await _read_enterprise(session, dao, ent)
 
 
 @_crud_router.patch(
@@ -837,7 +1013,7 @@ async def update_enterprise(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Enterprise not found")
 
     for field, value in data.model_dump(
-        exclude={"devices"}, exclude_unset=True
+        exclude={"devices", "gsm"}, exclude_unset=True
     ).items():
         setattr(ent, field, value)
     # Absent `devices` leaves the history alone: a toggle of «Активний» must
@@ -845,14 +1021,11 @@ async def update_enterprise(
     if data.devices is not None:
         await _validate_history(dao, enterprise_id, data.devices)
         await dao.replace_history(enterprise_id, data.devices)
+    if data.gsm is not None:
+        await _save_gsm(session, enterprise_id, data.gsm)
     await session.commit()
     await session.refresh(ent)
-    return EnterpriseRead(
-        **ent.model_dump(),
-        devices=[
-            EnterpriseDeviceRead(**d) for d in await dao.get_history_resolved(ent.id)
-        ],
-    )
+    return await _read_enterprise(session, dao, ent)
 
 
 @_crud_router.delete(

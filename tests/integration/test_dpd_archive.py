@@ -392,6 +392,15 @@ class TestSource:
                      "press": None, "temper": None, "press_unit": None},
                 ], source="gsm")
 
+    async def _poll_over_gsm_with_unit(self, dev, unit):
+        async with async_session_factory() as session:
+            async with session.begin():
+                await DpdArchiveDao(session).upsert_records("daily", [
+                    {"device_id": dev["device_id"], "stamp": as_dt(D_OLD5),
+                     "dvst_alwrk": 1.0, "dvwrk_alwrk": None,
+                     "press": 0.15, "temper": None, "press_unit": unit},
+                ], source="gsm")
+
     async def test_the_api_refresh_marks_its_rows(self, dpd_mock, make_enterprise):
         dev = await make_enterprise(101)
         await seed_archive(dev, "daily", [D_OLD5], loaded_from=D_OLD5)
@@ -424,6 +433,41 @@ class TestSource:
         await self._poll_over_gsm(dev, 777.0)
         await self._poll_over_gsm(dev, 888.0)
         assert (await archive_rows("daily"))[0]["dvst_alwrk"] == 888.0
+
+    async def test_a_poll_that_does_not_know_the_unit_does_not_erase_it(
+        self, dpd_mock, make_enterprise
+    ):
+        """The unit is the one column a writer may legitimately not know.
+
+        A modem reads the number a corrector stores and, for most families,
+        nothing that says what it is in. ДПД does report it — and if the poll
+        wrote its silence over that, the row would be left unreadable: 0.15
+        under a column captioned кгс/см² instead of МПа, a factor of ten.
+        """
+        dev = await make_enterprise(101)
+        await seed_archive(dev, "daily", [D_OLD5], loaded_from=D_OLD5)
+        async with async_session_factory() as session:
+            async with session.begin():
+                await DpdArchiveDao(session).upsert_records("daily", [
+                    {"device_id": dev["device_id"], "stamp": as_dt(D_OLD5),
+                     "dvst_alwrk": 1.0, "dvwrk_alwrk": None, "press": 0.15,
+                     "temper": None, "press_unit": "МПа"},
+                ], source="dpd")
+
+        await self._poll_over_gsm(dev, 777.0)
+
+        row = (await archive_rows("daily"))[0]
+        assert (row["source"], row["dvst_alwrk"]) == ("gsm", 777.0)
+        assert row["press_unit"] == "МПа", "the unit ДПД reported must stand"
+
+    async def test_a_poll_that_does_know_the_unit_says_so(
+        self, dpd_mock, make_enterprise
+    ):
+        """A КПЛГ stores kgf/cm² and the agent converts, so that one is known
+        and is sent — otherwise the row is read under the line's default."""
+        dev = await make_enterprise(101)
+        await self._poll_over_gsm_with_unit(dev, "МПа")
+        assert (await archive_rows("daily"))[0]["press_unit"] == "МПа"
 
 
 class TestRefreshJob:
