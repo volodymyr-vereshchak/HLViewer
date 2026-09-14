@@ -38,6 +38,14 @@ MANIFEST
 /backend/data/*
 !/backend/data/askcfgs/
 !/backend/data/askcfgs/**
+# The poll agent's build. Tracked on purpose, unlike every other artifact
+# here: the offline server is fed by git bundles, so a build that is not in
+# git never reaches it. A zip rather than the .exe — the archive saves nothing
+# on size, but an .exe travelling to an operator's browser is what proxies and
+# mail filters strike out. Only the current one is kept in the tree.
+!/backend/data/agent/
+!/backend/data/agent/hlv-poller-*.zip
+
 # Shipped dictionary, not operational data: the accidents report reads it to
 # turn DPD's event keys into wording we control.
 !/backend/data/dpd_event_names.json

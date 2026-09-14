@@ -933,6 +933,41 @@ class TestHandingOutTheAgent:
         # Named in the response, or the browser saves it as "installer".
         assert "hlv-poller-0.2.0.exe" in got.headers["content-disposition"]
 
+    async def test_the_build_travels_as_a_zip(
+        self, admin_client, tmp_path, monkeypatch
+    ):
+        """And is served as one.
+
+        The .exe inside is already compressed — the archive saves a tenth of a
+        megabyte. It is a zip because of where it has to go: into git, so a
+        bundle carries it to an offline server, and out through a browser,
+        where a bare .exe is what proxies and mail filters strike out.
+        """
+        (tmp_path / "hlv-poller-0.3.0.zip").write_bytes(b"PK zipped")
+        monkeypatch.setitem(backend_settings, "AGENT_DIST_DIR", str(tmp_path))
+
+        info = (await admin_client.get("/polling/agents/installer/info")).json()
+        assert info["available"] is True
+        assert info["version"] == "0.3.0"
+        assert info["filename"] == "hlv-poller-0.3.0.zip"
+
+        got = await admin_client.get("/polling/agents/installer")
+        assert got.status_code == 200
+        assert got.content == b"PK zipped"
+        assert got.headers["content-type"] == "application/zip"
+        assert "hlv-poller-0.3.0.zip" in got.headers["content-disposition"]
+
+    async def test_a_server_holding_the_older_plain_exe_still_serves_it(
+        self, admin_client, tmp_path, monkeypatch
+    ):
+        """Servers set up before the zip have an .exe sitting there."""
+        (tmp_path / "hlv-poller-0.2.0.exe").write_bytes(b"MZ")
+        monkeypatch.setitem(backend_settings, "AGENT_DIST_DIR", str(tmp_path))
+
+        got = await admin_client.get("/polling/agents/installer")
+        assert got.status_code == 200
+        assert got.headers["content-type"].endswith("portable-executable")
+
     async def test_a_viewer_does_not_get_the_agent(self, viewer_client, tmp_path,
                                                    monkeypatch):
         (tmp_path / "hlv-poller-0.1.0.exe").write_bytes(b"MZ")

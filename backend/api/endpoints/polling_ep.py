@@ -692,9 +692,18 @@ async def agent_installer_info():
     )
 
 
+#: What each build is served as. A wrong type is not fatal — the browser saves
+#: the file either way — but it is what decides whether it opens a "save" dialog
+#: or tries to display the bytes.
+INSTALLER_TYPES = {
+    ".zip": "application/zip",
+    ".exe": "application/vnd.microsoft.portable-executable",
+}
+
+
 @router.get("/agents/installer", dependencies=[Depends(require_admin)])
 async def download_agent_installer():
-    """The .exe itself.
+    """The build itself.
 
     Admin-only, like the rest of this screen — not because the file is a
     secret (it is useless without a key) but because the machine that polls
@@ -709,7 +718,8 @@ async def download_agent_installer():
         )
     return FileResponse(
         found.path,
-        media_type="application/vnd.microsoft.portable-executable",
+        media_type=INSTALLER_TYPES.get(found.path.suffix.lower(),
+                                       "application/octet-stream"),
         filename=found.filename,
     )
 
