@@ -9,7 +9,8 @@ import asyncio
 import json
 import logging
 import pandas as pd
-from typing import List, Optional
+from datetime import datetime
+from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends, Query, status, HTTPException, UploadFile, File
 from backend.api.endpoints.auth_ep import get_branch_filter
 from backend.api.endpoints.enterprise_virtual_ep import resolve_virtual_devices
@@ -21,7 +22,7 @@ from sqlmodel import select
 from backend.db.engine import get_session
 from backend.db.dao.dpd_archive_dao import DpdArchiveDao
 from backend.db.dao.enterprise_dao import EnterpriseDao
-from backend.services import dpd_archive_refresh
+from backend.services import archive_cleanup, dpd_archive_refresh
 from backend.db.models.enterprise_model import (
     Enterprise,
     EnterpriseCreate,
@@ -222,6 +223,31 @@ class EnterpriseRouter:
             summary="DPD archive refresh status",
         )
         self.router.add_api_route(
+            path="/enterprise/{enterprise_id}/archive/preview",
+            tags=["enterprise"],
+            endpoint=self.preview_archive_purge,
+            methods=["GET"],
+            summary="How many archive rows a purge would remove",
+            description=(
+                "Counts, removes nothing. The range is clipped to each "
+                "corrector's own window at this point, so a device that moved "
+                "here later keeps the rows it made elsewhere."
+            ),
+        )
+        self.router.add_api_route(
+            path="/enterprise/{enterprise_id}/archive",
+            tags=["enterprise"],
+            endpoint=self.purge_archive,
+            methods=["DELETE"],
+            summary="Remove this point's archive rows in a date range",
+            description=(
+                "Both granularities. Admin-only (the auth middleware requires "
+                "the admin role for any DELETE). Rows inside the last "
+                "DPD_ARCHIVE_WINDOW_DAYS come back on the next nightly "
+                "refresh; older ones stay gone until that range is polled."
+            ),
+        )
+        self.router.add_api_route(
             path="/enterprise/archive/refresh/schedule",
             tags=["enterprise"],
             endpoint=self.set_archive_refresh_schedule,
@@ -238,11 +264,44 @@ class EnterpriseRouter:
         )
 
 
+    async def preview_archive_purge(
+        self,
+        enterprise_id: int,
+        from_date: str = Query(..., description="Перший день (YYYY-MM-DD)"),
+        to_date: str = Query(..., description="Останній день, включно"),
+        session: AsyncSession = Depends(get_session),
+    ) -> Dict:
+        """What a purge of this range would take. Counts only."""
+        since, until = archive_cleanup.day_bounds(
+            *(moment.date() for moment in parse_date_range(from_date, to_date))
+        )
+        return await archive_cleanup.preview(session, enterprise_id, since, until)
+
+    async def purge_archive(
+        self,
+        enterprise_id: int,
+        from_date: str = Query(..., description="Перший день (YYYY-MM-DD)"),
+        to_date: str = Query(..., description="Останній день, включно"),
+        session: AsyncSession = Depends(get_session),
+    ) -> Dict:
+        """Remove this point's archive rows in that range.
+
+        Deliberate and irreversible, which is why the screen that calls it
+        shows the count first: the numbers come back from DPD only where DPD
+        still has them.
+        """
+        since, until = archive_cleanup.day_bounds(
+            *(moment.date() for moment in parse_date_range(from_date, to_date))
+        )
+        removed = await archive_cleanup.purge(session, enterprise_id, since, until)
+        await session.commit()
+        return removed
+
     async def stream_enterprise_poll(
         self,
         enterprise_id: int = Query(..., description="Підприємство, яке опитуємо"),
-        from_date: str = Query(..., description="Start date (YYYY-MM-DD)"),
-        to_date: str = Query(..., description="End date (YYYY-MM-DD)"),
+        from_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+        to_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
         session: AsyncSession = Depends(get_session),
     ) -> StreamingResponse:
         """Poll one enterprise from DPD and store what comes back.
@@ -250,11 +309,22 @@ class EnterpriseRouter:
         Both granularities, always. An operator who polled only the daily
         archive and looked at the hourly one an hour later would find a hole
         and no way to tell it from a corrector that had stopped reporting.
+
+        Without dates the server picks them, which is the normal case: from
+        where this point's archive ends to tomorrow, and from the start of 2024
+        for a point that has nothing. The window is not a question for the
+        operator — getting it wrong leaves holes — and it is decided here
+        rather than in the browser because this is where the archive is.
         """
         from backend.db.models.enterprise_model import Enterprise
         from backend.services.enterprise_mappings import _query_assignments_db
 
-        date_from, date_to = parse_date_range(from_date, to_date)
+        if from_date and to_date:
+            date_from, date_to = parse_date_range(from_date, to_date)
+        else:
+            since, until = await archive_cleanup.poll_range(session, enterprise_id)
+            date_from = datetime.combine(since, datetime.min.time())
+            date_to = datetime.combine(until, datetime.min.time())
         devices = await _query_assignments_db(
             session,
             Enterprise.id == enterprise_id,
