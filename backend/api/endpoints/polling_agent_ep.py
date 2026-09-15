@@ -27,7 +27,7 @@ from backend.db.dao.dpd_line_dao import DpdLineArchiveDao
 from backend.db.dao.polling_dao import PollingDao
 from backend.db.engine import get_session
 from backend.db.models.polling_model import PollAgent, PollDevice
-from backend.services import poll_journal
+from backend.services import agent_version, poll_journal
 from backend.services.poll_schedule import is_due
 from backend.settings import backend_settings
 
@@ -125,6 +125,10 @@ class Progress(BaseModel):
 
     done: int = 0
     total: int = 0
+    #: Which ring those numbers count: "hourly" or "daily". A bar labelled
+    #: from the first phase it saw spent the whole daily read calling days
+    #: hours.
+    phase: Optional[str] = None
 
 
 class LogBatch(BaseModel):
@@ -215,6 +219,12 @@ async def get_plan(
     await dao.touch_agent(agent, None, None)
     await session.commit()
 
+    # An agent that is not the build this server hands out is told so once, in
+    # the plan, instead of being refused device by device: it stops dialling
+    # the moment it asks, and the reason travels with every card it can see.
+    wanted = agent_version.expected()
+    outdated = not agent_version.matches(agent.version, wanted)
+
     devices = []
     for row in await dao.list_devices():
         card: PollDevice = row["card"]
@@ -247,6 +257,9 @@ async def get_plan(
         # call. The claim, not the schedule, is what settles this.
         if due and card.polling_agent_id != agent.id and dao.claim_is_live(card, now):
             due, reason = False, "опитує інший агент"
+
+        if outdated:
+            due, reason = False, f"агент {agent.version or '—'}, потрібен {wanted}"
 
         last = coverage.get(card.id, {})
         devices.append(PlanDevice(
@@ -331,6 +344,16 @@ async def start_session(
     the next one.
     """
     dao = PollingDao(session)
+    # Before anything else: an agent that is not the build this server hands
+    # out does not poll. See services/agent_version — the build of 14.09 wrote
+    # a whole column of pressures a factor of ten out, and the workstation
+    # carried on running it after the fix had shipped.
+    wanted = agent_version.expected()
+    if not agent_version.matches(agent.version, wanted):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=agent_version.refusal(agent.version, wanted),
+        )
     if device_id not in await dao.agent_devices(agent.id):
         raise HTTPException(status_code=403, detail="Прилад не закріплений за агентом")
     if not await dao.claim(device_id, agent.id):
@@ -363,15 +386,24 @@ async def push_log(
     if body.reset:
         card.progress_done = None
         card.progress_total = None
+        card.progress_phase = None
         # One file per session: the screen that follows the call reads this
         # same file, so the previous session must not still be in it.
         poll_journal.start(path, await _journal_title(dao, card, agent))
     if body.progress is not None:
         card.progress_done = body.progress.done
         card.progress_total = body.progress.total
+        card.progress_phase = body.progress.phase
     poll_journal.append(path, lines)
     await session.commit()
-    return {"last_seq": max((line.get("seq", 0) for line in lines), default=0)}
+    # The answer carries the one instruction this protocol has. The agent
+    # talks to us every couple of seconds while it reads and at no other
+    # time, so a cancel asked for from the browser reaches the modem in about
+    # that long — without inventing a channel for it.
+    return {
+        "last_seq": max((line.get("seq", 0) for line in lines), default=0),
+        "cancel": card.cancel_requested_at is not None,
+    }
 
 
 def _journal_of(card: PollDevice) -> Path:

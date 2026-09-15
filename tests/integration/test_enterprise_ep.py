@@ -861,6 +861,41 @@ class TestTheModemOnTheEnterpriseCard:
         assert updated["gsm"]["poll_times"] == ["06:00", "18:00"]
         assert updated["gsm"]["auto_poll"] is True
 
+    async def test_the_machine_that_dials_is_set_here_too(
+        self, admin_client, seed_users
+    ):
+        """Setting a site up is one form, not two.
+
+        Which agent dials used to be chosen in the monitor — a different tab,
+        easy to forget, and forgetting it left a number nobody ever called
+        while every column said the site was fine.
+        """
+        agent = (await admin_client.post(
+            "/polling/agents", json={"name": "АРМ диспетчера"})).json()
+        created = (await admin_client.post("/enterprise-mappings/", json={
+            "enterprise_name": "Завод із агентом", "active": True, "enabled": True,
+        })).json()
+
+        updated = (await admin_client.patch(
+            f"/enterprise-mappings/{created['id']}",
+            json={"gsm": {"phone": "+380501234567", "auto_poll": False,
+                          "poll_times": [], "agent_ids": [agent["id"]]}},
+        )).json()
+        assert updated["gsm"]["agent_ids"] == [agent["id"]]
+
+        # And the monitor, which reads the same assignment from the other end.
+        cards = (await admin_client.get("/polling/devices")).json()
+        mine = [c for c in cards if c["enterprise_id"] == created["id"]]
+        assert mine and mine[0]["agent_ids"] == [agent["id"]]
+
+        # Taken away again: an empty list is a real state — nobody dials it.
+        emptied = (await admin_client.patch(
+            f"/enterprise-mappings/{created['id']}",
+            json={"gsm": {"phone": "+380501234567", "auto_poll": False,
+                          "poll_times": [], "agent_ids": []}},
+        )).json()
+        assert emptied["gsm"]["agent_ids"] == []
+
     async def test_an_undialable_number_is_refused_at_the_card(
         self, admin_client, seed_users
     ):

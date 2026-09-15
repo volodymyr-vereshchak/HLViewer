@@ -836,3 +836,106 @@ class TestTwoAgentsOnOneSite:
             "/polling/agent/plan", headers=key(second))).json()
         # Polled, so not due — but for the schedule's reason, not the claim's.
         assert plan["devices"][0]["due_reason"] != "опитує інший агент"
+
+
+class TestTheAgentMustBeTheBuildTheServerHandsOut:
+    """An agent of another version does not poll.
+
+    The build of 14.09 read a ВЕГА's display unit and filed the archive's own
+    number under it — 6.15 кгс/см² stored as 6.15 МПа, a tenfold error that
+    reads as an ordinary pressure. The fix shipped an hour later and the
+    workstation carried on running the old .exe, writing the same wrong column
+    again. A poll by a build known to be wrong is worth less than no poll: a
+    gap is visible, a plausible number is not.
+    """
+
+    async def test_an_older_agent_is_told_so_and_gets_nothing_to_do(
+        self, anon_client, session_ready, tmp_path, monkeypatch
+    ):
+        monkeypatch.setitem(backend_settings, "AGENT_DIST_DIR", str(tmp_path))
+        (tmp_path / "hlv-poller-0.3.0.zip").write_bytes(b"PK")
+        agent, card = session_ready["agent"], session_ready["card"]
+
+        await anon_client.post(
+            "/polling/agent/state",
+            json={"version": "0.2.9", "host": "АРМ", "due_count": 0},
+            headers=key(agent),
+        )
+
+        plan = (await anon_client.get(
+            "/polling/agent/plan", headers=key(agent)
+        )).json()
+        assert all(d["due"] is False for d in plan["devices"])
+        assert "0.2.9" in plan["devices"][0]["due_reason"]
+        assert "0.3.0" in plan["devices"][0]["due_reason"]
+
+        # And the door is shut too, not only the sign above it.
+        refused = await anon_client.post(
+            f"/polling/agent/devices/{card['id']}/start", headers=key(agent)
+        )
+        assert refused.status_code == 409
+        assert "0.3.0" in refused.json()["detail"]
+
+    async def test_a_newer_agent_is_refused_just_the_same(
+        self, anon_client, session_ready, tmp_path, monkeypatch
+    ):
+        """Newer means the server was not updated, which is the same mistake."""
+        monkeypatch.setitem(backend_settings, "AGENT_DIST_DIR", str(tmp_path))
+        (tmp_path / "hlv-poller-0.3.0.zip").write_bytes(b"PK")
+        agent, card = session_ready["agent"], session_ready["card"]
+
+        await anon_client.post(
+            "/polling/agent/state",
+            json={"version": "0.4.0", "host": "АРМ", "due_count": 0},
+            headers=key(agent),
+        )
+        refused = await anon_client.post(
+            f"/polling/agent/devices/{card['id']}/start", headers=key(agent)
+        )
+        assert refused.status_code == 409
+
+    async def test_the_matching_build_polls_as_before(
+        self, anon_client, session_ready, tmp_path, monkeypatch
+    ):
+        monkeypatch.setitem(backend_settings, "AGENT_DIST_DIR", str(tmp_path))
+        (tmp_path / "hlv-poller-0.3.0.zip").write_bytes(b"PK")
+        agent, card = session_ready["agent"], session_ready["card"]
+
+        await anon_client.post(
+            f"/polling/agent/devices/{card['id']}/finish",
+            json={"status": "ok", "rows": {}},
+            headers=key(agent),
+        )
+        await anon_client.post(
+            "/polling/agent/state",
+            json={"version": "0.3.0", "host": "АРМ", "due_count": 0},
+            headers=key(agent),
+        )
+        taken = await anon_client.post(
+            f"/polling/agent/devices/{card['id']}/start", headers=key(agent)
+        )
+        assert taken.status_code == 200
+
+    async def test_a_server_with_no_build_blocks_nobody(
+        self, anon_client, session_ready, tmp_path, monkeypatch
+    ):
+        """No build published is not a stale fleet — it is a server nobody has
+        published an agent from, and it must not stop the polling it already
+        has."""
+        monkeypatch.setitem(backend_settings, "AGENT_DIST_DIR", str(tmp_path))
+        agent, card = session_ready["agent"], session_ready["card"]
+
+        await anon_client.post(
+            f"/polling/agent/devices/{card['id']}/finish",
+            json={"status": "ok", "rows": {}},
+            headers=key(agent),
+        )
+        await anon_client.post(
+            "/polling/agent/state",
+            json={"version": "0.1.0", "host": "АРМ", "due_count": 0},
+            headers=key(agent),
+        )
+        taken = await anon_client.post(
+            f"/polling/agent/devices/{card['id']}/start", headers=key(agent)
+        )
+        assert taken.status_code == 200

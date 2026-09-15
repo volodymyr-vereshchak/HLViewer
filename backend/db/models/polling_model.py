@@ -236,6 +236,16 @@ class PollDevice(HlBaseModel, table=True):
     # screen that says nothing for ten minutes reads as a screen that hung.
     progress_done: Optional[int] = Field(default=None)
     progress_total: Optional[int] = Field(default=None)
+    #: Which archive those numbers are counting — "hourly", "daily", or None
+    #: before the reading starts. A count with no unit is worse than none: the
+    #: bar said "прочитано годин" all the way through the daily ring, and the
+    #: numbers under it were days.
+    progress_phase: Optional[str] = Field(default=None, max_length=16)
+
+    #: Set when somebody asks the running call to stop. The agent reads it on
+    #: its next log push — a second or two — and hangs up between records,
+    #: which is the only moment at which nothing is half-read.
+    cancel_requested_at: Optional[datetime] = Field(default=None)
 
     last_duration_ms: Optional[int] = Field(default=None)
     last_connect_ms: Optional[int] = Field(default=None)

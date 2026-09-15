@@ -193,6 +193,14 @@ class EnterpriseGsm(SQLModel):
     auto_poll: bool = False
     #: A list of "HH:MM". Empty means the hours set globally.
     poll_times: List[str] = []
+    #: Which machines dial this number. It belongs on this card with the rest
+    #: of the modem's settings: setting a site up is one screen, not two, and
+    #: a number entered without an agent is a card that quietly never polls.
+    #: Empty is a real state and the monitor marks it — nobody dials it.
+    #:
+    #: Several are allowed, and mean a shared queue rather than a duplicate
+    #: call: whichever agent asks first takes the site, the other skips it.
+    agent_ids: List[int] = []
 
 
 class EnterpriseRead(EnterpriseBase):

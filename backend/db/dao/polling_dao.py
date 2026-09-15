@@ -157,6 +157,15 @@ class PollingDao:
     #: is a workstation that has gone home.
     AGENT_SILENCE = timedelta(seconds=60)
 
+    async def agents_for(self, card_id: int) -> List[PollAgent]:
+        """Every active agent this card was given to, awake or not."""
+        return list((await self.session.execute(
+            select(PollAgent)
+            .join(PollAgentDevice, PollAgentDevice.agent_id == PollAgent.id)
+            .where(PollAgentDevice.poll_device_id == card_id)
+            .where(PollAgent.active.is_(True))
+        )).scalars().all())
+
     async def free_agents_for(self, card_id: int) -> List[PollAgent]:
         """Agents that took this card and are alive enough to answer.
 
@@ -164,15 +173,15 @@ class PollingDao:
         machine was switched off still holds its assignment, and a request
         handed to it would sit unread until morning — which the screen would
         show as a poll that simply never finished.
+
+        Kept apart from `agents_for` because the difference is the whole of
+        the message an operator gets: nobody assigned is a card to set up,
+        and everybody asleep is a machine to switch on. Both used to read
+        "немає вільного модема", which is advice for neither.
         """
-        rows = (await self.session.execute(
-            select(PollAgent)
-            .join(PollAgentDevice, PollAgentDevice.agent_id == PollAgent.id)
-            .where(PollAgentDevice.poll_device_id == card_id)
-            .where(PollAgent.active.is_(True))
-        )).scalars().all()
         alive = datetime.now() - self.AGENT_SILENCE
-        return [a for a in rows if a.last_seen_at and a.last_seen_at >= alive]
+        return [a for a in await self.agents_for(card_id)
+                if a.last_seen_at and a.last_seen_at >= alive]
 
     async def gsm_of_enterprise(self, enterprise_id: int) -> Optional[PollDevice]:
         return (await self.session.execute(
@@ -467,6 +476,14 @@ class PollingDao:
             )
         await self.session.flush()
 
+    async def device_agents(self, device_id: int) -> List[int]:
+        """Agents that took one card — the single-card form of `assignments`."""
+        return list((await self.session.execute(
+            select(PollAgentDevice.agent_id)
+            .where(PollAgentDevice.poll_device_id == device_id)
+            .order_by(PollAgentDevice.agent_id)
+        )).scalars().all())
+
     async def set_device_agents(self, device_id: int, agent_ids: List[int]) -> None:
         """Replace the machines that poll this one enterprise.
 
@@ -678,6 +695,11 @@ class PollingDao:
     async def release(self, card: PollDevice) -> None:
         card.polling_agent_id = None
         card.polling_since = None
+        # A cancellation belongs to the call it stopped. Left standing, it
+        # would end the next one before it had begun — and the next one is
+        # usually the retry somebody asked for after cancelling.
+        card.cancel_requested_at = None
+        card.progress_phase = None
 
     async def finish(
         self,

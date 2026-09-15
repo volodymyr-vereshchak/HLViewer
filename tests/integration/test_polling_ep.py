@@ -23,7 +23,7 @@ from backend.db.models.enterprise_model import (
     DpdDevice, Enterprise, EnterpriseDevice,
 )
 from backend.db.models.grmu_branch_model import GrmuBranch
-from backend.db.models.polling_model import PollAgent
+from backend.db.models.polling_model import PollAgent, PollDevice
 from backend.settings import backend_settings
 
 
@@ -627,13 +627,14 @@ class TestPollingAnEnterpriseNow:
         assert resp.status_code == 422
         assert resp.json()["detail"] == "Немає встановлених корректорів"
 
-    async def test_no_agent_on_the_line_means_no_immediate_poll(
-        self, admin_client, targets
-    ):
-        """An assignment held by a switched-off machine is not a free modem.
+    async def test_a_site_nobody_was_given_says_so(self, admin_client, targets):
+        """Not "немає вільного модема" — there is no modem to be free.
 
-        The request would sit unread until morning, and the screen would show
-        a poll that never finished rather than one that never started.
+        The two refusals used to share that sentence, and it is advice for
+        neither: a card nobody was given needs an agent chosen, and an agent
+        that is switched off needs somebody to start it. An operator reading
+        "жоден агент не на зв'язку" for a site that was never assigned goes
+        looking at the workstation, which is fine, and finds it running.
         """
         await _set_protocol(targets["corector_type_id"], 1054)
         await make_card(
@@ -644,7 +645,36 @@ class TestPollingAnEnterpriseNow:
             f"/polling/enterprises/{targets['enterprise_id']}/poll"
         )
         assert resp.status_code == 422
-        assert "вільного модема" in resp.json()["detail"]
+        assert "не призначено жодного агента" in resp.json()["detail"]
+
+    async def test_an_assigned_but_sleeping_agent_is_named(
+        self, admin_client, targets
+    ):
+        """An assignment held by a switched-off machine is not a free modem.
+
+        The request would sit unread until morning, and the screen would show
+        a poll that never finished rather than one that never started. The
+        machine is named, because that is the one thing the operator needs in
+        order to go and switch it on.
+        """
+        await _set_protocol(targets["corector_type_id"], 1054)
+        card = await make_card(
+            admin_client, enterprise_id=targets["enterprise_id"],
+            phone="+380501234567",
+        )
+        agent = (await admin_client.post(
+            "/polling/agents", json={"name": "АРМ вимкнений"})).json()
+        await admin_client.put(
+            f"/polling/devices/{card['id']}/agents",
+            json={"agent_ids": [agent["id"]]},
+        )
+
+        resp = await admin_client.post(
+            f"/polling/enterprises/{targets['enterprise_id']}/poll"
+        )
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert "АРМ вимкнений" in detail and "не на зв'язку" in detail
 
     async def test_a_model_no_reader_covers_is_refused_before_dialling(
         self, admin_client, anon_client, targets
@@ -1108,3 +1138,74 @@ async def _claimed_card(admin_client, anon_client, targets) -> tuple[dict, dict]
     await anon_client.post(
         f"/polling/agent/devices/{card['id']}/start", headers=headers)
     return card, headers
+
+
+@pytest.mark.asyncio
+class TestStoppingAPollThatWasStartedByMistake:
+    """Two different things wear the same button.
+
+    A request nobody has taken is simply withdrawn. A call already running
+    cannot be stopped from here at all — the modem is on another machine — so
+    a flag is raised and the agent hangs up between records, which is the only
+    moment at which nothing is half-read.
+    """
+
+    async def test_a_request_nobody_took_is_withdrawn(self, admin_client, targets):
+        await _set_protocol(targets["corector_type_id"], 1054)
+        card = await make_card(
+            admin_client, enterprise_id=targets["enterprise_id"],
+            phone="+380501234567",
+        )
+        async with async_session_factory() as session:
+            row = await session.get(PollDevice, card["id"])
+            row.manual_requested_at = datetime.now()
+            await session.commit()
+
+        resp = await admin_client.post(
+            f"/polling/enterprises/{targets['enterprise_id']}/poll/cancel"
+        )
+        assert resp.status_code == 200
+        assert resp.json()["outcome"] == "queued"
+
+        async with async_session_factory() as session:
+            row = await session.get(PollDevice, card["id"])
+            assert row.manual_requested_at is None
+            # Nothing was running, so nothing is asked to stop: a flag left
+            # standing would end the retry somebody presses next.
+            assert row.cancel_requested_at is None
+
+    async def test_a_running_call_is_asked_to_hang_up(self, admin_client, targets):
+        await _set_protocol(targets["corector_type_id"], 1054)
+        card = await make_card(
+            admin_client, enterprise_id=targets["enterprise_id"],
+            phone="+380501234567",
+        )
+        agent = (await admin_client.post(
+            "/polling/agents", json={"name": "АРМ на дзвінку"})).json()
+        async with async_session_factory() as session:
+            row = await session.get(PollDevice, card["id"])
+            row.polling_agent_id = agent["id"]
+            row.polling_since = datetime.now()
+            await session.commit()
+
+        resp = await admin_client.post(
+            f"/polling/enterprises/{targets['enterprise_id']}/poll/cancel"
+        )
+        assert resp.json()["outcome"] == "asked"
+
+        watch = (await admin_client.get(
+            f"/polling/enterprises/{targets['enterprise_id']}/poll")).json()
+        assert watch["cancelling"] is True
+
+    async def test_nothing_running_is_said_rather_than_refused(
+        self, admin_client, targets
+    ):
+        await make_card(
+            admin_client, enterprise_id=targets["enterprise_id"],
+            phone="+380501234567",
+        )
+        resp = await admin_client.post(
+            f"/polling/enterprises/{targets['enterprise_id']}/poll/cancel"
+        )
+        assert resp.status_code == 200
+        assert resp.json()["outcome"] == "idle"

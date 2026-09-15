@@ -941,13 +941,19 @@ async def _save_gsm(session, enterprise_id: int, gsm) -> None:
         PollValidationError, validate_poll_times,
     )
 
+    dao = PollingDao(session)
     try:
         times = validate_poll_times(gsm.poll_times)
-        await PollingDao(session).set_gsm(
-            enterprise_id, gsm.phone, gsm.auto_poll, times
-        )
+        await dao.set_gsm(enterprise_id, gsm.phone, gsm.auto_poll, times)
     except PollValidationError as error:
         raise HTTPException(status_code=422, detail=str(error))
+
+    # After the card exists, and only if it does: clearing the number deletes
+    # it, and assignments to a card that is gone would be rows pointing at
+    # nothing. Postgres removes them with it.
+    card = await dao.gsm_of_enterprise(enterprise_id)
+    if card is not None:
+        await dao.set_device_agents(card.id, gsm.agent_ids)
 
 
 async def _read_enterprise(session, dao, ent) -> EnterpriseRead:
@@ -964,6 +970,7 @@ async def _read_enterprise(session, dao, ent) -> EnterpriseRead:
             phone=card.phone,
             auto_poll=card.auto_poll,
             poll_times=card.poll_times or [],
+            agent_ids=await PollingDao(session).device_agents(card.id),
         ),
     )
 
@@ -996,6 +1003,7 @@ async def list_enterprises(
     # poll screen is drawn from this, and asking per row would be a query per
     # enterprise down a list that runs to hundreds.
     modems = await PollingDao(session).gsm_by_enterprise()
+    assigned = await PollingDao(session).assignments()
 
     result = []
     for ent in (await session.execute(stmt)).scalars().all():
@@ -1010,6 +1018,7 @@ async def list_enterprises(
                 phone=card.phone,
                 auto_poll=card.auto_poll,
                 poll_times=card.poll_times or [],
+                agent_ids=assigned.get(card.id, []),
             ),
         ))
     return result

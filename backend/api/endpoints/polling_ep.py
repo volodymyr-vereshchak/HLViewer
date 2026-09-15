@@ -27,6 +27,7 @@ from backend.db.models.app_user_model import AppUser
 from backend.db.models.polling_model import PollDevice
 from backend.services import poll_journal
 from backend.services.agent_installer import find_installer
+from backend.services import agent_version
 from backend.services.poll_validation import (
     DEFAULT_DEVICE_ADDRESS,
     PollValidationError,
@@ -213,6 +214,11 @@ class PollAgentRead(BaseModel):
     #: one fact would eventually disagree, and the screen would be calling an
     #: agent online while the poll it offers is refused.
     online: bool = False
+    #: Whether this agent is the build the server hands out. A mismatch stops
+    #: its polls, so the screen has to say it rather than leave an operator
+    #: watching a machine that never picks anything up.
+    version_ok: bool = True
+    expected_version: Optional[str] = None
 
 
 class PollAgentCreated(PollAgentRead):
@@ -453,11 +459,30 @@ async def poll_enterprise(
             detail=f"Модель «{fitted['model_name'] or '—'}» модемом не опитується",
         )
 
-    agents = await dao.free_agents_for(card.id)
-    if not agents:
+    # Three different problems used to share one sentence, and none of them
+    # is "немає вільного модема" in the sense an operator reads it.
+    assigned = await dao.agents_for(card.id)
+    if not assigned:
         raise HTTPException(
             status_code=422,
-            detail="Немає вільного модема: жоден агент не на зв'язку",
+            detail=(
+                "Цьому підприємству не призначено жодного агента. "
+                "Призначте машину з модемом у картці підприємства, "
+                "блок «Опитування модемом»."
+            ),
+        )
+    agents = await dao.free_agents_for(card.id)
+    if not agents:
+        names = ", ".join(a.name for a in assigned)
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Агент {names} не на зв'язку — програма на тій машині не "
+                f"запущена. Запит нікому передати."
+                if len(assigned) == 1 else
+                f"Жоден із агентів ({names}) не на зв'язку — програми на тих "
+                f"машинах не запущені. Запит нікому передати."
+            ),
         )
 
     await dao.request_manual(card, user.id)
@@ -472,6 +497,69 @@ async def poll_enterprise(
         model_name=fitted["model_name"],
         agent_name=agents[0].name,
     )
+
+
+class PollCancelled(BaseModel):
+    """What stopping a poll actually did."""
+
+    #: "queued" — the request was withdrawn before any agent took it;
+    #: "asked" — a call is in progress and the agent has been told to hang up;
+    #: "idle" — there was nothing running to stop.
+    outcome: str
+    detail: str
+
+
+@router.post(
+    "/enterprises/{enterprise_id}/poll/cancel",
+    response_model=PollCancelled,
+)
+async def cancel_enterprise_poll(
+    enterprise_id: int,
+    session: AsyncSession = Depends(get_session),
+    _: AppUser = Depends(get_current_user),
+):
+    """Stop a poll that was started by mistake.
+
+    Two quite different things wear the same button.
+
+    A request no agent has taken is simply withdrawn — nothing has happened
+    yet, and nothing is lost.
+
+    A call already in progress cannot be stopped from here at all: the modem
+    is on somebody else's machine. What this does is raise a flag that the
+    agent reads on its next log push, a second or two later, and hangs up
+    **between records** — never in the middle of one.
+
+    What has been read so far is then thrown away, and that is the careful
+    choice rather than the lazy one. Coverage is measured from the newest
+    record stored, so keeping three hours of an interrupted eleven would move
+    it past the eight underneath and nobody would ever ask for them again.
+    The readings are not lost — they are still in the corrector, and the next
+    poll reads them. A cancelled call costs the minutes it ran, not any data.
+    """
+    dao = PollingDao(session)
+    card = await dao.gsm_of_enterprise(enterprise_id)
+    if card is None:
+        raise HTTPException(
+            status_code=404, detail="Для цього підприємства не налаштовано модем"
+        )
+
+    if card.polling_agent_id is not None:
+        card.cancel_requested_at = datetime.now()
+        await session.commit()
+        return PollCancelled(
+            outcome="asked",
+            detail="Агенту передано зупинитись — він покладе слухавку за кілька секунд",
+        )
+
+    if card.manual_requested_at is not None:
+        await dao.cancel_manual(card)
+        await session.commit()
+        return PollCancelled(
+            outcome="queued", detail="Запит знято — агент його не встиг узяти",
+        )
+
+    return PollCancelled(outcome="idle", detail="Зараз нічого не опитується")
 
 
 class PollLogLine(BaseModel):
@@ -498,6 +586,10 @@ class PollWatch(BaseModel):
     rows: dict = Field(default_factory=dict)
     done: Optional[int] = None
     total: Optional[int] = None
+    #: Which archive `done`/`total` are counting: "hourly" or "daily".
+    phase: Optional[str] = None
+    #: Somebody asked this call to stop and the agent has not hung up yet.
+    cancelling: bool = False
     lines: List[PollLogLine] = Field(default_factory=list)
 
 
@@ -550,6 +642,8 @@ async def watch_enterprise_poll(
         rows=card.last_rows or {},
         done=card.progress_done,
         total=card.progress_total,
+        phase=card.progress_phase,
+        cancelling=card.cancel_requested_at is not None,
         lines=[PollLogLine(**line) for line in _session_lines(card, after_seq)],
     )
 
@@ -647,12 +741,15 @@ async def read_last_log(
 )
 async def list_agents(session: AsyncSession = Depends(get_session)):
     alive = datetime.now() - PollingDao.AGENT_SILENCE
+    wanted = agent_version.expected()
     return [
         PollAgentRead(
             **row["agent"].model_dump(),
             device_count=row["device_count"],
             online=bool(row["agent"].last_seen_at
                         and row["agent"].last_seen_at >= alive),
+            version_ok=agent_version.matches(row["agent"].version, wanted),
+            expected_version=wanted,
         )
         for row in await PollingDao(session).list_agents()
     ]
