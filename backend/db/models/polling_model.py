@@ -345,6 +345,6 @@ class PollSettings(SQLModel, table=True):
 
     id: int = Field(default=1, primary_key=True, sa_type=BigInteger)
     poll_times: list = Field(
-        default_factory=lambda: ["06:00"],
-        sa_column=Column(JSONB, nullable=False, server_default='["06:00"]'),
+        default_factory=lambda: ["08:00"],
+        sa_column=Column(JSONB, nullable=False, server_default='["08:00"]'),
     )

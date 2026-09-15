@@ -491,9 +491,14 @@ class TestReplacingTheCorrector:
 @pytest.mark.asyncio
 class TestSchedule:
     async def test_defaults_exist_before_anyone_sets_them(self, admin_client):
+        """One hour, and it is inside the working day.
+
+        An archive read before anybody arrives is an archive whose failure
+        nobody sees for two hours.
+        """
         resp = await admin_client.get("/polling/schedule")
         assert resp.status_code == 200
-        assert resp.json()["poll_times"] == ["06:00"]
+        assert resp.json()["poll_times"] == ["08:00"]
 
     async def test_setting_hours(self, admin_client):
         resp = await admin_client.put(
