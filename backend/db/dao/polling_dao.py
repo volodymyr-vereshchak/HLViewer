@@ -201,7 +201,8 @@ class PollingDao:
         return {card.enterprise_id: card for card in rows}
 
     async def set_gsm(self, enterprise_id: int, phone: Optional[str],
-                      auto_poll: bool, poll_times: Optional[List[str]]) -> None:
+                      auto_poll: bool, poll_times: Optional[List[str]],
+                      password: Optional[str] = None) -> None:
         """Create, update or remove the modem settings of one enterprise.
 
         A phone cleared to empty removes the card altogether rather than
@@ -221,6 +222,7 @@ class PollingDao:
             "auto_poll": auto_poll,
             "poll_times": poll_times or [],
             "enabled": True,
+            "device_password": (password or "").strip() or "11",
         }
         if card is None:
             self.session.add(PollDevice(enterprise_id=enterprise_id, **values))

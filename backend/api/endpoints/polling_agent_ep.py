@@ -93,6 +93,9 @@ class PlanDevice(BaseModel):
     last_poll_at: Optional[datetime] = None
     manual_requested_at: Optional[datetime] = None
 
+    #: A Floutek ТМ-2 asks for it in every archive request.
+    device_password: Optional[str] = None
+
 
 class Plan(BaseModel):
     # The agent logs against this rather than its own clock; a workstation an
@@ -165,6 +168,10 @@ class Finish(BaseModel):
     rows: Optional[Dict[str, int]] = None
     duration_ms: Optional[int] = None
     connect_ms: Optional[int] = None
+    #: What answered, as the agent found out on the call: the protocol it
+    #: spoke and the model the corrector named. Absent when nothing did.
+    protocol_id: Optional[int] = None
+    model: Optional[str] = None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -270,7 +277,9 @@ async def get_plan(
             ser_num=row["ser_num"],
             model_name=row["model_name"],
             label=row["target_label"],
-            protocol_id=row["protocol_id"],
+            # What answered last time, else the catalogue's guess. Only an
+            # order of questions: the agent asks every family it reads.
+            protocol_id=card.detected_protocol or row["protocol_id"],
             device_address=card.device_address,
             channel=card.channel,
             is_modem=card.is_modem,
@@ -290,6 +299,9 @@ async def get_plan(
             last_day=last.get("daily"),
             last_poll_at=card.last_poll_at,
             manual_requested_at=card.manual_requested_at,
+            # Sent for every card: which corrector answers is found on the
+            # call, and only a ТМ-2 uses it.
+            device_password=card.device_password,
         ))
     # Manual requests first, then priority, then oldest poll — the order an
     # agent would have had to work out for itself otherwise.
@@ -542,6 +554,13 @@ async def finish_session(
         duration_ms=body.duration_ms,
         connect_ms=body.connect_ms,
     )
+    # Remembered only when something answered: a call that reached nobody
+    # says nothing about what is on the other end, and must not wipe what an
+    # earlier call learned.
+    if body.protocol_id is not None:
+        card.detected_protocol = body.protocol_id
+    if body.model:
+        card.detected_model = body.model[:64]
     # The file ends with the answer, so it does not have to be inferred from
     # the last thing that happened to be logged.
     poll_journal.finish(

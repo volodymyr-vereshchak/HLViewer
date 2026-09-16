@@ -516,6 +516,26 @@ class DPDClient:
                 return out
             page += 1
 
+    #: Every manufacturer code ДПД serves. Used when the corrector's own is not
+    #: in the catalogue: a serial alone can repeat across makes.
+    ALL_MANUFACTURERS = (11, 1, 3, 4, 5)
+
+    async def find_device(self, serial, date_from, date_to,
+                          manufacturers=None) -> List[Dict]:
+        """ДПД's own card of a corrector, found by serial.
+
+        `devices/volumes` answers with the volumes of a window, and every row
+        carries the device's passport alongside — the modem number among it,
+        in `cardNo`. The window only has to contain a day the corrector
+        reported on, which is why callers ask for a month rather than a day.
+        """
+        return await self._paged(
+            "POST", self.base_url + "devices/volumes", date_from, date_to,
+            body={"manf": list(manufacturers or self.ALL_MANUFACTURERS),
+                  "serNum": str(serial)},
+            page_size=50,
+        )
+
     async def get_event_devices(self, kind: str, date_from, date_to,
                                 *, filters=None, page_cb=None) -> List[Dict]:
         """Devices that had alarms (or interventions) in the window.

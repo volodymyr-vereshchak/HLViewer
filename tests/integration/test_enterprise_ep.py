@@ -980,3 +980,92 @@ class TestTheListCarriesTheModem:
         by_name = {r["enterprise_name"]: r for r in rows}
         assert by_name["Завод із модемом"]["gsm"]["phone"] == "+380501234567"
         assert by_name["Завод без модема"]["gsm"] is None
+
+
+class TestThePhoneFromDpd:
+    """ДПД keeps the modem number of a meter as `cardNo`. Offered on the card —
+    and when ДПД holds nothing usable, said so rather than written."""
+
+    class FakeDpd:
+        def __init__(self, rows):
+            self.rows, self.asked = rows, []
+
+        async def find_device(self, serial, date_from, date_to, manufacturers=None):
+            self.asked.append((serial, date_from, date_to, manufacturers))
+            return self.rows
+
+        async def close(self):
+            pass
+
+    async def _ask(self, admin_client, seed_topology, monkeypatch, rows):
+        from backend.services import dpd_client
+
+        fake = self.FakeDpd(rows)
+
+        async def for_branch(branch_id, session):
+            return fake
+
+        monkeypatch.setattr(dpd_client.DPDClient, "for_branch", staticmethod(for_branch))
+        created = (await admin_client.post(
+            "/enterprise-mappings/", json=_enterprise_payload(seed_topology))).json()
+        resp = await admin_client.get(
+            f"/enterprise-mappings/{created['id']}/phone-from-dpd")
+        assert resp.status_code == 200, resp.text
+        return resp.json(), fake
+
+    async def test_the_number_is_found_by_the_fitted_corrector(
+        self, admin_client, seed_topology, monkeypatch
+    ):
+        from datetime import date, timedelta
+
+        found, fake = await self._ask(admin_client, seed_topology, monkeypatch, [
+            {"serNum": "999", "mfDev": 1, "chNum": 0, "cardNo": "+380670000000"},
+            {"serNum": "123456", "mfDev": 1, "chNum": 0, "cardNo": "+380678449783"},
+        ])
+        assert found["phone"] == "+380678449783"
+        serial, since, until, manufacturers = fake.asked[0]
+        assert serial == 123456 and manufacturers == [1]
+        # A month back from today: `devices/volumes` answers for a period only.
+        assert until == date.today() and until - since >= timedelta(days=28)
+
+    async def test_an_empty_number_in_dpd_is_a_hint_not_a_phone(
+        self, admin_client, seed_topology, monkeypatch
+    ):
+        """"+380" and nothing after it is how ДПД keeps a number nobody entered
+        — 21 of the branch's 69 ТМ-2 meters look like that."""
+        found, _ = await self._ask(admin_client, seed_topology, monkeypatch, [
+            {"serNum": "123456", "mfDev": 1, "chNum": 0, "cardNo": "+380"},
+        ])
+        assert found["phone"] is None
+        assert found["raw"] == "+380"
+        assert "вручну" in found["message"]
+
+    async def test_a_meter_dpd_does_not_know_says_so(
+        self, admin_client, seed_topology, monkeypatch
+    ):
+        found, _ = await self._ask(admin_client, seed_topology, monkeypatch, [])
+        assert found["phone"] is None and "не знає" in found["message"]
+
+
+class TestTheDevicePassword:
+    async def test_it_starts_at_the_vendor_default_and_can_be_changed(
+        self, admin_client, seed_topology
+    ):
+        created = (await admin_client.post(
+            "/enterprise-mappings/", json=_enterprise_payload(seed_topology))).json()
+        base = {"phone": "+380501234567", "auto_poll": False, "poll_times": []}
+
+        first = (await admin_client.patch(
+            f"/enterprise-mappings/{created['id']}", json={"gsm": base})).json()
+        assert first["gsm"]["password"] == "11"
+
+        changed = (await admin_client.patch(
+            f"/enterprise-mappings/{created['id']}",
+            json={"gsm": {**base, "password": "4321"}})).json()
+        assert changed["gsm"]["password"] == "4321"
+
+        # Cleared by hand is not "no password": the corrector still asks for one.
+        cleared = (await admin_client.patch(
+            f"/enterprise-mappings/{created['id']}",
+            json={"gsm": {**base, "password": "  "}})).json()
+        assert cleared["gsm"]["password"] == "11"

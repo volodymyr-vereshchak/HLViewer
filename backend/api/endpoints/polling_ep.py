@@ -174,6 +174,10 @@ class PollDeviceRead(PollDeviceLink):
 
     last_poll_at: Optional[datetime] = None
     last_attempt_at: Optional[datetime] = None
+    #: What answered the last call, in its own words — which is not always
+    #: what the catalogue calls it. Empty until a call has reached someone.
+    detected_model: Optional[str] = None
+    detected_protocol: Optional[int] = None
     last_status: Optional[str] = None
     last_error_code: Optional[str] = None
     last_error_text: Optional[str] = None
@@ -453,11 +457,12 @@ async def poll_enterprise(
         raise HTTPException(
             status_code=422, detail="Немає встановлених корректорів",
         )
-    if fitted["protocol_id"] is None:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Модель «{fitted['model_name'] or '—'}» модемом не опитується",
-        )
+    # No refusal by model. The catalogue used to decide whether a corrector
+    # could be dialled at all, and a new model stayed undiallable until
+    # somebody typed a driver number against it. The agent now asks the
+    # corrector what it is — every family read here names itself — so the
+    # call is the test, and a model nobody reads ends with the corrector's own
+    # name in the journal rather than with a refusal before anyone tried.
 
     # Three different problems used to share one sentence, and none of them
     # is "немає вільного модема" in the sense an operator reads it.

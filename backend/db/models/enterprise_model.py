@@ -201,6 +201,10 @@ class EnterpriseGsm(SQLModel):
     #: Several are allowed, and mean a shared queue rather than a duplicate
     #: call: whichever agent asks first takes the site, the other skips it.
     agent_ids: List[int] = []
+    #: What a Floutek ТМ-2 asks for in its archive requests; the vendor's
+    #: default "11" unless the corrector was set otherwise. Ignored by every
+    #: other model.
+    password: str = "11"
 
 
 class EnterpriseRead(EnterpriseBase):

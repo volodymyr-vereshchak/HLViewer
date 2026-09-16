@@ -681,9 +681,16 @@ class TestPollingAnEnterpriseNow:
         detail = resp.json()["detail"]
         assert "АРМ вимкнений" in detail and "не на зв'язку" in detail
 
-    async def test_a_model_no_reader_covers_is_refused_before_dialling(
+    async def test_a_model_without_a_catalogue_driver_is_still_dialled(
         self, admin_client, anon_client, targets
     ):
+        """The corrector says what it is; the catalogue no longer decides.
+
+        A new model used to stay undiallable until somebody typed a driver
+        number against it in the catalogue. Every family the agent reads names
+        itself on the first question, so the call is the test — and a model
+        nobody reads ends with the corrector's own name in the journal.
+        """
         card = await make_card(
             admin_client, enterprise_id=targets["enterprise_id"],
             phone="+380501234567",
@@ -692,8 +699,52 @@ class TestPollingAnEnterpriseNow:
         resp = await admin_client.post(
             f"/polling/enterprises/{targets['enterprise_id']}/poll"
         )
-        assert resp.status_code == 422
-        assert "модемом не опитується" in resp.json()["detail"]
+        assert resp.status_code == 202, resp.text
+
+    async def test_what_answered_is_remembered_for_the_next_call(
+        self, admin_client, anon_client, targets
+    ):
+        """The next call asks the right question first.
+
+        Trying each family in turn costs seconds of silence per wrong guess,
+        on every call. What answered last time is what the plan hands down,
+        ahead of whatever the catalogue guessed — and a call that reached
+        nobody does not wipe it.
+        """
+        from backend.db.models.polling_model import PollDevice
+
+        await _set_protocol(targets["corector_type_id"], 1054)    # catalogue: ВЕГА
+        card = await make_card(
+            admin_client, enterprise_id=targets["enterprise_id"],
+            phone="+380501234567",
+        )
+        live = await self._live_agent(admin_client, anon_client, card["id"])
+        headers = live["headers"]
+
+        await anon_client.post(f"/polling/agent/devices/{card['id']}/start", headers=headers)
+        await anon_client.post(
+            f"/polling/agent/devices/{card['id']}/finish",
+            json={"status": "ok", "rows": {}, "protocol_id": 2002,
+                  "model": "Floutek-TM-2-3-4"},
+            headers=headers,
+        )
+        plan = (await anon_client.get("/polling/agent/plan", headers=headers)).json()
+        mine = next(d for d in plan["devices"] if d["id"] == card["id"])
+        assert mine["protocol_id"] == 2002
+        assert mine["device_password"] == "11"
+
+        # A call that reached nobody says nothing about who is there.
+        await anon_client.post(f"/polling/agent/devices/{card['id']}/start", headers=headers)
+        await anon_client.post(
+            f"/polling/agent/devices/{card['id']}/finish",
+            json={"status": "error", "error_code": "no_carrier"},
+            headers=headers,
+        )
+        async with async_session_factory() as session:
+            stored = await session.get(PollDevice, card["id"])
+            assert (stored.detected_protocol, stored.detected_model) == (
+                2002, "Floutek-TM-2-3-4",
+            )
 
     async def test_the_request_is_accepted_and_the_log_starts_clean(
         self, admin_client, anon_client, targets

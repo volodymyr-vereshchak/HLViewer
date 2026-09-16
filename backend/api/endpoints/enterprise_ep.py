@@ -11,6 +11,7 @@ import logging
 import pandas as pd
 from datetime import datetime
 from typing import Dict, List, Optional
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, Query, status, HTTPException, UploadFile, File
 from backend.api.endpoints.auth_ep import get_branch_filter
 from backend.api.endpoints.enterprise_virtual_ep import resolve_virtual_devices
@@ -944,7 +945,8 @@ async def _save_gsm(session, enterprise_id: int, gsm) -> None:
     dao = PollingDao(session)
     try:
         times = validate_poll_times(gsm.poll_times)
-        await dao.set_gsm(enterprise_id, gsm.phone, gsm.auto_poll, times)
+        await dao.set_gsm(enterprise_id, gsm.phone, gsm.auto_poll, times,
+                          gsm.password)
     except PollValidationError as error:
         raise HTTPException(status_code=422, detail=str(error))
 
@@ -971,6 +973,7 @@ async def _read_enterprise(session, dao, ent) -> EnterpriseRead:
             auto_poll=card.auto_poll,
             poll_times=card.poll_times or [],
             agent_ids=await PollingDao(session).device_agents(card.id),
+            password=card.device_password,
         ),
     )
 
@@ -1019,6 +1022,7 @@ async def list_enterprises(
                 auto_poll=card.auto_poll,
                 poll_times=card.poll_times or [],
                 agent_ids=assigned.get(card.id, []),
+                password=card.device_password,
             ),
         ))
     return result
@@ -1075,6 +1079,103 @@ async def create_enterprise(data: EnterpriseCreate, session: AsyncSession = Depe
         await _save_gsm(session, ent.id, data.gsm)
     await session.commit()
     return await _read_enterprise(session, dao, ent)
+
+
+class PhoneFromDpd(BaseModel):
+    """What ДПД says the modem number of this site is."""
+
+    #: The number, ready for the card — or None when there is nothing usable.
+    phone: Optional[str] = None
+    #: Exactly what ДПД holds, so an operator can see why it was not taken.
+    raw: Optional[str] = None
+    #: A sentence for the screen: what was found, or what to do instead.
+    message: str
+
+
+@_crud_router.get(
+    "/enterprise-mappings/{enterprise_id}/phone-from-dpd",
+    response_model=PhoneFromDpd,
+    summary="Look up the modem number ДПД keeps for this site's corrector",
+)
+async def phone_from_dpd(
+    enterprise_id: int, session: AsyncSession = Depends(get_session)
+):
+    """The modem number from ДПД's own card of the fitted corrector.
+
+    ДПД keeps it as `cardNo`, filled in by whoever registered the meter. It is
+    offered rather than written: the operator presses the button and sees the
+    number go into the field, and nothing reaches the card until they save.
+
+    `+380` and nothing after it is how ДПД stores a number nobody entered, and
+    it is not a number anyone can dial — that comes back as a sentence saying
+    so, not as a phone.
+
+    The window is the last month: `devices/volumes` answers only for a period,
+    and a corrector that has reported at all in a month is one worth dialling.
+    """
+    from datetime import date, timedelta
+
+    from backend.services.dpd_client import DPDClient
+    from backend.services.poll_validation import PollValidationError, normalise_phone
+
+    dao = EnterpriseDao(session=session)
+    ent = await dao.get_by_id(enterprise_id)
+    if not ent:
+        raise HTTPException(status_code=404, detail="Підприємство не знайдено")
+    fitted = next(
+        (d for d in reversed(await dao.get_history_resolved(enterprise_id))
+         if not d.get("removed_at")),
+        None,
+    )
+    if fitted is None:
+        return PhoneFromDpd(message="На підприємстві немає встановленого коректора — "
+                                    "шукати номер нема по чому")
+    if ent.branch_id is None:
+        return PhoneFromDpd(message="Підприємство без філії — невідомо, до якого ДПД звертатися")
+
+    today = date.today()
+    try:
+        client = await DPDClient.for_branch(ent.branch_id, session)
+    except ValueError:
+        return PhoneFromDpd(message="Для філії цього підприємства не налаштовано доступ до ДПД")
+    try:
+        rows = await client.find_device(
+            fitted["ser_num"], today - timedelta(days=31), today,
+            manufacturers=[fitted["mf_dev"]] if fitted.get("mf_dev") else None,
+        )
+    except Exception as error:                   # noqa: BLE001 — told, not raised
+        logger.warning("ДПД не відповів на пошук номера: %s", error)
+        return PhoneFromDpd(message=f"ДПД не відповів: {error}")
+    finally:
+        await client.close()
+
+    # The serial can repeat across makes and channels — take this corrector.
+    match = next(
+        (r for r in rows
+         if str(r.get("serNum")) == str(fitted["ser_num"])
+         and (not fitted.get("mf_dev") or r.get("mfDev") in (None, fitted["mf_dev"]))
+         and r.get("chNum", 0) == (fitted.get("ch_num") or 0)),
+        None,
+    )
+    if match is None:
+        return PhoneFromDpd(
+            message=f"ДПД не знає коректора №{fitted['ser_num']} за останній місяць"
+        )
+
+    raw = (match.get("cardNo") or "").strip()
+    try:
+        phone = normalise_phone(raw)
+    except PollValidationError:
+        phone = None
+    if not phone:
+        return PhoneFromDpd(
+            raw=raw or None,
+            message=(
+                f"У ДПД номер модема не заповнений («{raw or 'порожньо'}») — "
+                f"впишіть його вручну"
+            ),
+        )
+    return PhoneFromDpd(phone=phone, raw=raw, message=f"Номер із ДПД: {phone}")
 
 
 @_crud_router.patch(

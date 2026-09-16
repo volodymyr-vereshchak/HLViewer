@@ -174,6 +174,17 @@ class PollDevice(HlBaseModel, table=True):
     # but sending the wrong one looks exactly like a dead meter. Filled in, not
     # asked: for a ЛУМГ corrector it is the number in the hostlib file name.
     device_address: Optional[int] = Field(default=None)
+    #: The password a Floutek ТМ-2 asks for in every archive request. The
+    #: vendor's default is "11" and the whole fleet uses it, but it is a
+    #: setting of the corrector. Other models ignore it.
+    device_password: str = Field(default="11", max_length=16)
+
+    #: What answered the last call, in its own words. The protocol is found on
+    #: the call — every family read here names itself — and remembered so the
+    #: next call asks the right question first instead of trying each in turn.
+    #: The catalogue's protocol is only a hint for the first call ever made.
+    detected_protocol: Optional[int] = Field(default=None)
+    detected_model: Optional[str] = Field(default=None, max_length=64)
     # No access code or password here. In these protocols they buy the right to
     # WRITE — set the clock, change the contract hour, load an FHP passport —
     # and this poll only reads archives. Carrying a plaintext device credential

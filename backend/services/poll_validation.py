@@ -36,7 +36,9 @@ FLOUTEK_PROTOCOLS = frozenset({
     1062,  # Флоутек-ТМ-3-4, v.40
     1070,  # Флоутек ВР-2
     1071,  # Флоутек ВР-2 (E_kWh)
+    2002,  # Флоутек ТМ-2 — our own reader, not an Ask2 driver
 })
+
 
 DEFAULT_DEVICE_ADDRESS = 1
 
