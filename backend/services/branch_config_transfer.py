@@ -266,7 +266,18 @@ async def _catalog_by_name(session: AsyncSession) -> dict[tuple, int]:
             )
         )
     ).all()
-    return {(mfr.mf_dev, ct.model_name): ct.id for ct, mfr in rows}
+    catalog: dict[tuple, int] = {(mfr.mf_dev, ct.model_name): ct.id for ct, mfr in rows}
+    # And by the pair ДПД addresses a corrector with — (mf_dev, type_dev) —
+    # for a name spelt differently on the other server: the Дніпро export
+    # carries "Універсал-МT" with a Latin T, this catalogue "Універсал-МТ"
+    # with a Cyrillic one, and both are codes 3/4. A pair two models share
+    # says nothing, so it is left out.
+    by_codes: dict[tuple, list[int]] = {}
+    for ct, mfr in rows:
+        if mfr.mf_dev is not None and ct.type_dev is not None:
+            by_codes.setdefault(("codes", mfr.mf_dev, ct.type_dev), []).append(ct.id)
+    catalog.update({key: ids[0] for key, ids in by_codes.items() if len(ids) == 1})
+    return catalog
 
 
 # ─── Export ───────────────────────────────────────────────────────────────────
@@ -622,6 +633,8 @@ def _resolve_corrector(
     model = dev.get("model_name")
     if model and mf_dev is not None:
         ct_id = ct_by_name.get((int(mf_dev), model))
+        if ct_id is None and dev.get("type_dev") is not None:
+            ct_id = ct_by_name.get(("codes", int(mf_dev), int(dev["type_dev"])))
         if ct_id is None:
             return None, (
                 f"моделі «{model}» виробника з кодом mf_dev={mf_dev} немає в довіднику "
@@ -804,19 +817,25 @@ async def _validate(
                 err.append(f"Маршрут {number}: у файлі немає лінії {_ref_label(ref)}")
 
     # ── Підприємства ──────────────────────────────────────────────────────────
-    seen_ent: set[str] = set()
+    # A metering point is its name together with its correctors, not its name
+    # alone. The same name standing for several points is ordinary — channel 0
+    # and channel 1 of one corrector, or two correctors of one company — and a
+    # Дніпро export carries 107 such names. What cannot be told apart is two
+    # entries with the same name and the same correctors.
+    seen_ent: set[tuple] = set()
     for ent in bundle.get("enterprises") or []:
         name = ent.get("name")
         if not name:
             err.append("У файлі є підприємство без назви")
             continue
-        if name in seen_ent:
+        key = _enterprise_key(ent)
+        if key in seen_ent:
             err.append(
-                f"Підприємство «{name}» зустрічається у файлі двічі — назва в межах "
-                "філії має бути унікальною, інакше неможливо сказати, який рядок "
-                "оновлювати"
+                f"Підприємство «{name}» з тими самими коректорами "
+                f"({_devices_label(ent)}) зустрічається у файлі двічі — "
+                "неможливо сказати, який рядок оновлювати"
             )
-        seen_ent.add(name)
+        seen_ent.add(key)
         ref = ent.get("ref")
         if ref is not None and _ref_key(ref) not in defined:
             err.append(f"Підприємство «{name}»: у файлі немає лінії {_ref_label(ref)}")
@@ -1565,15 +1584,45 @@ async def _write_enterprises(
     payload = bundle.get("enterprises") or []
     devices = await _device_registry(session, payload, ct_by_name, report)
 
-    existing = {
-        row.enterprise_name: row
-        for row in await _scalars(
-            session, select(Enterprise).where(Enterprise.branch_id == bid)
+    rows = await _scalars(session, select(Enterprise).where(Enterprise.branch_id == bid))
+    # Each existing point keyed the way the file keys it: name plus the
+    # serial and channel of every corrector in its history.
+    history: dict[int, list[tuple]] = {row.id: [] for row in rows}
+    if rows:
+        linked = await session.execute(
+            select(
+                EnterpriseDevice.enterprise_id, DpdDevice.ser_num, DpdDevice.ch_num,
+                Manufacturer.mf_dev, CorectorType.type_dev,
+                DpdDevice.mf_dev, DpdDevice.type_dev,
+            )
+            .join(DpdDevice, DpdDevice.id == EnterpriseDevice.device_id)
+            .outerjoin(CorectorType, CorectorType.id == DpdDevice.corector_type_id)
+            .outerjoin(Manufacturer, Manufacturer.id == CorectorType.manufacturer_id)
+            .where(EnterpriseDevice.enterprise_id.in_([row.id for row in rows]))
         )
+        for enterprise_id, ser, ch, mf, type_dev, raw_mf, raw_type in linked:
+            # The catalogue is the source of the codes; the raw columns only
+            # for a corrector the catalogue never matched — as the export does.
+            history[enterprise_id].append((
+                int(ser), int(ch or 0),
+                _as_int(mf if mf is not None else raw_mf),
+                _as_int(type_dev if type_dev is not None else raw_type),
+            ))
+    by_key = {
+        (row.enterprise_name, tuple(sorted(history[row.id]))): row for row in rows
     }
-    wanted: dict[str, Enterprise] = {}
+    by_name: dict[str, list[Enterprise]] = {}
+    for row in rows:
+        by_name.setdefault(row.enterprise_name, []).append(row)
+    file_names: dict[str, int] = {}
+    for item in payload:
+        file_names[item["name"]] = file_names.get(item["name"], 0) + 1
+
+    matched: set[int] = set()
+    wanted: dict[tuple, Enterprise] = {}
     for item in payload:
         name = item["name"]
+        item_key = _enterprise_key(item)
         key = _ref_key(item.get("ref"))
         target = ref_to_id[key] if key else None
         is_dpd = bool(key) and key[0] == "dpd"
@@ -1583,19 +1632,28 @@ async def _write_enterprises(
             "active": bool(item.get("active", True)),
             "enabled": bool(item.get("enabled", True)),
         }
-        row = existing.get(name)
+        row = by_key.get(item_key)
+        if row is None and file_names[name] == 1 and len(by_name.get(name, [])) == 1:
+            # The correctors differ but the name is unique on both sides: the
+            # same point with its history edited — a replacement recorded, say
+            # — not a new one.
+            row = by_name[name][0]
+        if row is not None and row.id in matched:
+            row = None
         if row is None:
             row = Enterprise(branch_id=bid, enterprise_name=name, **values)
             session.add(row)
             report.add("enterprise")
         elif _apply(row, values):
             report.upd("enterprise")
-        wanted[name] = row
+        if row.id is not None:
+            matched.add(row.id)
+        wanted[item_key] = row
     await session.flush()
 
-    for name in existing:
-        if name not in wanted:
-            report.leftover("enterprise", name)
+    for row in rows:
+        if row.id not in matched:
+            report.leftover("enterprise", row.enterprise_name)
 
     ent_ids = [e.id for e in wanted.values()] or [-1]
     links = {
@@ -1607,7 +1665,7 @@ async def _write_enterprises(
     }
     seen: set[tuple] = set()
     for item in payload:
-        parent = wanted[item["name"]]
+        parent = wanted[_enterprise_key(item)]
         for dev in item.get("devices") or []:
             installed = _dt(dev.get("installed_from"), f"Підприємство «{item['name']}»")
             key = (parent.id, installed)
@@ -1632,6 +1690,33 @@ async def _write_enterprises(
                 "Історія підприємства містить запис, якого немає у файлі "
                 f"(встановлено {key[1]}) — його залишено."
             )
+
+
+def _enterprise_key(item: dict) -> tuple:
+    """A metering point as the file names it: its name and its correctors.
+
+    A corrector is taken the way ДПД addresses it — serial, channel,
+    manufacturer and type codes — which is available whether or not the model
+    resolves. Serial and channel alone are not enough: №2978 in the Дніпро
+    export is a ТАНДЕМ-ТР (type 1) at one point and a Тандем-Т (type 2) at
+    another under the same name.
+    """
+    devices = tuple(sorted(
+        (int(d["ser_num"]), int(d.get("ch_num") or 0),
+         _as_int(d.get("mf_dev")), _as_int(d.get("type_dev")))
+        for d in item.get("devices") or []
+        if d.get("ser_num") is not None
+    ))
+    return (item.get("name"), devices)
+
+
+def _devices_label(item: dict) -> str:
+    devices = _enterprise_key(item)[1]
+    if not devices:
+        return "без коректорів"
+    return ", ".join(
+        f"№{ser}" + (f" канал {ch}" if ch else "") for ser, ch, _mf, _type in devices
+    )
 
 
 def _device_key(dev: dict, ct_by_name: dict[tuple, int]) -> tuple:

@@ -337,6 +337,64 @@ class TestRoundTrip:
 # ─── Merge semantics ──────────────────────────────────────────────────────────
 
 
+class TestTheSameNameForSeveralPoints:
+    """A metering point is its name together with its correctors.
+
+    One company name over several points is ordinary: channel 0 and channel 1
+    of one corrector, or two correctors of one company. The Дніпро export has
+    107 such names across 393 rows, and the import refused every one of them —
+    "назва в межах філії має бути унікальною" — although none was ambiguous.
+    """
+
+    @staticmethod
+    def _twins(bundle: dict) -> dict:
+        first = bundle["enterprises"][0]
+        twin = json.loads(json.dumps(first))
+        for dev in twin["devices"]:
+            dev["ch_num"] = 1                  # same corrector, the other channel
+        bundle["enterprises"].append(twin)
+        return bundle
+
+    async def test_another_channel_is_another_point(self, admin_client, rich_branch):
+        bundle = self._twins(_retarget(await _export(admin_client, rich_branch["branch"])))
+        report = await _import(admin_client, bundle)
+        assert not any("двічі" in e for e in report["errors"])
+
+        await _import(admin_client, bundle, dry_run=False)
+        copy_id = await _branch_id(TARGET_NAME)
+        exported = (await _export(admin_client, copy_id))["enterprises"]
+        name = bundle["enterprises"][0]["name"]
+        channels = sorted(
+            tuple(d["ch_num"] for d in e["devices"]) for e in exported if e["name"] == name
+        )
+        assert len(channels) == 2 and channels[0] != channels[1]
+
+    async def test_importing_them_again_does_not_double_them(
+        self, admin_client, rich_branch
+    ):
+        """Matched by name and correctors, so a second run finds both points
+        rather than creating a third and a fourth."""
+        bundle = self._twins(_retarget(await _export(admin_client, rich_branch["branch"])))
+        await _import(admin_client, bundle, dry_run=False)
+        second = await _import(admin_client, bundle, dry_run=False)
+
+        copy_id = await _branch_id(TARGET_NAME)
+        exported = (await _export(admin_client, copy_id))["enterprises"]
+        name = bundle["enterprises"][0]["name"]
+        assert sum(1 for e in exported if e["name"] == name) == 2
+        assert not second["errors"]
+
+    async def test_same_name_and_same_correctors_is_still_refused(
+        self, admin_client, rich_branch
+    ):
+        """That one really cannot be told apart — and the message says by what."""
+        bundle = _retarget(await _export(admin_client, rich_branch["branch"]))
+        bundle["enterprises"].append(json.loads(json.dumps(bundle["enterprises"][0])))
+        report = await _import(admin_client, bundle)
+        said = [e for e in report["errors"] if "двічі" in e]
+        assert said and "тими самими коректорами" in said[0] and "№" in said[0]
+
+
 class TestMergeSemantics:
     async def test_second_import_changes_nothing(self, admin_client, rich_branch):
         bundle = _retarget(await _export(admin_client, rich_branch["branch"]))
@@ -508,12 +566,26 @@ class TestRefusals:
         assert any("у файлі немає лінії" in e for e in report["errors"])
 
     async def test_unknown_corrector_model(self, admin_client, rich_branch):
+        """Unknown by name AND by the codes ДПД addresses it with."""
         bundle = _retarget(await _export(admin_client, rich_branch["branch"]))
         bundle["dpd_lines"][0]["devices"][0]["model_name"] = "НЕВІДОМА-9"
+        bundle["dpd_lines"][0]["devices"][0]["type_dev"] = 999
         report = await _import(admin_client, bundle)
         assert report["applied"] is False
         assert any("НЕВІДОМА-9" in e for e in report["errors"])
         assert any("довіднику коректорів" in e for e in report["errors"])
+
+    async def test_a_model_spelt_differently_is_found_by_its_codes(
+        self, admin_client, rich_branch
+    ):
+        """The Дніпро export spells "Універсал-МT" with a Latin T; this
+        catalogue has it with a Cyrillic one. Both are codes 3/4 — the pair ДПД
+        addresses the corrector by — so it is the same model, not a refusal."""
+        bundle = _retarget(await _export(admin_client, rich_branch["branch"]))
+        dev = bundle["dpd_lines"][0]["devices"][0]
+        dev["model_name"] = dev["model_name"].replace("А", "A")   # Latin A
+        report = await _import(admin_client, bundle)
+        assert not any("довіднику коректорів" in e for e in report["errors"])
 
     async def test_unknown_calc_type(self, admin_client, rich_branch):
         bundle = _retarget(await _export(admin_client, rich_branch["branch"]))
