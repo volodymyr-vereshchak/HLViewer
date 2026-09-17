@@ -119,6 +119,7 @@ from .device_catalog_model import (
 )
 
 from .update_job_model import UpdateJob
+from .hostlib_archive_log_model import HostlibArchiveLog
 
 from .dpd_line_model import (
     DpdLine,

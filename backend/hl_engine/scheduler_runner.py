@@ -9,24 +9,35 @@ zip on each configured path changed, and if so we run the update.
 Detection is mtime/size polling (not an OS watcher) because the source is an
 SMB/UNC share, where inotify/watchdog events don't propagate reliably.
 
-The "last processed" signature is kept in process memory: no DB migration, and
-since the archive upsert is idempotent a restart costs at most one redundant run.
+What has been taken in is kept in `hostlib_archive_log`, for a day. It lived
+in this process's memory, which a restart erased and nothing else could see.
+A day is enough: every source folder gains a new snapshot each hour, and
+reading an archive twice inserts nothing — a closed record never changes in a
+later snapshot, and rows are only added where their key is absent.
+
+An archive is taken in when it is the newest of its source, is not in the log
+as done, has not changed for a minute, and opens as a whole zip. A failed one
+is logged as such and tried again, but not more often than every fifteen
+minutes — an archive that cannot be read will not read on the next tick either.
 """
 import asyncio
 import logging
 import time
 from datetime import datetime, timedelta
 
-from sqlmodel import select
+import os
+
+from sqlmodel import delete, select
 
 from backend.db.engine import async_session_factory
+from backend.db.models.hostlib_archive_log_model import HostlibArchiveLog
 from backend.db.models.lumg_model import LumgDataPath
 from backend.hl_engine.main import update_hostlibs
 from backend.hl_engine.update_job_lock import run_guarded_update
 from backend.logging_config import setup_logging
 from backend.services import dpd_archive_refresh, dpd_line_refresh
 from backend.utils.path_utils import resolve_stored_path
-from utils.files_utils import newest_zip_signature
+from utils.files_utils import UnzipUtils, zip_is_complete
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -37,8 +48,11 @@ POLL_INTERVAL_SEC = 120
 # long — guards against reading a half-uploaded archive.
 SETTLE_SECONDS = 60
 
-# resolved_path -> signature of the last batch we processed. In-memory by design.
-_last_sig: dict[str, frozenset] = {}
+# How long the log remembers an archive. Snapshots arrive hourly, so a day
+# covers every one that can still be the newest.
+LOG_KEEP = timedelta(days=1)
+# How long a failed archive waits before it is tried again.
+RETRY_AFTER = timedelta(minutes=15)
 
 # Strong refs to detached DPD-line update tasks (bare create_task results may
 # be garbage-collected before completion).
@@ -56,38 +70,90 @@ async def _active_paths() -> list[str]:
     return sorted({str(resolve_stored_path(r.path)) for r in rows})
 
 
-async def _scan() -> dict[str, tuple[frozenset, float]]:
-    """Compute (signature, max_mtime) per unique active path. The filesystem
-    walk/stat is blocking, so it runs in a thread."""
+def _candidates(path: str) -> list[dict]:
+    """The newest archive of each source under `path`, with what the log keys
+    it by. Blocking filesystem work — run in a thread."""
+    if not os.path.isdir(path):
+        return []
+    found = []
+    for archive in UnzipUtils._latest_zip_per_dir(path):
+        try:
+            stat = os.stat(archive)
+        except OSError:
+            continue                    # vanished between listing and stat
+        found.append({
+            "file": archive,
+            "filename": os.path.relpath(archive, path),
+            "size": stat.st_size,
+            "mtime": datetime.fromtimestamp(stat.st_mtime),
+        })
+    return found
+
+
+async def _pending() -> dict[str, list[dict]]:
+    """path -> archives ready to be taken in and not taken in yet."""
     paths = await _active_paths()
-    sigs: dict[str, tuple[frozenset, float]] = {}
+    now = datetime.now()
+    async with async_session_factory() as session:
+        # A day old is forgotten: newer snapshots have superseded it.
+        await session.execute(
+            delete(HostlibArchiveLog).where(HostlibArchiveLog.processed_at < now - LOG_KEEP)
+        )
+        await session.commit()
+        rows = (await session.execute(select(HostlibArchiveLog))).scalars().all()
+    done = {(r.path, r.filename, r.size) for r in rows if r.status == "ok"}
+    failed_recently = {
+        (r.path, r.filename, r.size) for r in rows
+        if r.status == "error" and r.processed_at >= now - RETRY_AFTER
+    }
+
+    pending: dict[str, list[dict]] = {}
     for path in paths:
-        sigs[path] = await asyncio.to_thread(newest_zip_signature, path)
-    return sigs
+        for archive in await asyncio.to_thread(_candidates, path):
+            key = (path, archive["filename"], archive["size"])
+            if key in done or key in failed_recently:
+                continue
+            age = (now - archive["mtime"]).total_seconds()
+            if age < SETTLE_SECONDS:
+                logger.info("New file %r on %r still settling (%.0fs old) — waiting",
+                            archive["filename"], path, age)
+                continue
+            if not await asyncio.to_thread(zip_is_complete, archive["file"]):
+                logger.info("New file %r on %r does not open as a zip yet — waiting",
+                            archive["filename"], path)
+                continue
+            pending.setdefault(path, []).append(archive)
+    return pending
+
+
+async def _log(pending: dict[str, list[dict]], failed: set[str]) -> None:
+    now = datetime.now()
+    async with async_session_factory() as session:
+        for path, archives in pending.items():
+            status = "error" if path in failed else "ok"
+            for archive in archives:
+                session.add(HostlibArchiveLog(
+                    path=path,
+                    filename=archive["filename"],
+                    size=archive["size"],
+                    file_mtime=archive["mtime"],
+                    status=status,
+                    error="оновлення цього шляху завершилось помилкою" if status == "error" else None,
+                    processed_at=now,
+                ))
+        await session.commit()
 
 
 async def poll_once() -> None:
-    sigs = await _scan()
-    now = time.time()
-
-    changed = False
-    for path, (sig, max_mtime) in sigs.items():
-        if sig == _last_sig.get(path):
-            continue  # nothing new on this path
-        if max_mtime and (now - max_mtime) < SETTLE_SECONDS:
-            # Newest file is still fresh — may be mid-upload. Leave _last_sig
-            # untouched so we re-check (and catch it) on the next tick.
-            logger.info(
-                "New file on %r still settling (%.0fs old) — waiting",
-                path, now - max_mtime,
-            )
-            continue
-        changed = True
-
-    if not changed:
+    pending = await _pending()
+    if not pending:
         return
 
-    logger.info("New data detected — triggering update")
+    logger.info(
+        "New data detected — triggering update: %s",
+        "; ".join(f"{path}: {', '.join(a['filename'] for a in archives)}"
+                  for path, archives in pending.items()),
+    )
 
     failed: set[str] = set()
 
@@ -96,17 +162,13 @@ async def poll_once() -> None:
 
     ran = await run_guarded_update(work)
     if ran:
-        # Commit the signatures we actually processed (settled ones only); leave
-        # any still-settling path unrecorded so it triggers again once ready.
-        # A path whose group errored out counts as NOT processed: recording it
-        # would drop that batch for good, since nothing re-triggers until the
-        # next file lands there.
-        for path, (sig, max_mtime) in sigs.items():
-            if path in failed:
-                logger.warning("Path %r failed — will retry on the next tick", path)
-                continue
-            if max_mtime == 0 or (now - max_mtime) >= SETTLE_SECONDS:
-                _last_sig[path] = sig
+        # Logged as done only where the update succeeded. A path whose group
+        # errored out is logged as failed and comes round again after
+        # RETRY_AFTER: marking it done would drop that batch for good, since
+        # nothing re-triggers until the next file lands there.
+        for path in failed & set(pending):
+            logger.warning("Path %r failed — will retry in %s", path, RETRY_AFTER)
+        await _log(pending, failed)
         logger.info("Update finished")
         # DPD lines refresh alongside the hostlib update (user decision):
         # detached so it never blocks the poll loop or the hostlib lock;
@@ -115,8 +177,8 @@ async def poll_once() -> None:
         _dpd_line_tasks.add(task)
         task.add_done_callback(_dpd_line_tasks.discard)
     else:
-        # A manual update is in progress; retry on the next tick (signatures
-        # deliberately not committed).
+        # A manual update is in progress; nothing is logged, so the same
+        # archives are pending again on the next tick.
         logger.info("Update already running (manual) — skipping this tick")
 
 

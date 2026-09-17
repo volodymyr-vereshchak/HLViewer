@@ -251,3 +251,63 @@ class TestReadArchiveFile:
         for i, record in enumerate(records):
             assert record['hour'] == i
             assert record['volume'] == 1000.0 + i 
+
+class TestNewestSnapshotPerSource:
+    """One folder can hold several data sources side by side.
+
+    The Дніпро test folder has Dnipropetr_* (every ГРС of the branch) and
+    UGV_DNP_* (seven ГПУ devices). The newest zip of the whole folder was
+    UGV_DNP's, so the Dnipropetr archive was never read and two ЛВУМГ got no
+    data at all while their EIC codes matched.
+    """
+
+    def _touch(self, folder, name, mtime):
+        path = os.path.join(folder, name)
+        with zipfile.ZipFile(path, "w") as z:
+            z.writestr("x.txt", name)
+        os.utime(path, (mtime, mtime))
+        return path
+
+    def test_each_source_gives_its_own_newest(self, tmp_path):
+        folder = str(tmp_path)
+        self._touch(folder, "Dnipropetr_2026_09_11_22.zip", 1000)
+        newest_dnp = self._touch(folder, "Dnipropetr_2026_09_11_23.zip", 2000)
+        self._touch(folder, "UGV_DNP_2026_09_11_22.zip", 1500)
+        newest_ugv = self._touch(folder, "UGV_DNP_2026_09_11_23.zip", 2800)
+
+        picked = sorted(UnzipUtils._latest_zip_per_dir(folder))
+        assert picked == sorted([newest_dnp, newest_ugv])
+
+    def test_hourly_snapshots_of_one_source_still_give_one(self, tmp_path):
+        folder = str(tmp_path)
+        for hour in range(20):
+            self._touch(folder, f"Zaporizgaz_2026_04_04_{hour}.zip", 1000 + hour)
+        picked = UnzipUtils._latest_zip_per_dir(folder)
+        assert [os.path.basename(p) for p in picked] == ["Zaporizgaz_2026_04_04_19.zip"]
+
+    def test_a_zip_named_some_other_way_is_not_dropped(self, tmp_path):
+        folder = str(tmp_path)
+        self._touch(folder, "Zaporizgaz_2026_04_04_0.zip", 1000)
+        odd = self._touch(folder, "manual-export.zip", 500)
+        assert odd in UnzipUtils._latest_zip_per_dir(folder)
+
+
+def test_the_signature_changes_when_any_source_gets_a_new_snapshot(tmp_path):
+    """The poller only reacts to what the signature sees. It looked at one zip
+    per folder, so a new Dnipropetr snapshot behind a newer UGV_DNP one changed
+    nothing and no update was triggered for it."""
+    from utils.files_utils import newest_zip_signature
+
+    def touch(name, mtime):
+        path = os.path.join(str(tmp_path), name)
+        with zipfile.ZipFile(path, "w") as z:
+            z.writestr("x.txt", name)
+        os.utime(path, (mtime, mtime))
+
+    touch("Dnipropetr_2026_09_11_22.zip", 1000)
+    touch("UGV_DNP_2026_09_11_23.zip", 5000)
+    before, _ = newest_zip_signature(str(tmp_path))
+
+    touch("Dnipropetr_2026_09_11_23.zip", 2000)       # still older than UGV_DNP
+    after, _ = newest_zip_signature(str(tmp_path))
+    assert before != after

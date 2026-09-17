@@ -1,6 +1,7 @@
 import asyncio
 import glob
 import os
+import re
 import shutil
 import struct
 import uuid
@@ -17,6 +18,50 @@ MAX_ZIP_ENTRIES = 50_000
 MAX_FILE_BYTES = 64 * 1024 * 1024        # 64 MB per extracted file
 MAX_TOTAL_BYTES = 1024 * 1024 * 1024     # 1 GB per archive
 _EXTRACT_CHUNK = 1024 * 1024             # 1 MB streaming chunks
+
+
+#: "Dnipropetr_2026_09_11_23.zip" -> "Dnipropetr": the snapshot's date and
+#: hour number are dropped, what is left names the source.
+_SNAPSHOT_SUFFIX = re.compile(r"_(\d{4})_(\d{2})_(\d{2})(?:_(\d+))?\.zip$", re.IGNORECASE)
+
+
+def snapshot_order(path: str) -> tuple:
+    """Newest-first ordering key for a snapshot: the date and hour in its name,
+    then the file's time.
+
+    The name comes first because it is what the source wrote on purpose; the
+    file time is whatever the copy left — a copy that keeps the original time
+    would otherwise make a newer snapshot look older. The file time only
+    decides among names that carry no date.
+    """
+    match = _SNAPSHOT_SUFFIX.search(os.path.basename(path))
+    stamp = tuple(int(g or 0) for g in match.groups()) if match else (0, 0, 0, 0)
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        mtime = 0.0
+    return stamp + (mtime,)
+
+
+def zip_is_complete(path: str) -> bool:
+    """Whether the archive can be opened — its central directory is written
+    last, so a zip still being copied has none and fails here."""
+    try:
+        with zipfile.ZipFile(path) as archive:
+            archive.namelist()
+        return True
+    except (zipfile.BadZipFile, OSError, EOFError):
+        return False
+
+
+def _zip_source(filename: str) -> str:
+    """The data source a snapshot belongs to, from its file name.
+
+    A name without the date pattern is its own source, so an archive named
+    some other way is still read rather than dropped behind another one.
+    """
+    stripped = _SNAPSHOT_SUFFIX.sub("", filename)
+    return stripped if stripped != filename else filename
 
 
 class UnzipUtils:
@@ -47,21 +92,28 @@ class UnzipUtils:
 
     @staticmethod
     def _latest_zip_per_dir(path: str) -> list[str]:
-        """For each directory under path, return only the most recently modified zip.
+        """The most recently modified zip of each data source under path.
 
         When a data source uploads multiple hourly snapshots (e.g.
         Zaporizgaz_2026_04_04_0.zip … Zaporizgaz_2026_04_04_19.zip) each
         containing a full copy of all device files, we only need the newest one.
         Extracting all 20 would take 20× as long for zero extra data.
+
+        Newest per SOURCE, not per directory. One folder can hold several
+        sources side by side — the Дніпро test folder has Dnipropetr_* (every
+        ГРС of the branch) and UGV_DNP_* (seven ГПУ devices) — and picking one
+        zip for the whole folder took whichever was written last: UGV_DNP, by
+        fourteen minutes, so the whole Dnipropetr archive was never read and
+        126 lines of two ЛВУМГ got nothing while their EIC codes matched.
         """
         result = []
         for root, dirs, files in os.walk(path):
-            zips = [os.path.join(root, f) for f in files if f.endswith(".zip")]
-            if not zips:
-                continue
-            # Pick the single newest zip in this directory
-            latest = max(zips, key=os.path.getmtime)
-            result.append(latest)
+            by_source: dict[str, list[str]] = {}
+            for f in files:
+                if f.lower().endswith(".zip"):
+                    by_source.setdefault(_zip_source(f), []).append(os.path.join(root, f))
+            for zips in by_source.values():
+                result.append(max(zips, key=snapshot_order))
         return result
 
     def unzip_files(self):
@@ -143,34 +195,35 @@ class UnzipUtils:
 def newest_zip_signature(path: str) -> tuple[frozenset, float]:
     """Build a change-detection signature for the zips under `path`.
 
-    Mirrors UnzipUtils._latest_zip_per_dir: for each directory we only care about
-    the single newest zip (data sources upload full hourly snapshots, so only the
-    latest matters). The signature is a frozenset of (relpath, mtime, size) for
-    those newest-per-dir zips, plus the maximum mtime across them.
+    Mirrors UnzipUtils._latest_zip_per_dir exactly — the newest zip of each
+    data source, not of each directory. The two must agree: if the signature
+    looked at one zip per folder while the unzip read one per source, a new
+    Dnipropetr snapshot in a folder where a UGV_DNP one is newer would change
+    nothing the poller sees, and no update would ever be triggered for it.
 
-    The poller compares signatures between ticks: a changed signature means a new
-    file arrived. `max_mtime` feeds the settle-guard (don't act on a file that may
-    still be mid-upload). Missing/empty path → (frozenset(), 0.0).
+    The signature is a frozenset of (relpath, mtime, size) for those zips, plus
+    the maximum mtime across them. The poller compares signatures between
+    ticks: a changed signature means a new file arrived. `max_mtime` feeds the
+    settle-guard (don't act on a file that may still be mid-upload).
+    Missing/empty path → (frozenset(), 0.0).
     """
     entries: list[tuple[str, float, int]] = []
     max_mtime = 0.0
     if not os.path.isdir(path):
         return frozenset(), 0.0
-    for root, dirs, files in os.walk(path):
-        zips = [os.path.join(root, f) for f in files if f.endswith(".zip")]
-        if not zips:
-            continue
+    try:
+        newest = UnzipUtils._latest_zip_per_dir(path)
+    except OSError:
+        return frozenset(), 0.0
+    for latest in newest:
         try:
-            latest = max(zips, key=os.path.getmtime)
             mtime = os.path.getmtime(latest)
             size = os.path.getsize(latest)
         except OSError:
             # File vanished between listing and stat (e.g. mid-upload churn).
             continue
-        rel = os.path.relpath(latest, path)
-        entries.append((rel, mtime, size))
-        if mtime > max_mtime:
-            max_mtime = mtime
+        entries.append((os.path.relpath(latest, path), mtime, size))
+        max_mtime = max(max_mtime, mtime)
     return frozenset(entries), max_mtime
 
 
