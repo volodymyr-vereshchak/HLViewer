@@ -113,6 +113,17 @@ class EnterpriseDao(BasicDao):
     async def get_history_resolved(self, enterprise_id: int) -> list[dict]:
         """History with device identity resolved through the catalog, ordered
         by install moment, each entry carrying its derived window end."""
+        return (await self.get_histories_resolved([enterprise_id]))[enterprise_id]
+
+    async def get_histories_resolved(
+        self, enterprise_ids: Sequence[int] | None = None
+    ) -> dict[int, list[dict]]:
+        """`get_history_resolved` for many points in one query.
+
+        None means every point. The enterprise list asked once per row, and a
+        branch of eight hundred points spent most of a second on the round
+        trips alone.
+        """
         stmt = (
             select(
                 EnterpriseDevice, DpdDevice,
@@ -122,9 +133,18 @@ class EnterpriseDao(BasicDao):
             .join(DpdDevice, DpdDevice.id == EnterpriseDevice.device_id)
             .outerjoin(CorectorType, DpdDevice.corector_type_id == CorectorType.id)
             .outerjoin(Manufacturer, CorectorType.manufacturer_id == Manufacturer.id)
-            .where(EnterpriseDevice.enterprise_id == enterprise_id)
         )
-        rows = (await self.session.execute(stmt)).all()
+        if enterprise_ids is not None:
+            if not enterprise_ids:
+                return {}
+            stmt = stmt.where(EnterpriseDevice.enterprise_id.in_(list(enterprise_ids)))
+        by_point: dict[int, list] = {eid: [] for eid in enterprise_ids or []}
+        for row in (await self.session.execute(stmt)).all():
+            by_point.setdefault(row[0].enterprise_id, []).append(row)
+        return {eid: self._resolve(rows) for eid, rows in by_point.items()}
+
+    @staticmethod
+    def _resolve(rows: list) -> list[dict]:
         context = {r[0].id: r for r in rows}
 
         resolved = []

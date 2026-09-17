@@ -1008,14 +1008,20 @@ async def list_enterprises(
     modems = await PollingDao(session).gsm_by_enterprise()
     assigned = await PollingDao(session).assignments()
 
+    enterprises = (await session.execute(stmt)).scalars().all()
+    # Histories in one query too, for the same reason.
+    histories = await dao.get_histories_resolved(
+        None if branch_ids is None else [ent.id for ent in enterprises]
+    )
+
     result = []
-    for ent in (await session.execute(stmt)).scalars().all():
+    for ent in enterprises:
         card = modems.get(ent.id)
         result.append(EnterpriseRead(
             **ent.model_dump(),
             devices=[
                 EnterpriseDeviceRead(**d)
-                for d in await dao.get_history_resolved(ent.id)
+                for d in histories.get(ent.id, [])
             ],
             gsm=None if card is None else EnterpriseGsm(
                 phone=card.phone,
