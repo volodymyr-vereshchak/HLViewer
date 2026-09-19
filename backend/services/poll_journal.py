@@ -31,6 +31,10 @@ log = logging.getLogger(__name__)
 #: larger is a runaway, and sending it to a browser helps nobody.
 MAX_BYTES = 256 * 1024
 
+#: The technical journal holds every frame of the call, so it is allowed to be
+#: larger — but only by this much, and only for one call.
+MAX_DEBUG_BYTES = 4 * 1024 * 1024
+
 
 def journal_path(directory: str | Path, enterprise_id: Optional[int],
                  card_id: int) -> Path:
@@ -47,18 +51,48 @@ def journal_path(directory: str | Path, enterprise_id: Optional[int],
     return folder / f"{name}.log"
 
 
+def debug_path(path: Path) -> Path:
+    """The technical journal beside the ordinary one.
+
+    Kept exactly the same way — one file per site, rewritten by every call —
+    because a fault on a line is the same fault on every call, and one call's
+    worth of frames is what anybody actually reads. What it adds is the level
+    below the operator's account: every frame sent and received, how long the
+    corrector took to answer, what was discarded before it.
+    """
+    return path.with_suffix(path.suffix + ".debug")
+
+
 def start(path: Path, title: str) -> None:
-    """Begin a session's file, replacing whatever the last one left."""
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8") as handle:
-            handle.write(_line("info", f"── {title}"))
-    except OSError as error:
-        log.warning("Журнал опитування не почався (%s): %s", path, error)
+    """Begin a session's files, replacing whatever the last one left.
+
+    Both of them: the operator's account and the technical one are two views
+    of one call, and a technical journal left over from the previous call
+    beside a fresh account of this one is worse than none.
+    """
+    for target in (path, debug_path(path)):
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with target.open("w", encoding="utf-8") as handle:
+                handle.write(_line("info", f"── {title}"))
+        except OSError as error:
+            log.warning("Журнал опитування не почався (%s): %s", target, error)
 
 
 def append(path: Path, lines: Iterable[dict]) -> None:
-    """Add what the agent has just reported."""
+    """Add what the agent has just reported.
+
+    Everything goes to the technical journal; the operator's one gets the
+    account meant for a person. Splitting here rather than at the agent keeps
+    one report of one call travelling over the line.
+    """
+    lines = list(lines)
+    _write(debug_path(path), lines, MAX_DEBUG_BYTES)
+    _write(path, [line for line in lines
+                  if str(line.get("level", "info")) != "debug"], MAX_BYTES * 8)
+
+
+def _write(path: Path, lines: Iterable[dict], cap: int) -> None:
     rows = [
         _line(str(line.get("level", "info")), str(line.get("message", "")))
         for line in lines
@@ -67,6 +101,10 @@ def append(path: Path, lines: Iterable[dict]) -> None:
         return
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
+        # A call that never stops talking must not fill the disk: past the cap
+        # the file keeps what it has and says so once.
+        if path.is_file() and path.stat().st_size > cap:
+            return
         with path.open("a", encoding="utf-8") as handle:
             handle.writelines(rows)
     except OSError as error:
@@ -85,22 +123,23 @@ def finish(path: Path, status: str, error_text: Optional[str],
     text = _line(level, tail)
     if status != "ok" and error_text:
         text += _line(level, f"── {error_text}")
-    try:
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(text)
-    except OSError as error:
-        log.warning("Журнал опитування не закрився (%s): %s", path, error)
+    for target in (path, debug_path(path)):
+        try:
+            with target.open("a", encoding="utf-8") as handle:
+                handle.write(text)
+        except OSError as error:
+            log.warning("Журнал опитування не закрився (%s): %s", target, error)
 
 
-def read(path: Path) -> Optional[str]:
+def read(path: Path, limit: int = MAX_BYTES) -> Optional[str]:
     """The file as text, or None when this site has never been polled."""
     try:
         if not path.is_file():
             return None
         size = path.stat().st_size
         with path.open("r", encoding="utf-8", errors="replace") as handle:
-            if size > MAX_BYTES:
-                handle.seek(size - MAX_BYTES)
+            if size > limit:
+                handle.seek(size - limit)
                 # The seek lands mid-line; that half line is not worth showing.
                 handle.readline()
                 return "…\n" + handle.read()

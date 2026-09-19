@@ -710,6 +710,33 @@ class PollJournal(BaseModel):
     updated_at: Optional[datetime] = None
 
 
+@router.get("/devices/{device_id}/log/debug", response_model=PollJournal)
+async def device_debug_log(
+    device_id: int,
+    session: AsyncSession = Depends(get_session),
+):
+    """The same call, frame by frame — for whoever has to find out why.
+
+    Kept and replaced exactly like the operator's journal: one file per site,
+    the last call only. A fault on a line repeats on every call, so a history
+    would be the same text many times over.
+    """
+    card = await PollingDao(session).get_device(device_id)
+    if card is None:
+        raise HTTPException(status_code=404, detail="Картку опитування не знайдено")
+
+    path = poll_journal.debug_path(poll_journal.journal_path(
+        backend_settings["POLL_LOG_DIR"], card.enterprise_id, card.id
+    ))
+    text = poll_journal.read(path, poll_journal.MAX_DEBUG_BYTES)
+    return PollJournal(
+        poll_device_id=device_id,
+        text=text,
+        updated_at=(datetime.fromtimestamp(path.stat().st_mtime)
+                    if text is not None else None),
+    )
+
+
 @router.get("/devices/{device_id}/log/last", response_model=PollJournal)
 async def read_last_log(
     device_id: int,
