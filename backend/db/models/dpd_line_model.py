@@ -189,10 +189,18 @@ class DpdLineDeviceRead(DpdLineDeviceIn):
     bound_to: Optional[datetime] = None
 
 
+from .enterprise_model import EnterpriseGsm  # noqa: E402
+
+
 class DpdLineCreate(DpdLineBase):
     branch_id: int
     lumg_id: Optional[int] = None
     devices: list[DpdLineDeviceIn] = []
+    #: The modem at the line, if there is one. Same shape as an enterprise's
+    #: because it is the same thing: a number to dial, when to dial it, and
+    #: which machines may. None leaves whatever is set alone; a card with the
+    #: number cleared removes it.
+    gsm: Optional["EnterpriseGsm"] = None
 
 
 class DpdLineList(DpdLineBase):
@@ -200,3 +208,4 @@ class DpdLineList(DpdLineBase):
     branch_id: int
     lumg_id: Optional[int] = None
     devices: list[DpdLineDeviceRead] = []
+    gsm: Optional["EnterpriseGsm"] = None

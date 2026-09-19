@@ -136,6 +136,7 @@ class PollingDao:
                 ser_num = current[0] if current else None
                 model_name = current[1] if current else None
                 mfr_name = current[2] if current else None
+                ch_num = current[3] if current else None
                 still_installed = ser_num is not None
             result.append({
                 "card": card,
@@ -203,16 +204,49 @@ class PollingDao:
         )).scalars().all()
         return {card.enterprise_id: card for card in rows}
 
+    async def gsm_of_line(self, dpd_line_id: int) -> Optional[PollDevice]:
+        return (await self.session.execute(
+            select(PollDevice).where(PollDevice.dpd_line_id == dpd_line_id)
+        )).scalars().first()
+
+    async def gsm_by_line(self) -> Dict[int, PollDevice]:
+        """Every ДПД line that has a modem, in one query — as for enterprises."""
+        rows = (await self.session.execute(
+            select(PollDevice).where(PollDevice.dpd_line_id.isnot(None))
+        )).scalars().all()
+        return {card.dpd_line_id: card for card in rows}
+
     async def set_gsm(self, enterprise_id: int, phone: Optional[str],
                       auto_poll: bool, poll_times: Optional[List[str]],
                       password: Optional[str] = None) -> None:
-        """Create, update or remove the modem settings of one enterprise.
+        """Create, update or remove the modem settings of one enterprise."""
+        await self._set_gsm(await self.gsm_of_enterprise(enterprise_id),
+                            {"enterprise_id": enterprise_id},
+                            phone, auto_poll, poll_times, password)
+
+    async def set_line_gsm(self, dpd_line_id: int, phone: Optional[str],
+                           auto_poll: bool, poll_times: Optional[List[str]],
+                           password: Optional[str] = None) -> None:
+        """The same, for a ДПД line: those have modems of their own.
+
+        A line's card differs from an enterprise's in one thing only — which
+        corrector answers. At a site it is whichever one is fitted today; on a
+        line it is the one the line's own history names.
+        """
+        await self._set_gsm(await self.gsm_of_line(dpd_line_id),
+                            {"dpd_line_id": dpd_line_id},
+                            phone, auto_poll, poll_times, password)
+
+    async def _set_gsm(self, card: Optional[PollDevice], owner: Dict,
+                       phone: Optional[str], auto_poll: bool,
+                       poll_times: Optional[List[str]],
+                       password: Optional[str]) -> None:
+        """Create, update or remove one modem card.
 
         A phone cleared to empty removes the card altogether rather than
         leaving one that can never dial: a card with no number is a scheduled
         poll that fails every night for a reason nobody can see from the list.
         """
-        card = await self.gsm_of_enterprise(enterprise_id)
         phone = normalise_phone(phone)
 
         if not phone:
@@ -228,7 +262,7 @@ class PollingDao:
             "device_password": (password or "").strip() or "11",
         }
         if card is None:
-            self.session.add(PollDevice(enterprise_id=enterprise_id, **values))
+            self.session.add(PollDevice(**owner, **values))
         else:
             for field, value in values.items():
                 setattr(card, field, value)
@@ -312,7 +346,7 @@ class PollingDao:
         }
 
     async def line_devices(self) -> Dict[int, tuple]:
-        """dpd line id -> (serial, model, manufacturer) of the corrector on it.
+        """dpd line id -> (serial, model, manufacturer, channel) of its corrector.
 
         A DPD line keeps the corrector identity inline in its history rather
         than as a device row, so there is nothing to point a card at; the card
@@ -324,6 +358,10 @@ class PollingDao:
                 DpdLineDevice.ser_num,
                 CorectorType.model_name,
                 Manufacturer.short_name,
+                # Which line of the corrector this ДПД line is metered on: a
+                # Універсал carries two and answers for the one it is asked
+                # about.
+                DpdLineDevice.ch_num,
             )
             .outerjoin(CorectorType,
                        CorectorType.id == DpdLineDevice.corector_type_id)
@@ -332,7 +370,8 @@ class PollingDao:
             .order_by(DpdLineDevice.installed_from)
         )).all()
         # Ordered by install moment, so the last write per line wins.
-        return {line_id: (ser, model, mfr) for line_id, ser, model, mfr in rows}
+        return {line_id: (ser, model, mfr, ch)
+                for line_id, ser, model, mfr, ch in rows}
 
     async def assignments(self) -> Dict[int, List[int]]:
         """card id -> agents that took it. Empty list means nobody did, and a

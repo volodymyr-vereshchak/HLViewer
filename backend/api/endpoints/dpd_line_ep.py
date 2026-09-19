@@ -74,6 +74,51 @@ async def _check_corector_types(
         )
 
 
+async def _line_gsm(line_id: int, session: AsyncSession):
+    """The modem set up for this line, in the shape the card sends back."""
+    from backend.db.dao.polling_dao import PollingDao
+    from backend.db.models.enterprise_model import EnterpriseGsm
+
+    dao = PollingDao(session)
+    card = await dao.gsm_of_line(line_id)
+    if card is None:
+        return None
+    return EnterpriseGsm(
+        phone=card.phone,
+        auto_poll=card.auto_poll,
+        poll_times=card.poll_times or [],
+        agent_ids=await dao.device_agents(card.id),
+        password=card.device_password,
+    )
+
+
+async def _save_line_gsm(line_id: int, gsm, session: AsyncSession) -> None:
+    """Write the line's modem settings, refusing a number no modem can dial.
+
+    The refusal belongs here rather than in the browser: a card saved with
+    "050…" would look right on the screen and fail every night with "no
+    dialtone", which reads exactly like a dead line.
+    """
+    from backend.db.dao.polling_dao import PollingDao
+    from backend.services.poll_validation import (
+        PollValidationError, validate_poll_times,
+    )
+
+    dao = PollingDao(session)
+    try:
+        times = validate_poll_times(gsm.poll_times)
+        await dao.set_line_gsm(line_id, gsm.phone, gsm.auto_poll, times,
+                               gsm.password)
+    except PollValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error))
+
+    # Only if the card still exists: clearing the number deletes it, and
+    # assignments to a card that is gone would point at nothing.
+    card = await dao.gsm_of_line(line_id)
+    if card is not None:
+        await dao.set_device_agents(card.id, gsm.agent_ids)
+
+
 async def _line_to_list(line: DpdLine, session: AsyncSession) -> DpdLineList:
     """Build the read model: devices resolved through the catalog, with the
     derived window end (next device's installed_from)."""
@@ -97,6 +142,7 @@ async def _line_to_list(line: DpdLine, session: AsyncSession) -> DpdLineList:
         ))
     return DpdLineList(
         **line.model_dump(exclude={"devices"}),
+        gsm=await _line_gsm(line.id, session),
         devices=devices,
     )
 
@@ -211,11 +257,13 @@ class DpdLineRouter:
     ) -> DpdLineList:
         devices = _normalize_devices(data.devices)
         await _check_corector_types(devices, session)
-        line = DpdLine(**data.model_dump(exclude={"devices"}))
+        line = DpdLine(**data.model_dump(exclude={"devices", "gsm"}))
         session.add(line)
         await session.flush()
         for dev in devices:
             session.add(DpdLineDevice(dpd_line_id=line.id, **dev.model_dump()))
+        if data.gsm is not None:
+            await _save_line_gsm(line.id, data.gsm, session)
         await session.commit()
         await session.refresh(line)
         return await _line_to_list(line, session)
@@ -231,13 +279,15 @@ class DpdLineRouter:
             raise HTTPException(status_code=404, detail="DPD line not found")
         devices = _normalize_devices(data.devices)
         await _check_corector_types(devices, session)
-        for k, v in data.model_dump(exclude={"devices"}).items():
+        for k, v in data.model_dump(exclude={"devices", "gsm"}).items():
             setattr(line, k, v)
         await session.execute(
             sa_delete(DpdLineDevice).where(DpdLineDevice.dpd_line_id == dl_id)
         )
         for dev in devices:
             session.add(DpdLineDevice(dpd_line_id=dl_id, **dev.model_dump()))
+        if data.gsm is not None:
+            await _save_line_gsm(dl_id, data.gsm, session)
         await session.commit()
         await session.refresh(line)
         return await _line_to_list(line, session)
