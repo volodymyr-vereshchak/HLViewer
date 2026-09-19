@@ -64,6 +64,10 @@ class PlanDevice(BaseModel):
 
     # What must answer. A reply from any other serial is not written.
     ser_num: Optional[int] = None
+    #: Which line of the corrector the point is metered on, as ДПД numbers
+    #: them. Only a multi-line corrector cares, and only the agent's Універсал
+    #: reader asks for it by name.
+    ch_num: Optional[int] = None
     model_name: Optional[str] = None
     label: Optional[str] = None
 
@@ -275,6 +279,7 @@ async def get_plan(
             due_reason=reason,
             priority=card.priority,
             ser_num=row["ser_num"],
+            ch_num=row.get("ch_num"),
             model_name=row["model_name"],
             label=row["target_label"],
             # What answered last time, else the catalogue's guess. Only an

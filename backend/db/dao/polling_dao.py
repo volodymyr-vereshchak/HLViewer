@@ -88,6 +88,7 @@ class PollingDao:
             select(
                 PollDevice,
                 DpdDevice.ser_num,
+                DpdDevice.ch_num,
                 CorectorType.model_name,
                 Manufacturer.short_name,
                 DpdLine.name,
@@ -107,7 +108,7 @@ class PollingDao:
         fitted = await self.correctors_of_enterprises()
         names = await self.enterprise_names()
         result = []
-        for card, ser_num, model_name, mfr_name, line_name in rows:
+        for card, ser_num, ch_num, model_name, mfr_name, line_name in rows:
             protocol_id = None
             if card.enterprise_id is not None:
                 kind = "enterprise"
@@ -116,6 +117,7 @@ class PollingDao:
                 # phone is a fact about today, not a setting.
                 current = fitted.get(card.enterprise_id)
                 ser_num = current["ser_num"] if current else None
+                ch_num = current["ch_num"] if current else None
                 model_name = current["model_name"] if current else None
                 mfr_name = current["manufacturer"] if current else None
                 still_installed = current is not None
@@ -145,6 +147,7 @@ class PollingDao:
                 ),
                 "target_label": label,
                 "ser_num": ser_num,
+                "ch_num": ch_num,
                 "model_name": model_name,
                 "manufacturer": mfr_name,
                 "still_installed": still_installed,
@@ -249,6 +252,7 @@ class PollingDao:
                 EnterpriseDevice.enterprise_id,
                 DpdDevice.id,
                 DpdDevice.ser_num,
+                DpdDevice.ch_num,
                 CorectorType.model_name,
                 CorectorType.protocol_id,
                 Manufacturer.short_name,
@@ -265,11 +269,17 @@ class PollingDao:
             enterprise_id: {
                 "device_id": device_id,
                 "ser_num": ser_num,
+                # Which line of the corrector this point is metered on. A
+                # Універсал carries two and answers for the one it is asked
+                # about: at МАС СІДС one stands idle while the other has the
+                # gas, and a poll of the wrong one reads zeros all day.
+                "ch_num": ch_num,
                 "model_name": model_name,
                 "protocol_id": protocol_id,
                 "manufacturer": mfr,
             }
-            for enterprise_id, device_id, ser_num, model_name, protocol_id, mfr in rows
+            for enterprise_id, device_id, ser_num, ch_num, model_name, protocol_id, mfr
+            in rows
         }
 
     async def enterprise_names(self) -> Dict[int, str]:
