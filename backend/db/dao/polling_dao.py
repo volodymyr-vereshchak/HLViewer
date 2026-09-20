@@ -482,6 +482,48 @@ class PollingDao:
         )).scalars().all()
         return [{"agent": a, "device_count": counts.get(a.id, 0)} for a in agents]
 
+    async def busy_agents(self) -> Dict[int, Dict]:
+        """What each agent is on the line with right now, by the claim it holds.
+
+        The claim is the only record of a call in progress the server has —
+        the modem is on somebody else's machine — and it is exactly what the
+        agents screen was missing: an agent that is online says nothing about
+        whether it is dialling or idle.
+        """
+        fresh = datetime.now() - self.CLAIM_TIMEOUT
+        rows = (await self.session.execute(
+            select(PollDevice, DpdLine.name)
+            .outerjoin(DpdLine, DpdLine.id == PollDevice.dpd_line_id)
+            .where(PollDevice.polling_agent_id.isnot(None))
+            .where(PollDevice.polling_since.isnot(None))
+            .where(PollDevice.polling_since >= fresh)
+            .order_by(PollDevice.polling_since)
+        )).all()
+        if not rows:
+            return {}
+        names = await self.enterprise_names()
+        at_point = await self.points_of_devices()
+        busy: Dict[int, Dict] = {}
+        for card, line_name in rows:
+            if card.enterprise_id is not None:
+                label = names.get(card.enterprise_id)
+            elif card.dpd_line_id is not None:
+                label = line_name
+            else:
+                point = at_point.get(card.dpd_device_id)
+                label = point[0] if point else None
+            # One modem, one call: if a stale claim ever left two, the newest
+            # is the one being dialled now.
+            busy[card.polling_agent_id] = {
+                "poll_device_id": card.id,
+                "label": label,
+                "since": card.polling_since,
+                "phase": card.progress_phase,
+                "done": card.progress_done,
+                "total": card.progress_total,
+            }
+        return busy
+
     async def get_agent(self, agent_id: int) -> Optional[PollAgent]:
         return await self.session.get(PollAgent, agent_id)
 

@@ -204,6 +204,17 @@ class PollAgentUpdate(BaseModel):
     active: Optional[bool] = None
 
 
+class PollAgentBusy(BaseModel):
+    """The call this agent is on right now, if it is on one."""
+
+    poll_device_id: int
+    label: Optional[str] = None
+    since: Optional[datetime] = None
+    phase: Optional[str] = None
+    done: Optional[int] = None
+    total: Optional[int] = None
+
+
 class PollAgentRead(BaseModel):
     id: int
     name: str
@@ -223,6 +234,10 @@ class PollAgentRead(BaseModel):
     #: watching a machine that never picks anything up.
     version_ok: bool = True
     expected_version: Optional[str] = None
+    #: Which site this agent is dialling at this moment, taken from the claim
+    #: it holds. None means idle — which is a different thing from offline,
+    #: and the screen used to show both as the same green badge.
+    busy: Optional[PollAgentBusy] = None
 
 
 class PollAgentCreated(PollAgentRead):
@@ -774,6 +789,8 @@ async def read_last_log(
 async def list_agents(session: AsyncSession = Depends(get_session)):
     alive = datetime.now() - PollingDao.AGENT_SILENCE
     wanted = agent_version.expected()
+    dao = PollingDao(session)
+    busy = await dao.busy_agents()
     return [
         PollAgentRead(
             **row["agent"].model_dump(),
@@ -782,8 +799,10 @@ async def list_agents(session: AsyncSession = Depends(get_session)):
                         and row["agent"].last_seen_at >= alive),
             version_ok=agent_version.matches(row["agent"].version, wanted),
             expected_version=wanted,
+            busy=(PollAgentBusy(**busy[row["agent"].id])
+                  if row["agent"].id in busy else None),
         )
-        for row in await PollingDao(session).list_agents()
+        for row in await dao.list_agents()
     ]
 
 

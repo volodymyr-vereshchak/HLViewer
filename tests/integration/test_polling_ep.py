@@ -1101,6 +1101,66 @@ class TestWhetherAnAgentIsThere:
         assert [a["online"] for a in listed if a["id"] == agent["id"]] == [True]
 
 
+class TestWhetherAnAgentIsBusy:
+    """Online says the machine is switched on; busy says it is on the phone.
+
+    The distinction is the whole of the question an operator asks when a poll
+    is late: is my agent doing nothing, or is it already dialling somebody
+    else. The claim on the card is the only record the server has of a call in
+    progress — the modem is on the operator's machine — so that is what the
+    screen reads.
+    """
+
+    async def test_an_agent_dialling_nobody_is_free(self, admin_client, targets):
+        agent = (await admin_client.post(
+            "/polling/agents", json={"name": "АРМ вільний"})).json()
+        listed = (await admin_client.get("/polling/agents")).json()
+        assert [a["busy"] for a in listed if a["id"] == agent["id"]] == [None]
+
+    async def test_the_site_on_the_line_is_named(self, admin_client, targets):
+        card = await make_card(
+            admin_client, enterprise_id=targets["enterprise_id"],
+            phone="+380671234567")
+        agent = (await admin_client.post(
+            "/polling/agents", json={"name": "АРМ на лінії"})).json()
+
+        async with async_session_factory() as session:
+            row = await session.get(PollDevice, card["id"])
+            row.polling_agent_id = agent["id"]
+            row.polling_since = datetime.now() - timedelta(minutes=2)
+            row.progress_phase = "hourly"
+            row.progress_done = 120
+            row.progress_total = 168
+            await session.commit()
+
+        listed = (await admin_client.get("/polling/agents")).json()
+        busy = next(a for a in listed if a["id"] == agent["id"])["busy"]
+        assert busy["label"] == "Завод А"
+        assert busy["poll_device_id"] == card["id"]
+        assert (busy["phase"], busy["done"], busy["total"]) == ("hourly", 120, 168)
+
+    async def test_a_claim_that_was_never_released_stops_counting(
+        self, admin_client, targets
+    ):
+        # A machine switched off mid-session leaves its claim behind. It frees
+        # itself after twenty minutes, and until then the screen would keep
+        # reporting a call that ended long ago.
+        card = await make_card(
+            admin_client, dpd_device_id=targets["dpd_device_id"],
+            phone="+380671234567")
+        agent = (await admin_client.post(
+            "/polling/agents", json={"name": "АРМ зниклий"})).json()
+
+        async with async_session_factory() as session:
+            row = await session.get(PollDevice, card["id"])
+            row.polling_agent_id = agent["id"]
+            row.polling_since = datetime.now() - timedelta(hours=3)
+            await session.commit()
+
+        listed = (await admin_client.get("/polling/agents")).json()
+        assert [a["busy"] for a in listed if a["id"] == agent["id"]] == [None]
+
+
 class TestTheLogOfTheLastPoll:
     """The file that answers "what did the last call do".
 
