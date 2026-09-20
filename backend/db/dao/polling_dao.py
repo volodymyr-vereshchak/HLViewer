@@ -465,6 +465,10 @@ class PollingDao:
         somebody else's machine."""
         card.manual_requested_at = datetime.now()
         card.manual_requested_by = user_id
+        # A withdrawal of the PREVIOUS request may still be standing — it is
+        # left there on purpose, to stop an agent that was already carrying
+        # that request. This one is newer and means the opposite.
+        card.cancel_requested_at = None
 
     async def cancel_manual(self, card: PollDevice) -> None:
         card.manual_requested_at = None

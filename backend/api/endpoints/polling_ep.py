@@ -431,7 +431,11 @@ class EnterprisePollStart(BaseModel):
     poll_device_id: int
     ser_num: Optional[int] = None
     model_name: Optional[str] = None
+    #: The one machine this went to, when there is only one.
     agent_name: Optional[str] = None
+    #: Every machine that could take it — with two on the line, the
+    #: request belongs to whichever asks for its plan first.
+    agent_names: List[str] = Field(default_factory=list)
 
 
 @router.post(
@@ -515,7 +519,11 @@ async def poll_enterprise(
         poll_device_id=card.id,
         ser_num=fitted["ser_num"],
         model_name=fitted["model_name"],
-        agent_name=agents[0].name,
+        # Only when there is one machine it can go to. With two on the line the
+        # request goes to whichever asks for its plan first, and naming one of
+        # them is a promise the server is not in a position to make.
+        agent_name=agents[0].name if len(agents) == 1 else None,
+        agent_names=[a.name for a in agents],
     )
 
 
@@ -574,9 +582,15 @@ async def cancel_enterprise_poll(
 
     if card.manual_requested_at is not None:
         await dao.cancel_manual(card)
+        # And the stop flag with it. Withdrawing the request only stops agents
+        # that have not looked yet: one that fetched its plan a second ago
+        # already has the job in hand and would dial a site nobody is waiting
+        # for any more. The flag is what its `start` runs into.
+        card.cancel_requested_at = datetime.now()
         await session.commit()
         return PollCancelled(
-            outcome="queued", detail="Запит знято — агент його не встиг узяти",
+            outcome="queued",
+            detail="Запит знято. Якщо агент уже встиг його взяти, він не дзвонитиме",
         )
 
     return PollCancelled(outcome="idle", detail="Зараз нічого не опитується")
@@ -597,7 +611,15 @@ class PollWatch(BaseModel):
 
     poll_device_id: int
     status: str                       # waiting | polling | ok | error
+    #: Who is on the line now, or — after the call — who made it. Never a
+    #: guess: while the request is still queued nobody has taken it yet, and
+    #: naming the machine that happened to call last time is how an operator
+    #: ends up watching an agent that is switched off.
     agent_name: Optional[str] = None
+    #: Which machines can pick this request up, while it is still queued.
+    #: Assigned to this site and heard from in the last minute — the same rule
+    #: that decides whether the poll is accepted at all.
+    candidates: List[str] = Field(default_factory=list)
     ser_num: Optional[int] = None
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
@@ -649,11 +671,27 @@ async def watch_enterprise_poll(
         state = "waiting"
 
     agents = {row["agent"].id: row["agent"].name for row in await dao.list_agents()}
+    # Named only when somebody really is on the line, or when the call is over
+    # and this is its outcome. A queued request belongs to nobody yet: it goes
+    # to whichever assigned machine asks for its plan first, and falling back
+    # to `last_agent_id` made the screen promise a machine that was switched
+    # off while the other one quietly took the call.
+    if card.polling_agent_id is not None:
+        who = agents.get(card.polling_agent_id)
+    elif state in ("ok", "error"):
+        who = agents.get(card.last_agent_id)
+    else:
+        who = None
+    waiting_for = (
+        [a.name for a in await dao.free_agents_for(card.id)]
+        if state == "waiting" else []
+    )
     fitted = (await dao.correctors_of_enterprises()).get(enterprise_id)
     return PollWatch(
         poll_device_id=card.id,
         status=state,
-        agent_name=agents.get(card.polling_agent_id or card.last_agent_id),
+        agent_name=who,
+        candidates=waiting_for,
         ser_num=fitted["ser_num"] if fitted else None,
         started_at=card.polling_since or card.manual_requested_at,
         finished_at=card.last_attempt_at,

@@ -348,6 +348,12 @@ async def report_state(
     return {"ok": True}
 
 
+#: How long a withdrawal keeps an agent from dialling. Long enough to cover
+#: the plan interval and a slow modem's warm-up; short enough that a flag left
+#: behind by a call that never started is spent on nothing.
+CANCEL_WINDOW = timedelta(minutes=2)
+
+
 @router.post("/devices/{device_id}/start")
 async def start_session(
     device_id: int,
@@ -373,6 +379,28 @@ async def start_session(
         )
     if device_id not in await dao.agent_devices(agent.id):
         raise HTTPException(status_code=403, detail="Прилад не закріплений за агентом")
+
+    # A request withdrawn while this agent was already carrying it. The plan is
+    # fetched every few seconds, so between «скасувати» in the browser and the
+    # dial tone there is a window in which the device has no claim, no request
+    # and an agent on its way to the phone anyway. The flag closes it.
+    #
+    # Only when nobody holds the device: during somebody else's call the same
+    # flag means «that call is to stop», and clearing it here would swallow the
+    # cancellation.
+    card = await dao.get_device(device_id)
+    if card is not None and card.polling_agent_id is None             and card.cancel_requested_at is not None:
+        withdrawn = datetime.now() - card.cancel_requested_at < CANCEL_WINDOW
+        # Raised once, not forever: a flag nobody ever ran into would refuse
+        # some innocent scheduled poll days later.
+        card.cancel_requested_at = None
+        await session.commit()
+        if withdrawn:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Оператор скасував цей запит",
+            )
+
     if not await dao.claim(device_id, agent.id):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

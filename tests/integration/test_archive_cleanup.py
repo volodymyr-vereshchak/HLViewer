@@ -162,3 +162,44 @@ class TestItStaysInsideTheHistory:
         assert (seen["hourly"], seen["daily"]) == (24, 1)
         assert len(await hours_left(point["device_id"])) == 24
         assert seen["devices"][0]["ser_num"] == 7004
+
+
+class TestWhereTheNextPollStarts:
+    """`poll_range` — from the end of what is stored, to tomorrow.
+
+    It is a hand-written SQL statement, and until it was run against Postgres
+    nobody found out that its subquery alias («both») is a reserved word: every
+    manual poll of an enterprise answered 500 with «syntax error at or near
+    "both"». Hence a test that does nothing clever — it executes the thing.
+    """
+
+    async def test_a_point_with_nothing_stored_starts_from_the_beginning(self):
+        point = await one_point(7010)
+        async with async_session_factory() as session:
+            since, until = await archive_cleanup.poll_range(
+                session, point["enterprise_id"]
+            )
+        assert since == archive_cleanup.FIRST_EVER
+        assert until == date.today() + timedelta(days=1)
+
+    async def test_it_starts_from_the_newest_row_of_either_archive(self):
+        point = await one_point(7011)
+        await fill_hours(point["device_id"], datetime(2026, 6, 5, 7), 24)
+        await fill_days(point["device_id"], date(2026, 6, 9), 1)
+
+        async with async_session_factory() as session:
+            since, _ = await archive_cleanup.poll_range(
+                session, point["enterprise_id"]
+            )
+        # The daily row is the later of the two, and it wins.
+        assert since == date(2026, 6, 9)
+
+    async def test_hours_alone_are_enough(self):
+        point = await one_point(7012)
+        await fill_hours(point["device_id"], datetime(2026, 6, 5, 7), 24)
+
+        async with async_session_factory() as session:
+            since, _ = await archive_cleanup.poll_range(
+                session, point["enterprise_id"]
+            )
+        assert since == date(2026, 6, 6)          # the last hour lands next day

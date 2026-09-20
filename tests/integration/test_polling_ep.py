@@ -100,6 +100,23 @@ async def _replace(
         return device.id
 
 
+async def live_agent(admin_client, anon_client, card_id: int,
+                     name: str = "АРМ біля модема") -> dict:
+    """An agent that has this card and has been heard from just now.
+
+    Fetching a plan is what marks it as being on the line — which is what
+    every refusal about «немає вільного модема» is decided on.
+    """
+    agent = (await admin_client.post(
+        "/polling/agents", json={"name": name}
+    )).json()
+    headers = {"X-Agent-Key": agent["key"]}
+    await anon_client.put("/polling/agent/devices",
+                          json={"device_ids": [card_id]}, headers=headers)
+    await anon_client.get("/polling/agent/plan", headers=headers)
+    return {"agent": agent, "headers": headers}
+
+
 async def make_card(client, **body) -> dict:
     resp = await client.post("/polling/devices", json=body)
     assert resp.status_code == 201, resp.text
@@ -593,16 +610,9 @@ class TestPollingAnEnterpriseNow:
     goes nowhere, several minutes later and with nothing to show for it.
     """
 
-    async def _live_agent(self, admin_client, anon_client, card_id: int) -> dict:
-        agent = (await admin_client.post(
-            "/polling/agents", json={"name": "АРМ біля модема"}
-        )).json()
-        headers = {"X-Agent-Key": agent["key"]}
-        await anon_client.put("/polling/agent/devices",
-                              json={"device_ids": [card_id]}, headers=headers)
-        # Fetching a plan is what marks an agent as being on the line.
-        await anon_client.get("/polling/agent/plan", headers=headers)
-        return {"agent": agent, "headers": headers}
+    async def _live_agent(self, admin_client, anon_client, card_id: int,
+                          name: str = "АРМ біля модема") -> dict:
+        return await live_agent(admin_client, anon_client, card_id, name)
 
     async def test_a_site_with_no_modem_says_so(self, admin_client, targets):
         resp = await admin_client.post(
@@ -787,6 +797,70 @@ class TestPollingAnEnterpriseNow:
         )).json()
         assert watch["status"] == "waiting"
         assert watch["lines"] == []
+
+    async def test_two_agents_mean_nobody_is_promised(
+        self, admin_client, anon_client, targets
+    ):
+        """With two machines on a site, the request belongs to neither yet.
+
+        It is picked up by whichever asks for its plan first. Naming one of
+        them — and the screen used to name the one that made the PREVIOUS
+        call — sends an operator to watch a machine that is switched off while
+        the other quietly takes the job.
+        """
+        await _set_protocol(targets["corector_type_id"], 1054)
+        card = await make_card(
+            admin_client, enterprise_id=targets["enterprise_id"],
+            phone="+380501234567",
+        )
+        first = await self._live_agent(admin_client, anon_client, card["id"],
+                                       name="АРМ перший")
+        await self._live_agent(admin_client, anon_client, card["id"],
+                               name="АРМ другий")
+
+        # A call made earlier by the first agent, so `last_agent_id` is set.
+        await anon_client.post(f"/polling/agent/devices/{card['id']}/start",
+                               headers=first["headers"])
+        await anon_client.post(
+            f"/polling/agent/devices/{card['id']}/finish",
+            json={"status": "ok", "rows": {}}, headers=first["headers"],
+        )
+
+        started = (await admin_client.post(
+            f"/polling/enterprises/{targets['enterprise_id']}/poll"
+        )).json()
+        assert started["agent_name"] is None
+        assert sorted(started["agent_names"]) == ["АРМ другий", "АРМ перший"]
+
+        watch = (await admin_client.get(
+            f"/polling/enterprises/{targets['enterprise_id']}/poll"
+        )).json()
+        assert watch["status"] == "waiting"
+        # Nobody has taken it — least of all the agent that called last time.
+        assert watch["agent_name"] is None
+        assert sorted(watch["candidates"]) == ["АРМ другий", "АРМ перший"]
+
+    async def test_the_agent_on_the_line_is_named(
+        self, admin_client, anon_client, targets
+    ):
+        await _set_protocol(targets["corector_type_id"], 1054)
+        card = await make_card(
+            admin_client, enterprise_id=targets["enterprise_id"],
+            phone="+380501234567",
+        )
+        live = await self._live_agent(admin_client, anon_client, card["id"],
+                                      name="АРМ що дзвонить")
+        await admin_client.post(
+            f"/polling/enterprises/{targets['enterprise_id']}/poll")
+        await anon_client.post(f"/polling/agent/devices/{card['id']}/start",
+                               headers=live["headers"])
+
+        watch = (await admin_client.get(
+            f"/polling/enterprises/{targets['enterprise_id']}/poll"
+        )).json()
+        assert watch["status"] == "polling"
+        assert watch["agent_name"] == "АРМ що дзвонить"
+        assert watch["candidates"] == []
 
     async def test_the_screen_follows_the_session(
         self, admin_client, anon_client, targets, tmp_path, monkeypatch
@@ -1290,9 +1364,71 @@ class TestStoppingAPollThatWasStartedByMistake:
         async with async_session_factory() as session:
             row = await session.get(PollDevice, card["id"])
             assert row.manual_requested_at is None
-            # Nothing was running, so nothing is asked to stop: a flag left
-            # standing would end the retry somebody presses next.
-            assert row.cancel_requested_at is None
+            # And the stop flag is raised even though nothing is running: an
+            # agent that fetched its plan a second before the withdrawal is
+            # already carrying the job, and this is what its `start` runs
+            # into. A new request clears it again — see the tests below.
+            assert row.cancel_requested_at is not None
+
+    async def test_an_agent_that_already_took_a_withdrawn_request_does_not_dial(
+        self, admin_client, anon_client, targets
+    ):
+        """The window between «скасувати» and the dial tone.
+
+        The plan is fetched every few seconds, so an agent can be holding a
+        request that the operator withdrew a moment ago: no claim, no request,
+        and a modem about to ring a site nobody is waiting for. This is what
+        the site's owner saw — the request looked withdrawn and the second
+        agent called anyway.
+        """
+        await _set_protocol(targets["corector_type_id"], 1054)
+        card = await make_card(
+            admin_client, enterprise_id=targets["enterprise_id"],
+            phone="+380501234567",
+        )
+        live = await live_agent(admin_client, anon_client, card["id"],
+                                name="АРМ що вже взяв")
+
+        await admin_client.post(
+            f"/polling/enterprises/{targets['enterprise_id']}/poll")
+        await admin_client.post(
+            f"/polling/enterprises/{targets['enterprise_id']}/poll/cancel")
+
+        # The agent got as far as `start` before hearing about it.
+        refused = await anon_client.post(
+            f"/polling/agent/devices/{card['id']}/start", headers=live["headers"])
+        assert refused.status_code == 409
+        assert "скасував" in refused.json()["detail"]
+
+        async with async_session_factory() as session:
+            row = await session.get(PollDevice, card["id"])
+            assert row.polling_agent_id is None       # nothing was taken
+            assert row.cancel_requested_at is None    # spent, not standing
+
+    async def test_asking_again_after_a_cancel_polls(
+        self, admin_client, anon_client, targets
+    ):
+        """The retry somebody presses straight after cancelling."""
+        await _set_protocol(targets["corector_type_id"], 1054)
+        card = await make_card(
+            admin_client, enterprise_id=targets["enterprise_id"],
+            phone="+380501234567",
+        )
+        live = await live_agent(admin_client, anon_client, card["id"],
+                                name="АРМ повторний")
+
+        await admin_client.post(
+            f"/polling/enterprises/{targets['enterprise_id']}/poll")
+        await admin_client.post(
+            f"/polling/enterprises/{targets['enterprise_id']}/poll/cancel")
+        # Changed their mind — and this request is newer than the withdrawal.
+        again = await admin_client.post(
+            f"/polling/enterprises/{targets['enterprise_id']}/poll")
+        assert again.status_code == 202
+
+        taken = await anon_client.post(
+            f"/polling/agent/devices/{card['id']}/start", headers=live["headers"])
+        assert taken.status_code == 200, taken.text
 
     async def test_a_running_call_is_asked_to_hang_up(self, admin_client, targets):
         await _set_protocol(targets["corector_type_id"], 1054)

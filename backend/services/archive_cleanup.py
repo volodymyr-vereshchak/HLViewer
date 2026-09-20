@@ -165,6 +165,9 @@ async def poll_range(session: AsyncSession, enterprise_id: int) -> tuple[date, d
     yesterday costs one day and a point nobody has touched since spring costs
     the months it actually missed.
     """
+    # The subquery alias is spelled out rather than the obvious «both»:
+    # BOTH is a reserved word in Postgres (TRIM(BOTH …)), and an alias that
+    # needs quoting is an alias waiting to break.
     newest = (await session.execute(
         text(
             """
@@ -178,7 +181,7 @@ async def poll_range(session: AsyncSession, enterprise_id: int) -> tuple[date, d
                   FROM dpd_daily_archive d
                   JOIN enterprise_device ed ON ed.device_id = d.device_id
                  WHERE ed.enterprise_id = :id
-            ) AS both
+            ) AS newest_of_both
             """
         ),
         {"id": enterprise_id},
