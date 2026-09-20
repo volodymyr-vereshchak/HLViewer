@@ -852,13 +852,12 @@ class TestTheModemOnTheEnterpriseCard:
         updated = (await admin_client.patch(
             f"/enterprise-mappings/{created['id']}",
             json={"gsm": {"phone": "0501234567", "auto_poll": True,
-                          "poll_times": ["18:00", "06:00"]}},
+                          "poll_cron": "0 18,6 * * *"}},
         )).json()
 
-        # Stored in one shape whatever was typed, and sorted: the list reads
-        # as a daily rhythm, and "18:00, 06:00" makes a reader do arithmetic.
+        # Stored in one shape whatever was typed, and the schedule with it.
         assert updated["gsm"]["phone"] == "+380501234567"
-        assert updated["gsm"]["poll_times"] == ["06:00", "18:00"]
+        assert updated["gsm"]["poll_cron"] == "0 18,6 * * *"
         assert updated["gsm"]["auto_poll"] is True
 
     async def test_the_machine_that_dials_is_set_here_too(
@@ -879,7 +878,7 @@ class TestTheModemOnTheEnterpriseCard:
         updated = (await admin_client.patch(
             f"/enterprise-mappings/{created['id']}",
             json={"gsm": {"phone": "+380501234567", "auto_poll": False,
-                          "poll_times": [], "agent_ids": [agent["id"]]}},
+                          "poll_cron": None, "agent_ids": [agent["id"]]}},
         )).json()
         assert updated["gsm"]["agent_ids"] == [agent["id"]]
 
@@ -892,7 +891,7 @@ class TestTheModemOnTheEnterpriseCard:
         emptied = (await admin_client.patch(
             f"/enterprise-mappings/{created['id']}",
             json={"gsm": {"phone": "+380501234567", "auto_poll": False,
-                          "poll_times": [], "agent_ids": []}},
+                          "poll_cron": None, "agent_ids": []}},
         )).json()
         assert emptied["gsm"]["agent_ids"] == []
 
@@ -908,7 +907,7 @@ class TestTheModemOnTheEnterpriseCard:
         resp = await admin_client.patch(
             f"/enterprise-mappings/{created['id']}",
             json={"gsm": {"phone": "+380501234567", "auto_poll": True,
-                          "poll_times": ["25:00"]}},
+                          "poll_cron": "0 25 * * *"}},
         )
         assert resp.status_code == 422
 
@@ -926,12 +925,12 @@ class TestTheModemOnTheEnterpriseCard:
         await admin_client.patch(
             f"/enterprise-mappings/{created['id']}",
             json={"gsm": {"phone": "+380501234567", "auto_poll": False,
-                          "poll_times": []}},
+                          "poll_cron": None}},
         )
 
         cleared = (await admin_client.patch(
             f"/enterprise-mappings/{created['id']}",
-            json={"gsm": {"phone": "", "auto_poll": False, "poll_times": []}},
+            json={"gsm": {"phone": "", "auto_poll": False, "poll_cron": None}},
         )).json()
         assert cleared["gsm"] is None
 
@@ -944,7 +943,7 @@ class TestTheModemOnTheEnterpriseCard:
         await admin_client.patch(
             f"/enterprise-mappings/{created['id']}",
             json={"gsm": {"phone": "+380501234567", "auto_poll": True,
-                          "poll_times": ["06:00"]}},
+                          "poll_cron": "0 6 * * *"}},
         )
 
         renamed = (await admin_client.patch(
@@ -970,7 +969,7 @@ class TestTheListCarriesTheModem:
         await admin_client.patch(
             f"/enterprise-mappings/{with_modem['id']}",
             json={"gsm": {"phone": "+380501234567", "auto_poll": True,
-                          "poll_times": ["06:00"]}},
+                          "poll_cron": "0 6 * * *"}},
         )
         await admin_client.post("/enterprise-mappings/", json={
             "enterprise_name": "Завод без модема", "active": True, "enabled": True,
@@ -1053,7 +1052,7 @@ class TestTheDevicePassword:
     ):
         created = (await admin_client.post(
             "/enterprise-mappings/", json=_enterprise_payload(seed_topology))).json()
-        base = {"phone": "+380501234567", "auto_poll": False, "poll_times": []}
+        base = {"phone": "+380501234567", "auto_poll": False, "poll_cron": None}
 
         first = (await admin_client.patch(
             f"/enterprise-mappings/{created['id']}", json={"gsm": base})).json()

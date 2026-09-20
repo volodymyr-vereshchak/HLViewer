@@ -217,15 +217,15 @@ class PollingDao:
         return {card.dpd_line_id: card for card in rows}
 
     async def set_gsm(self, enterprise_id: int, phone: Optional[str],
-                      auto_poll: bool, poll_times: Optional[List[str]],
+                      auto_poll: bool, poll_cron: Optional[str],
                       password: Optional[str] = None) -> None:
         """Create, update or remove the modem settings of one enterprise."""
         await self._set_gsm(await self.gsm_of_enterprise(enterprise_id),
                             {"enterprise_id": enterprise_id},
-                            phone, auto_poll, poll_times, password)
+                            phone, auto_poll, poll_cron, password)
 
     async def set_line_gsm(self, dpd_line_id: int, phone: Optional[str],
-                           auto_poll: bool, poll_times: Optional[List[str]],
+                           auto_poll: bool, poll_cron: Optional[str],
                            password: Optional[str] = None) -> None:
         """The same, for a ДПД line: those have modems of their own.
 
@@ -235,11 +235,11 @@ class PollingDao:
         """
         await self._set_gsm(await self.gsm_of_line(dpd_line_id),
                             {"dpd_line_id": dpd_line_id},
-                            phone, auto_poll, poll_times, password)
+                            phone, auto_poll, poll_cron, password)
 
     async def _set_gsm(self, card: Optional[PollDevice], owner: Dict,
                        phone: Optional[str], auto_poll: bool,
-                       poll_times: Optional[List[str]],
+                       poll_cron: Optional[str],
                        password: Optional[str]) -> None:
         """Create, update or remove one modem card.
 
@@ -257,7 +257,7 @@ class PollingDao:
         values = {
             "phone": phone,
             "auto_poll": auto_poll,
-            "poll_times": poll_times or [],
+            "poll_cron": poll_cron or None,
             "enabled": True,
             "device_password": (password or "").strip() or "11",
         }
@@ -818,10 +818,10 @@ class PollingDao:
             await self.session.flush()
         return settings
 
-    async def set_poll_times(self, poll_times: List[str]) -> PollSettings:
+    async def set_poll_cron(self, poll_cron: str) -> PollSettings:
         settings = await self.get_settings()
         # A new list, not an edit of the old one: SQLAlchemy tracks the
         # replacement, while mutating a JSONB value in place goes unnoticed.
-        settings.poll_times = list(poll_times)
+        settings.poll_cron = poll_cron
         await self.session.flush()
         return settings

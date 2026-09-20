@@ -27,7 +27,7 @@ from backend.services.poll_schedule import (
     last_slot,
 )
 
-TIMES = ["08:00", "16:00"]
+CRON = "0 8,16 * * *"
 
 
 def at(day: int, hour: int, minute: int = 0) -> datetime:
@@ -37,8 +37,8 @@ def at(day: int, hour: int, minute: int = 0) -> datetime:
 def due(**over):
     base = dict(
         now=at(10, 12),
-        poll_times=TIMES,
-        default_times=["06:00"],
+        poll_cron=CRON,
+        default_cron="0 6 * * *",
         last_poll_at=at(10, 8, 15),
         enabled=True,
         auto_poll=True,
@@ -52,25 +52,25 @@ def due(**over):
 
 class TestLastSlot:
     def test_the_most_recent_one_that_has_arrived(self):
-        assert last_slot(at(10, 12), TIMES) == at(10, 8)
-        assert last_slot(at(10, 16, 5), TIMES) == at(10, 16)
+        assert last_slot(at(10, 12), CRON) == at(10, 8)
+        assert last_slot(at(10, 16, 5), CRON) == at(10, 16)
 
     def test_before_the_first_slot_it_is_yesterday_evening(self):
         # A device scheduled for 18:00 and looked at in the morning is not
         # "not yet scheduled" — it has been due since last night.
-        assert last_slot(at(10, 3), ["18:00"]) == at(9, 18)
+        assert last_slot(at(10, 3), "0 18 * * *") == at(9, 18)
 
     def test_a_slot_exactly_now_counts_as_arrived(self):
-        assert last_slot(at(10, 8), TIMES) == at(10, 8)
+        assert last_slot(at(10, 8), CRON) == at(10, 8)
 
-    def test_no_hours_at_all(self):
-        assert last_slot(at(10, 12), []) is None
+    def test_no_schedule_at_all(self):
+        assert last_slot(at(10, 12), "") is None
         assert last_slot(at(10, 12), None) is None
 
-    def test_rubbish_entries_are_ignored_rather_than_crash(self):
+    def test_a_broken_expression_names_no_slot_rather_than_crashing(self):
         # The API refuses these on the way in; this is the belt to that braces,
         # because a bad row in the database must not stop the whole plan.
-        assert last_slot(at(10, 12), ["25:00", "ранок", "08:00"]) == at(10, 8)
+        assert last_slot(at(10, 12), "щоранку") is None
 
 
 class TestTheWorkedExample:
@@ -88,9 +88,10 @@ class TestWhatSwitchesItOff:
     def test_without_a_schedule_it_waits_to_be_asked(self):
         assert due(auto_poll=False, last_poll_at=None) == (False, REASON_MANUAL_ONLY)
 
-    def test_no_hours_anywhere_is_not_an_error(self):
-        # A device kept for manual polling only, with the hours left empty.
-        assert due(poll_times=[], last_poll_at=None) == (False, REASON_NO_SLOTS)
+    def test_no_schedule_anywhere_is_not_an_error(self):
+        # A device kept for manual polling only, with the schedule left empty.
+        assert due(poll_cron=None, default_cron=None,
+                   last_poll_at=None) == (False, REASON_NO_SLOTS)
 
 
 class TestManualRequests:
@@ -138,18 +139,24 @@ class TestFirstPollAndRecovery:
 
 
 class TestOwnHoursVersusGlobal:
-    def test_none_means_follow_the_global_hours(self):
+    def test_none_means_follow_the_global_schedule(self):
         # Global 06:00, clock 12:00, last poll yesterday → due.
-        assert due(poll_times=None, last_poll_at=at(9, 20)) == (True, REASON_OVERDUE)
+        assert due(poll_cron=None, last_poll_at=at(9, 20)) == (True, REASON_OVERDUE)
 
-    def test_and_its_own_hours_win_when_it_has_them(self):
-        # Same moment, but this device only wants 16:00: 08:00 has passed and
-        # the poll at 08:15 covered it.
-        assert due(poll_times=TIMES) == (False, REASON_ALREADY_POLLED)
+    def test_and_its_own_schedule_wins_when_it_has_one(self):
+        # Same moment, but this device only wants 08:00 and 16:00: 08:00 has
+        # passed and the poll at 08:15 covered it.
+        assert due(poll_cron=CRON) == (False, REASON_ALREADY_POLLED)
 
-    @pytest.mark.parametrize("times", [["23:59"], ["00:00"]])
-    def test_the_edges_of_the_day(self, times):
-        assert due(poll_times=times, last_poll_at=None)[0] is True
+    @pytest.mark.parametrize("schedule", ["59 23 * * *", "0 0 * * *"])
+    def test_the_edges_of_the_day(self, schedule):
+        assert due(poll_cron=schedule, last_poll_at=None)[0] is True
+
+    def test_every_hour_is_five_characters_now(self):
+        # What the list could not say without twenty-four entries.
+        assert due(poll_cron="0 * * * *", last_poll_at=at(10, 11, 30)) == (
+            True, REASON_OVERDUE
+        )
 
 
 class TestAfterAFailure:

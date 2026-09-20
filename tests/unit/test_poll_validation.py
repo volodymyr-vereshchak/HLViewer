@@ -13,7 +13,7 @@ from backend.services.poll_validation import (
     PollValidationError,
     address_matters,
     normalise_phone,
-    validate_poll_times,
+    validate_poll_cron,
     validate_priority,
 )
 
@@ -50,28 +50,21 @@ class TestPhone:
         assert normalise_phone("   ") is None
 
 
-class TestPollTimes:
-    def test_slots_come_back_padded_and_sorted(self):
-        # The list is read as a daily rhythm, so "18:00, 06:00" makes that
-        # harder than it needs to be.
-        assert validate_poll_times(["18:00", "6:5"]) == ["06:05", "18:00"]
+class TestPollSchedule:
+    def test_the_expression_comes_back_tidied(self):
+        assert validate_poll_cron("  0   8,20  *  *  * ") == "0 8,20 * * *"
 
-    def test_the_same_slot_twice_is_one_slot(self):
-        assert validate_poll_times(["06:00", "06:00"]) == ["06:00"]
-
-    @pytest.mark.parametrize("value", ["25:00", "06:60", "6", "ранок", "06:00:00"])
-    def test_what_is_not_an_hour_is_refused(self, value):
-        # A slot the agent silently never reaches is worse than an error.
+    @pytest.mark.parametrize("value", ["0 25 * * *", "0 8 * *", "щоранку",
+                                       "0 8 * * блабла", "0 18-6 * * *"])
+    def test_a_schedule_that_could_never_fire_is_refused(self, value):
+        # One nobody checked is one that silently never fires, and that looks
+        # exactly like a modem that never answers.
         with pytest.raises(PollValidationError):
-            validate_poll_times([value])
+            validate_poll_cron(value)
 
-    def test_none_means_use_the_global_hours(self):
-        assert validate_poll_times(None) is None
-
-    def test_an_empty_list_stays_empty(self):
-        # Not the same as None: it says "no hours of its own", which the caller
-        # is free to treat as it likes.
-        assert validate_poll_times([]) == []
+    def test_nothing_means_follow_the_global_schedule(self):
+        assert validate_poll_cron(None) is None
+        assert validate_poll_cron("   ") is None
 
 
 class TestPriority:

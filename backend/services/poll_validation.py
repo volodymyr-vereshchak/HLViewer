@@ -82,28 +82,26 @@ def normalise_phone(raw: Optional[str]) -> Optional[str]:
     return digits
 
 
-def validate_poll_times(poll_times: Optional[List[str]]) -> Optional[List[str]]:
-    """Normalise "HH:MM" slots, sorted and without duplicates.
+def validate_poll_cron(poll_cron: Optional[str]) -> Optional[str]:
+    """The schedule as cron, or a refusal an operator can act on.
 
-    Sorted because the list is read as a daily rhythm and "18:00, 06:00" makes
-    that harder than it needs to be; de-duplicated because the same slot twice
-    is one slot, and the agent would otherwise count it twice.
+    Empty means "follow the global schedule", which is a real answer and not
+    a mistake. Anything else has to parse: a schedule nobody checked is one
+    that silently never fires, and that looks exactly like a modem that never
+    answers.
     """
-    if poll_times is None:
+    from backend.services.cron_schedule import CronError, parse
+
+    if poll_cron is None:
         return None
-    out = set()
-    for value in poll_times:
-        try:
-            hour_s, minute_s = str(value).strip().split(":")
-            hour, minute = int(hour_s), int(minute_s)
-            if not (0 <= hour <= 23 and 0 <= minute <= 59):
-                raise ValueError
-        except (ValueError, AttributeError):
-            raise PollValidationError(
-                f"Некоректний час опитування: {value!r}. Очікується HH:MM"
-            )
-        out.add(f"{hour:02d}:{minute:02d}")
-    return sorted(out)
+    text = " ".join(str(poll_cron).split())
+    if not text:
+        return None
+    try:
+        parse(text)
+    except CronError as error:
+        raise PollValidationError(str(error))
+    return text
 
 
 def validate_priority(priority: Optional[int]) -> Optional[int]:

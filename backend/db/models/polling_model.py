@@ -20,7 +20,7 @@ Two facts shape every table below:
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import BigInteger, CheckConstraint, Column, Index, Text
+from sqlalchemy import BigInteger, CheckConstraint, Column, Index, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel, UniqueConstraint
 
@@ -138,12 +138,14 @@ class PollDevice(HlBaseModel, table=True):
     # Whether to poll it automatically. A device with this off is still
     # available for a manual "poll now" — those are different questions.
     auto_poll: bool = Field(default=True)
-    # A list of "HH:MM". NULL means "use the global hours from poll_settings":
-    # those became a default rather than the only option, because the usual
-    # rhythm is once or twice a day but a particular device may need more.
-    poll_times: Optional[list] = Field(
-        default=None, sa_column=Column(JSONB, nullable=True)
-    )
+    # When to poll, as cron: minute, hour, day, month, weekday. NULL means
+    # "use the global schedule from poll_settings" — a default rather than the
+    # only option, because the usual rhythm is once or twice a day but a
+    # particular device may need every hour.
+    #
+    # It replaced a list of "HH:MM", which read well for twice a day and
+    # badly for everything else: hourly meant ticking twenty-four boxes.
+    poll_cron: Optional[str] = Field(default=None, max_length=64)
 
     # ── Link ─────────────────────────────────────────────────────────────────
     channel: str = Field(default="com", max_length=8)  # com | tcp
@@ -345,17 +347,17 @@ class PollAttempt(SQLModel, table=True):
 
 
 class PollSettings(SQLModel, table=True):
-    """Single row (id=1): the default poll hours.
+    """Single row (id=1): the default schedule, as cron.
 
-    A device with its own `poll_times` never reads these. They are a default,
-    not the only option: the usual rhythm is once or twice a day, but a given
-    device can be polled more often or inside its own window.
+    A device with its own `poll_cron` never reads this. It is a default, not
+    the only option: the usual rhythm is once or twice a day, but a given
+    device can be polled every hour or inside its own window.
     """
 
     __tablename__ = "poll_settings"
 
     id: int = Field(default=1, primary_key=True, sa_type=BigInteger)
-    poll_times: list = Field(
-        default_factory=lambda: ["08:00"],
-        sa_column=Column(JSONB, nullable=False, server_default='["08:00"]'),
+    poll_cron: str = Field(
+        default="0 8 * * *", max_length=64,
+        sa_column=Column(String(64), nullable=False, server_default="0 8 * * *"),
     )

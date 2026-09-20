@@ -19,6 +19,8 @@ Two consequences worth stating, because they are why it was built this way:
 from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
 
+from backend.services import cron_schedule
+
 # What `due` says when it says no. Returned alongside the flag because the
 # admin screen shows it, and "not due" alone tells an operator nothing about
 # whether the setup is right.
@@ -53,38 +55,24 @@ RETRY_PAUSE = timedelta(minutes=15)
 MAX_ATTEMPTS_PER_SLOT = 3
 
 
-def last_slot(now: datetime, poll_times: List[str]) -> Optional[datetime]:
+def last_slot(now: datetime, poll_cron: Optional[str]) -> Optional[datetime]:
     """The most recent scheduled moment that has already arrived.
 
-    Today's slots up to `now`, and failing that yesterday's last one — a device
-    scheduled only for 18:00 and looked at during the morning is not "not yet
-    scheduled", it is due since yesterday evening.
+    Cron says which moments count; this asks which of them has passed. A
+    device scheduled only for 18:00 and looked at during the morning is not
+    "not yet scheduled", it is due since yesterday evening — which falls out
+    of the same question without a special case.
     """
-    parsed = []
-    for value in poll_times or []:
-        try:
-            hour, minute = (int(part) for part in str(value).split(":"))
-        except (ValueError, TypeError):
-            continue
-        if 0 <= hour <= 23 and 0 <= minute <= 59:
-            parsed.append((hour, minute))
-    if not parsed:
+    if not poll_cron:
         return None
-
-    today = [
-        now.replace(hour=h, minute=m, second=0, microsecond=0) for h, m in parsed
-    ]
-    passed = [slot for slot in today if slot <= now]
-    if passed:
-        return max(passed)
-    return max(today) - timedelta(days=1)
+    return cron_schedule.last_fire(now, poll_cron)
 
 
 def is_due(
     *,
     now: datetime,
-    poll_times: Optional[List[str]],
-    default_times: List[str],
+    poll_cron: Optional[str],
+    default_cron: Optional[str],
     last_poll_at: Optional[datetime],
     enabled: bool,
     auto_poll: bool,
@@ -95,9 +83,9 @@ def is_due(
 ) -> Tuple[bool, str]:
     """Should this device be polled right now, and why (not).
 
-    `poll_times` of None means the device follows the global hours; that is a
-    default rather than the only option, so a device that needs its own rhythm
-    carries it and everything else stays in one place.
+    `poll_cron` of None means the device follows the global schedule; that is
+    a default rather than the only option, so a device that needs its own
+    rhythm carries it and everything else stays in one place.
     """
     if not enabled:
         return False, REASON_DISABLED
@@ -120,7 +108,7 @@ def is_due(
             and now - last_attempt_at < RETRY_PAUSE):
         return False, REASON_COOLING_OFF
 
-    slot = last_slot(now, poll_times if poll_times is not None else default_times)
+    slot = last_slot(now, poll_cron if poll_cron else default_cron)
     if slot is None:
         # No hours anywhere: nothing to be late for. Not an error — a device
         # can be kept for manual polling only, with the schedule left empty.

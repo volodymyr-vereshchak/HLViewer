@@ -192,7 +192,9 @@ class EnterpriseGsm(SQLModel):
     #: different questions.
     auto_poll: bool = False
     #: A list of "HH:MM". Empty means the hours set globally.
-    poll_times: List[str] = []
+    #: When to poll, as cron — "0 8 * * *" for every morning, "0 */4 * * *"
+    #: for every four hours. Empty follows the schedule set globally.
+    poll_cron: Optional[str] = None
     #: Which machines dial this number. It belongs on this card with the rest
     #: of the modem's settings: setting a site up is one screen, not two, and
     #: a number entered without an agent is a card that quietly never polls.

@@ -33,7 +33,7 @@ from backend.services.poll_validation import (
     PollValidationError,
     address_matters,
     normalise_phone,
-    validate_poll_times,
+    validate_poll_cron,
     validate_priority,
 )
 from backend.settings import backend_settings
@@ -83,7 +83,7 @@ class PollDeviceLink(BaseModel):
 
     enabled: bool = True
     auto_poll: bool = True
-    poll_times: Optional[List[str]] = None
+    poll_cron: Optional[str] = None
 
 
 class PollDeviceCreate(PollDeviceLink):
@@ -136,7 +136,7 @@ class PollDeviceUpdate(BaseModel):
     adapter_is_radio: Optional[bool] = None
     enabled: Optional[bool] = None
     auto_poll: Optional[bool] = None
-    poll_times: Optional[List[str]] = None
+    poll_cron: Optional[str] = None
     # Repointing a corrector-bound card at another serial IS how a
     # replacement was recorded here. Enterprise-bound cards need none of it:
     # the corrector is resolved at poll time from the installation history.
@@ -236,7 +236,7 @@ class AgentDevices(BaseModel):
 
 
 class ScheduleRead(BaseModel):
-    poll_times: List[str]
+    poll_cron: str
 
 
 def _read(row: dict) -> PollDeviceRead:
@@ -279,8 +279,8 @@ def _clean(payload: dict) -> dict:
     try:
         if "phone" in payload:
             payload["phone"] = normalise_phone(payload["phone"])
-        if "poll_times" in payload:
-            payload["poll_times"] = validate_poll_times(payload["poll_times"])
+        if "poll_cron" in payload:
+            payload["poll_cron"] = validate_poll_cron(payload["poll_cron"])
         if "priority" in payload:
             payload["priority"] = validate_priority(payload["priority"])
     except PollValidationError as e:
@@ -977,7 +977,7 @@ async def set_agent_devices(
 async def get_schedule(session: AsyncSession = Depends(get_session)):
     settings = await PollingDao(session).get_settings()
     await session.commit()
-    return ScheduleRead(poll_times=settings.poll_times)
+    return ScheduleRead(poll_cron=settings.poll_cron)
 
 
 @router.put(
@@ -988,7 +988,7 @@ async def get_schedule(session: AsyncSession = Depends(get_session)):
 async def set_schedule(
     body: ScheduleRead, session: AsyncSession = Depends(get_session)
 ):
-    times = _clean({"poll_times": body.poll_times})["poll_times"]
-    settings = await PollingDao(session).set_poll_times(times)
+    schedule = _clean({"poll_cron": body.poll_cron})["poll_cron"]
+    settings = await PollingDao(session).set_poll_cron(schedule or "0 8 * * *")
     await session.commit()
-    return ScheduleRead(poll_times=settings.poll_times)
+    return ScheduleRead(poll_cron=settings.poll_cron)

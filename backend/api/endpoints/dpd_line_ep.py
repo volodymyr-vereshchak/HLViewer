@@ -86,7 +86,7 @@ async def _line_gsm(line_id: int, session: AsyncSession):
     return EnterpriseGsm(
         phone=card.phone,
         auto_poll=card.auto_poll,
-        poll_times=card.poll_times or [],
+        poll_cron=card.poll_cron,
         agent_ids=await dao.device_agents(card.id),
         password=card.device_password,
     )
@@ -101,13 +101,13 @@ async def _save_line_gsm(line_id: int, gsm, session: AsyncSession) -> None:
     """
     from backend.db.dao.polling_dao import PollingDao
     from backend.services.poll_validation import (
-        PollValidationError, validate_poll_times,
+        PollValidationError, validate_poll_cron,
     )
 
     dao = PollingDao(session)
     try:
-        times = validate_poll_times(gsm.poll_times)
-        await dao.set_line_gsm(line_id, gsm.phone, gsm.auto_poll, times,
+        schedule = validate_poll_cron(gsm.poll_cron)
+        await dao.set_line_gsm(line_id, gsm.phone, gsm.auto_poll, schedule,
                                gsm.password)
     except PollValidationError as error:
         raise HTTPException(status_code=422, detail=str(error))

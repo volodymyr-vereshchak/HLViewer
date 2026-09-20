@@ -47,7 +47,7 @@ def body(target, **extra) -> dict:
 MODEM = {
     "phone": "+380671234567",
     "auto_poll": True,
-    "poll_times": ["08:00"],
+    "poll_cron": "0 8 * * *",
     "agent_ids": [],
     "password": "11",
 }
@@ -63,7 +63,7 @@ class TestLineModem:
         listed = (await admin_client.get("/dpd_lines/")).json()
         assert listed[0]["gsm"] == {
             "phone": "+380671234567", "auto_poll": True,
-            "poll_times": ["08:00"], "agent_ids": [], "password": "11",
+            "poll_cron": "0 8 * * *", "agent_ids": [], "password": "11",
         }
 
     async def test_a_line_without_one_says_so(self, admin_client, line_target):

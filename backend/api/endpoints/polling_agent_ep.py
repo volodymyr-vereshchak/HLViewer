@@ -243,8 +243,8 @@ async def get_plan(
             continue
         due, reason = is_due(
             now=now,
-            poll_times=card.poll_times,
-            default_times=settings.poll_times,
+            poll_cron=card.poll_cron,
+            default_cron=settings.poll_cron,
             last_poll_at=card.last_poll_at,
             enabled=card.enabled,
             auto_poll=card.auto_poll,

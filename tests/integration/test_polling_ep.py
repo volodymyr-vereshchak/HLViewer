@@ -177,17 +177,17 @@ class TestDeviceCards:
         )
         assert resp.status_code == 422
 
-    async def test_poll_hours_are_validated(self, admin_client, targets):
+    async def test_the_schedule_is_validated(self, admin_client, targets):
         card = await make_card(admin_client, dpd_device_id=targets["dpd_device_id"])
         ok = await admin_client.put(
-            f"/polling/devices/{card['id']}", json={"poll_times": ["18:30", "06:00"]}
+            f"/polling/devices/{card['id']}", json={"poll_cron": " 30 18,6 * * * "}
         )
         assert ok.status_code == 200
-        # Sorted on the way in: the list is read as a daily rhythm.
-        assert ok.json()["poll_times"] == ["06:00", "18:30"]
+        # Tidied on the way in; what it says is what comes back.
+        assert ok.json()["poll_cron"] == "30 18,6 * * *"
         # "25:00" would be a slot the agent silently never reaches.
         bad = await admin_client.put(
-            f"/polling/devices/{card['id']}", json={"poll_times": ["25:00"]}
+            f"/polling/devices/{card['id']}", json={"poll_cron": "0 25 * * *"}
         )
         assert bad.status_code == 400
 
@@ -498,20 +498,24 @@ class TestSchedule:
         """
         resp = await admin_client.get("/polling/schedule")
         assert resp.status_code == 200
-        assert resp.json()["poll_times"] == ["08:00"]
+        assert resp.json()["poll_cron"] == "0 8 * * *"
 
-    async def test_setting_hours(self, admin_client):
+    async def test_setting_the_schedule(self, admin_client):
         resp = await admin_client.put(
-            "/polling/schedule", json={"poll_times": ["07:00", "19:00"]}
+            "/polling/schedule", json={"poll_cron": "0 7,19 * * *"}
         )
-        assert resp.json()["poll_times"] == ["07:00", "19:00"]
-        assert (await admin_client.get("/polling/schedule")).json()["poll_times"] == [
-            "07:00", "19:00",
-        ]
+        assert resp.json()["poll_cron"] == "0 7,19 * * *"
+        assert (await admin_client.get("/polling/schedule")).json()["poll_cron"] == (
+            "0 7,19 * * *"
+        )
 
-    async def test_a_bad_hour_is_refused(self, admin_client):
+    async def test_hourly_is_five_characters_rather_than_a_list_of_24(self, admin_client):
+        resp = await admin_client.put("/polling/schedule", json={"poll_cron": "0 * * * *"})
+        assert resp.json()["poll_cron"] == "0 * * * *"
+
+    async def test_a_schedule_that_could_never_fire_is_refused(self, admin_client):
         resp = await admin_client.put(
-            "/polling/schedule", json={"poll_times": ["7:00 ранку"]}
+            "/polling/schedule", json={"poll_cron": "о 7 ранку"}
         )
         assert resp.status_code == 400
 
