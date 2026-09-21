@@ -79,3 +79,20 @@ def to_mpa(value: float, unit: str | None) -> float | None:
     if factor is None:
         return None
     return value * factor / 1e6
+
+
+def convert(value: float | None, from_unit: str | None,
+            to_unit: str | None) -> float | None:
+    """`value` read in `from_unit`, expressed in `to_unit`.
+
+    Returned unchanged when either unit is one we do not know — a number left
+    in its own unit is still that number, whereas one scaled by a guess is a
+    number nobody measured.
+    """
+    if value is None:
+        return None
+    source = PA_PER_UNIT.get(canonical(from_unit) or "")
+    target = PA_PER_UNIT.get(canonical(to_unit) or "")
+    if source is None or target is None or source == target:
+        return value
+    return value * source / target

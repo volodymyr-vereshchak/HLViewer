@@ -251,6 +251,32 @@ class TestAWholeSession:
         assert {r["source"] for r in rows} == {"gsm"}
         assert rows[0]["dvst_alwrk"] == 12.5
 
+    async def test_a_negative_volume_is_not_stored(self, anon_client, session_ready):
+        """A totaliser set back — installation, a cleared archive — measured
+        across the jump. Not gas; stored, it takes a thousand cubic metres off a
+        day. Refused here whatever the agent's build, the rest of the batch kept.
+        """
+        agent, card = session_ready["agent"], session_ready["card"]
+        resp = await anon_client.post(
+            f"/polling/agent/devices/{card['id']}/data",
+            json={
+                "ser_num": 555001,
+                "period_type": "hourly",
+                "rows": [
+                    {"stamp": "2026-03-10T07:00:00", "volume": 12.5},
+                    {"stamp": "2026-03-10T08:00:00", "volume": -4970.0},
+                    {"stamp": "2026-03-10T09:00:00", "volume": 3.0,
+                     "volume_work": -1.0},
+                ],
+            },
+            headers=key(agent),
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["stored"] == 1
+
+        rows = await archive_rows("hourly")
+        assert [r["dvst_alwrk"] for r in rows] == [12.5]
+
     async def test_a_success_moves_last_poll_at(self, anon_client, session_ready):
         agent, card = session_ready["agent"], session_ready["card"]
         await anon_client.post(
@@ -939,3 +965,156 @@ class TestTheAgentMustBeTheBuildTheServerHandsOut:
             f"/polling/agent/devices/{card['id']}/start", headers=key(agent)
         )
         assert taken.status_code == 200
+
+
+@pytest.mark.asyncio
+class TestHolesAreReadAgain:
+    """A hole behind the newest record used to stay a hole for good.
+
+    The plan said only where the archive ends, and an agent read forward from
+    there. So an hour lost to a bad line — a ВЕГА record the line swallowed, a
+    КПЛГ page skipped — was never asked for again. The plan now carries every
+    period missing behind the newest record, as deep as any corrector keeps
+    one; the agent clips that by where this corrector's archive starts (known
+    only on the call) and reads what is left. An enterprise's archive is kept
+    by corrector, so the installation date does not limit it — the enterprise
+    takes the periods it needs by its own installation windows. An agent that reads a range to
+    its end and still finds nothing says so, so that a corrector which was
+    simply switched off is not asked for the same empty hours on every call.
+    """
+
+    @staticmethod
+    def _hours():
+        base = datetime.now().replace(minute=0, second=0, microsecond=0) - timedelta(hours=10)
+        return base, [base + timedelta(hours=i) for i in range(9) if i not in (4, 5)]
+
+    async def _store(self, anon_client, agent, card, stamps, checked=(),
+                     period="hourly"):
+        resp = await anon_client.post(
+            f"/polling/agent/devices/{card['id']}/data",
+            json={
+                "ser_num": 555001, "period_type": period,
+                "rows": [{"stamp": s.isoformat(), "volume": 1.0} for s in stamps],
+                "checked": [[a.isoformat(), b.isoformat()] for a, b in checked],
+            },
+            headers=key(agent),
+        )
+        assert resp.status_code == 200, resp.text
+
+    async def _plan(self, anon_client, agent, card):
+        plan = (await anon_client.get("/polling/agent/plan", headers=key(agent))).json()
+        return next(d for d in plan["devices"] if d["id"] == card["id"])
+
+    @staticmethod
+    def _range(a, b):
+        return [a.isoformat(), b.isoformat()]
+
+    async def _installed(self, fleet, when):
+        async with async_session_factory() as session:
+            await session.execute(
+                text("UPDATE enterprise_device SET installed_from = :w "
+                     "WHERE device_id = :d"),
+                {"w": when, "d": fleet["device_id"]},
+            )
+            await session.commit()
+
+    async def test_a_hole_behind_the_newest_hour_is_in_the_plan(
+        self, anon_client, session_ready
+    ):
+        agent, card = session_ready["agent"], session_ready["card"]
+        base, stamps = self._hours()
+        await self._store(anon_client, agent, card, stamps)
+
+        device = await self._plan(anon_client, agent, card)
+        assert device["due"] is True
+        hole = self._range(base + timedelta(hours=4), base + timedelta(hours=5))
+        assert hole in device["gap_hours"]
+        # And the history before our first record, which the corrector may
+        # still hold — the agent clips it by where the corrector's ring starts.
+        assert device["gap_hours"][0][1] == (base - timedelta(hours=1)).isoformat()
+
+    async def test_the_installation_date_does_not_limit_a_correctors_archive(
+        self, anon_client, session_ready, fleet
+    ):
+        """An enterprise's readings are stored by corrector, and the enterprise
+        takes the periods it needs by the installation windows. So what the
+        corrector holds from before it came here is still its own archive —
+        worth filling, and harmless to the enterprise."""
+        agent, card = session_ready["agent"], session_ready["card"]
+        base, stamps = self._hours()
+        await self._installed(fleet, base)
+        await self._store(anon_client, agent, card, stamps)
+
+        device = await self._plan(anon_client, agent, card)
+        assert device["gap_hours"][0][1] == (base - timedelta(hours=1)).isoformat()
+
+    async def test_a_hole_read_to_its_end_and_still_empty_is_not_asked_again(
+        self, anon_client, session_ready, fleet
+    ):
+        agent, card = session_ready["agent"], session_ready["card"]
+        base, stamps = self._hours()
+        await self._installed(fleet, base)
+        await self._store(anon_client, agent, card, stamps)
+        hole = (base + timedelta(hours=4), base + timedelta(hours=5))
+
+        # Read through, nothing there: the corrector was off.
+        await self._store(anon_client, agent, card, [], checked=[hole])
+
+        device = await self._plan(anon_client, agent, card)
+        assert self._range(*hole) not in device["gap_hours"]
+        assert all(start > (base + timedelta(hours=5)).isoformat()
+                   or end < (base + timedelta(hours=4)).isoformat()
+                   for start, end in device["gap_hours"])
+
+    async def test_a_hole_that_was_read_is_gone(
+        self, anon_client, session_ready, fleet
+    ):
+        agent, card = session_ready["agent"], session_ready["card"]
+        base, stamps = self._hours()
+        await self._installed(fleet, base)
+        await self._store(anon_client, agent, card, stamps)
+        await self._store(anon_client, agent, card,
+                          [base + timedelta(hours=4), base + timedelta(hours=5)])
+
+        device = await self._plan(anon_client, agent, card)
+        # Only the history before our first record is left to read.
+        assert device["gap_hours"][-1][1] == (base - timedelta(hours=1)).isoformat()
+
+    async def test_what_is_newer_than_the_archive_is_not_a_hole(
+        self, anon_client, session_ready
+    ):
+        # The hours after the newest record are read by the ordinary window;
+        # listing them as holes would read them twice.
+        agent, card = session_ready["agent"], session_ready["card"]
+        base, stamps = self._hours()
+        await self._store(anon_client, agent, card, stamps[:3])
+        device = await self._plan(anon_client, agent, card)
+        newest = stamps[2].isoformat()
+        assert all(end <= newest for _start, end in device["gap_hours"])
+
+    async def test_a_missing_day_is_in_the_plan(
+        self, anon_client, session_ready, fleet
+    ):
+        agent, card = session_ready["agent"], session_ready["card"]
+        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        await self._installed(fleet, today - timedelta(days=7))
+        days = [today - timedelta(days=d) for d in (6, 5, 3, 2, 1)]
+        await self._store(anon_client, agent, card, days, period="daily")
+
+        device = await self._plan(anon_client, agent, card)
+        missing = today - timedelta(days=4)
+        assert self._range(missing, missing) in device["gap_days"]
+
+    async def test_a_card_that_is_not_due_carries_no_holes(
+        self, anon_client, admin_client, session_ready
+    ):
+        # Finding holes reads the archive; the plan is fetched every few
+        # seconds by every agent, so it is only done for a call about to be made.
+        agent, card = session_ready["agent"], session_ready["card"]
+        base, stamps = self._hours()
+        await self._store(anon_client, agent, card, stamps)
+        await admin_client.put(f"/polling/devices/{card['id']}",
+                               json={"enabled": False})
+        device = await self._plan(anon_client, agent, card)
+        assert device["due"] is False
+        assert device["gap_hours"] == []

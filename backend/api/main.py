@@ -300,6 +300,12 @@ _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 # not to "must be signed in" — the session check above has already run.
 _USER_WRITE_PATTERNS = (
     re.compile(r"^/polling/devices/\d+/poll$"),
+    # The same request, made from the screen operators actually use: an
+    # enterprise's «Опитати» over GSM, and stopping it. Left off this list when
+    # that screen arrived, so it was admin-only by accident — while the ДПД
+    # poll on the same screen, a GET, was open to everyone.
+    re.compile(r"^/polling/enterprises/\d+/poll$"),
+    re.compile(r"^/polling/enterprises/\d+/poll/cancel$"),
 )
 
 

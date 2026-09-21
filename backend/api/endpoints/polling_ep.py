@@ -698,9 +698,13 @@ async def watch_enterprise_poll(
         error_code=card.last_error_code,
         error_text=card.last_error_text,
         rows=card.last_rows or {},
-        done=card.progress_done,
-        total=card.progress_total,
-        phase=card.progress_phase,
+        # A queued request has read nothing yet. The card still holds the
+        # progress of the PREVIOUS call until the agent's first log push, and
+        # showing it under «чекаю» lit up the old bar at 700 of 700 the moment
+        # a new poll was asked for.
+        done=card.progress_done if state != "waiting" else None,
+        total=card.progress_total if state != "waiting" else None,
+        phase=card.progress_phase if state != "waiting" else None,
         cancelling=card.cancel_requested_at is not None,
         lines=[PollLogLine(**line) for line in _session_lines(card, after_seq)],
     )

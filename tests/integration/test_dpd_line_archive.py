@@ -1,11 +1,14 @@
 """Archive endpoints of DPD lines (/daily_dpd/, /hourly_dpd/).
 
-A DPD line carries no unit configuration — pressure arrives from the API with
-the unit the device reported, so the archive rows must hand that unit to the
-client instead of leaving it to guess."""
+Every row is STORED in the unit its corrector reported — correctors of one
+line report different ones — and READ in the unit the line is set to show
+(`dpd_line.pressure_unit`). Converting once on the way out is what lets the
+overview, the reports and the rings all print the same number under the same
+caption; before, each reader was left to convert per row, and most did not."""
 
 from datetime import date, datetime, timedelta
 
+import pytest
 import pytest_asyncio
 
 from backend.db.engine import async_session_factory
@@ -44,7 +47,9 @@ async def dpd_line(clean_db) -> int:
 
 
 class TestDpdLineArchiveUnits:
-    async def test_daily_reports_the_device_unit(self, admin_client, dpd_line):
+    async def test_a_row_is_read_in_the_lines_unit(self, admin_client, dpd_line):
+        """Stored as the corrector said it (кПа), shown as the line is set
+        (кгс/см², the default)."""
         resp = await admin_client.get("/daily_dpd/", params={
             "line_id": [dpd_line],
             "from_date": "2026-05-01T00:00:00",
@@ -53,18 +58,62 @@ class TestDpdLineArchiveUnits:
         assert resp.status_code == 200
         body = resp.json()
         assert len(body) == 1
-        assert body[0]["press_unit"] == "кПа"  # trimmed, straight from DPD
-        assert body[0]["pressure"] == 3.2
+        assert body[0]["press_unit"] == "кгс/см²"
+        assert body[0]["pressure"] == pytest.approx(3.2 * 1000 / 98066.5)
 
-    async def test_hourly_absent_unit_is_null(self, admin_client, dpd_line):
-        """The literal "None" some correctors send is not a unit."""
+    async def test_the_lines_setting_is_what_decides(self, admin_client, dpd_line):
+        async with async_session_factory() as session:
+            line = await session.get(DpdLine, dpd_line)
+            line.pressure_unit = "кПа"
+            await session.commit()
+        body = (await admin_client.get("/daily_dpd/", params={
+            "line_id": [dpd_line],
+            "from_date": "2026-05-01T00:00:00",
+            "to_date": "2026-05-05T00:00:00",
+        })).json()
+        assert (body[0]["pressure"], body[0]["press_unit"]) == (3.2, "кПа")
+
+    async def test_a_row_with_no_unit_is_taken_as_the_lines(
+        self, admin_client, dpd_line
+    ):
+        """The literal "None" some correctors send is not a unit — and with no
+        other row to go by, the number is left as the line's."""
         resp = await admin_client.get("/hourly_dpd/", params={
             "line_id": [dpd_line],
             "from_date": "2026-05-03T00:00:00",
             "to_date": "2026-05-03T23:00:00",
         })
         assert resp.status_code == 200
-        assert resp.json()[0]["press_unit"] is None
+        row = resp.json()[0]
+        assert (row["pressure"], row["press_unit"]) == (3.3, "кгс/см²")
+
+    async def test_one_line_reading_two_units_reads_as_one(
+        self, admin_client, dpd_line
+    ):
+        """A corrector replaced mid-history, the new one reporting in МПа: the
+        same pressure must not print as 3.3 and then 0.32 in adjacent rows."""
+        async with async_session_factory() as session:
+            session.add_all([
+                DpdLineHourlyArchive(
+                    dpd_line_id=dpd_line, stamp=datetime(2026, 5, 3, 11),
+                    volume=10.0, pressure=3.3, temperature=15.5,
+                    press_unit="кгс/см3",          # the API's spelling of кгс/см²
+                ),
+                DpdLineHourlyArchive(
+                    dpd_line_id=dpd_line, stamp=datetime(2026, 5, 3, 12),
+                    volume=10.0, pressure=0.3236, temperature=15.5,
+                    press_unit="МПа",
+                ),
+            ])
+            await session.commit()
+        rows = (await admin_client.get("/hourly_dpd/", params={
+            "line_id": [dpd_line],
+            "from_date": "2026-05-03T11:00:00",
+            "to_date": "2026-05-03T12:00:00",
+        })).json()
+        assert [r["press_unit"] for r in rows] == ["кгс/см²", "кгс/см²"]
+        assert rows[0]["pressure"] == pytest.approx(3.3)
+        assert rows[1]["pressure"] == pytest.approx(3.3, abs=0.001)
 
     async def test_no_range_is_too_long(self, admin_client, dpd_line):
         """Used to stop at 400 days (daily) and 90 (hourly)."""

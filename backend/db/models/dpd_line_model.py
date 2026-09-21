@@ -209,3 +209,11 @@ class DpdLineList(DpdLineBase):
     lumg_id: Optional[int] = None
     devices: list[DpdLineDeviceRead] = []
     gsm: Optional["EnterpriseGsm"] = None
+    #: How far this line's archive reaches — the newest hour and day stored,
+    #: from whichever source wrote them. The job status says whether the last
+    #: refresh RAN; this says whether it BROUGHT anything, which is the
+    #: question the list is looked at for. Every line's job finishes at the
+    #: same moment after each scheduled run, so a column of job times reads
+    #: identical and green whether data arrived or not.
+    last_hour: Optional[datetime] = None
+    last_day: Optional[date] = None

@@ -10,6 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from backend.db.dao.basic_dao import BasicDao
+from backend.services.pressure_units import (
+    PRESSURE_UNIT_DEFAULT,
+    canonical,
+    convert,
+)
 # Imported for SQLModel.metadata registration (schema creation in tests) —
 # the archive DAO itself speaks raw SQL.
 from backend.db.models.dpd_line_model import (  # noqa: F401
@@ -89,6 +94,34 @@ class DpdLineDao(BasicDao):
             }
             for r in rows
         ]
+
+
+def _in_line_units(rows: List[Dict]) -> List[Dict]:
+    """Every row's pressure in the unit its LINE is set to show.
+
+    Each row is stored in the unit its corrector reported, and correctors of
+    one line report different ones — a replacement, a firmware update, or a
+    GSM read (кПа) alongside the ДПД history of the same meter (кгс/см²). Left
+    like that, every reader had to convert per row, and most did not: the
+    overview captioned a line in its own unit and printed whatever the last
+    row happened to be in. So it is done once, here, for all of them — the
+    archive screen, the reports and the rings read the same numbers.
+
+    A row that names no unit is taken to be in the unit the line's other rows
+    use, newest first, and failing that in the line's own.
+    """
+    known: Dict[int, Optional[str]] = {}
+    for r in reversed(rows):
+        if r["dpd_line_id"] not in known and canonical(r["press_unit"]):
+            known[r["dpd_line_id"]] = r["press_unit"]
+    for r in rows:
+        target = canonical(r.pop("line_unit")) or PRESSURE_UNIT_DEFAULT
+        source = (canonical(r["press_unit"])
+                  or canonical(known.get(r["dpd_line_id"]))
+                  or target)
+        r["pressure"] = convert(r["pressure"], source, target)
+        r["press_unit"] = target
+    return rows
 
 
 class DpdLineArchiveDao(BasicDao):
@@ -171,16 +204,17 @@ class DpdLineArchiveDao(BasicDao):
             params["from"], params["to"] = range_from, range_to
         rows = (await self.session.execute(
             text(
-                f"SELECT dpd_line_id, {stamp_col} AS stamp, volume, pressure, "
-                f"temperature, press_unit "
-                f"FROM {table} "
-                f"WHERE dpd_line_id = ANY(:ids) "
-                f"AND {stamp_col} >= :from AND {stamp_col} <= :to "
-                f"ORDER BY dpd_line_id, {stamp_col}"
+                f"SELECT a.dpd_line_id, a.{stamp_col} AS stamp, a.volume, "
+                f"a.pressure, a.temperature, a.press_unit, "
+                f"l.pressure_unit AS line_unit "
+                f"FROM {table} a JOIN dpd_line l ON l.id = a.dpd_line_id "
+                f"WHERE a.dpd_line_id = ANY(:ids) "
+                f"AND a.{stamp_col} >= :from AND a.{stamp_col} <= :to "
+                f"ORDER BY a.dpd_line_id, a.{stamp_col}"
             ),
             params,
         )).mappings().all()
-        return [dict(r) for r in rows]
+        return _in_line_units([dict(r) for r in rows])
 
     async def load_hourly_volumes(
         self,

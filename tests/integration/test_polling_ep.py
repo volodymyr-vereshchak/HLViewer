@@ -67,10 +67,12 @@ async def targets(seed_users) -> dict:
         }
 
 
-async def _set_protocol(corector_type_id: int, protocol_id: int) -> None:
+async def _rename_model(corector_type_id: int, model_name: str) -> None:
+    """Make the catalogue model something else. The reader family is read off
+    the model's name now; nobody types a driver number any more."""
     async with async_session_factory() as session:
         ct = await session.get(CorectorType, corector_type_id)
-        ct.protocol_id = protocol_id
+        ct.model_name = model_name
         await session.commit()
 
 
@@ -338,29 +340,39 @@ class TestAgents:
 
 @pytest.mark.asyncio
 class TestTheDriverComesFromTheModel:
-    """Which driver can dial a corrector is a property of its model, so it is
-    set once in Типи коректорів and never typed on a card. Retyping it per
-    device invites a typo, and a wrong driver looks exactly like a dead
-    meter."""
+    """Which reader to try first is read off the model's name.
 
-    async def test_the_card_takes_the_driver_of_its_model(
+    It used to be a «Драйвер опитування» number typed into the catalogue —
+    an Ask2 assembly id nobody could know, and three numbering schemes ended
+    up side by side in one column. The name is already there. It is only a
+    hint: the agent asks the corrector what it is on the call, tries every
+    family if the hint is wrong or missing, and remembers who answered.
+    """
+
+    async def test_the_card_takes_the_family_of_its_model(
         self, admin_client, targets
     ):
-        await _set_protocol(targets["corector_type_id"], 54)
         card = await make_card(admin_client, dpd_device_id=targets["dpd_device_id"])
-        assert card["protocol_id"] == 54
+        assert card["protocol_id"] == 1054                 # ВЕГА-1.01
 
-    async def test_a_model_without_a_driver_says_nothing(
-        self, admin_client, targets
-    ):
-        # ТКБ, smart104 and ТАНДЕМ appear in none of the Ask2 driver
-        # assemblies: null here is the truth, not a missing setting.
+    async def test_every_revision_of_a_model_is_the_same_family(self):
+        from backend.services.poll_validation import family_of_model
+        assert family_of_model("ВЕГА-2.01Н") == 1054
+        assert family_of_model("КПЛГ-1.02РВ") == 1052
+        assert family_of_model("ФЛОУТЕК-ТМ-2-3-6") == 2002
+        assert family_of_model(" Тандем-Т") == 2003         # as the catalogue has it
+        assert family_of_model("Універсал-02") == 2004
+
+    async def test_a_model_nobody_reads_says_nothing(self, admin_client, targets):
+        # ТКБ, smart104, КВР: no family of ours. Null is not an error — the
+        # agent then tries every family on the first call.
+        await _rename_model(targets["corector_type_id"], "ТКБ")
         card = await make_card(admin_client, dpd_device_id=targets["dpd_device_id"])
         assert card["protocol_id"] is None
 
     async def test_the_model_follows_the_corrector(self, admin_client, targets):
         # A serial alone does not say what answers the call, and the model is
-        # what decides the driver and the alarm dictionary.
+        # what decides the family and the alarm dictionary.
         card = await make_card(admin_client, dpd_device_id=targets["dpd_device_id"])
         new_id = await _replace(
             targets["enterprise_id"], targets["dpd_device_id"], 555002,
@@ -371,21 +383,18 @@ class TestTheDriverComesFromTheModel:
         )
         assert resp.json()["model_name"] == "КПЛГ-1.01Р"
 
-    async def test_repointing_re_reads_the_driver(self, admin_client, targets):
+    async def test_repointing_re_reads_the_family(self, admin_client, targets):
         # A replacement is often a different model, and a card left on the old
-        # driver would dial the new device in a language it does not speak.
-        await _set_protocol(targets["corector_type_id"], 54)
+        # family would try the new device in a language it does not speak.
         card = await make_card(admin_client, dpd_device_id=targets["dpd_device_id"])
         new_id = await _replace(
             targets["enterprise_id"], targets["dpd_device_id"], 555002,
             corector_type_id=targets["other_type_id"],
         )
-        await _set_protocol(targets["other_type_id"], 52)
-
         resp = await admin_client.put(
             f"/polling/devices/{card['id']}", json={"dpd_device_id": new_id}
         )
-        assert resp.json()["protocol_id"] == 52
+        assert resp.json()["protocol_id"] == 1052          # КПЛГ-1.01Р
 
 
 @pytest.mark.asyncio
@@ -395,7 +404,6 @@ class TestTheNetworkAddress:
     always the default, so it is filled in rather than asked for."""
 
     async def test_a_non_floutek_card_gets_the_default(self, admin_client, targets):
-        await _set_protocol(targets["corector_type_id"], 1054)  # ВЕГА
         card = await make_card(
             admin_client, dpd_device_id=targets["dpd_device_id"], device_address=7
         )
@@ -405,7 +413,7 @@ class TestTheNetworkAddress:
         assert card["address_matters"] is False
 
     async def test_a_floutek_card_keeps_what_was_typed(self, admin_client, targets):
-        await _set_protocol(targets["corector_type_id"], 1070)  # Флоутек ВР-2
+        await _rename_model(targets["corector_type_id"], "ФЛОУТЕК-ТМ-2-3-4")
         card = await make_card(
             admin_client, dpd_device_id=targets["dpd_device_id"], device_address=3
         )
@@ -415,7 +423,7 @@ class TestTheNetworkAddress:
     async def test_repointing_to_another_family_resets_it(
         self, admin_client, targets
     ):
-        await _set_protocol(targets["corector_type_id"], 1070)
+        await _rename_model(targets["corector_type_id"], "ФЛОУТЕК-ТМ-2-3-4")
         card = await make_card(
             admin_client, dpd_device_id=targets["dpd_device_id"], device_address=3
         )
@@ -423,7 +431,6 @@ class TestTheNetworkAddress:
             targets["enterprise_id"], targets["dpd_device_id"], 555002,
             corector_type_id=targets["other_type_id"],
         )
-        await _set_protocol(targets["other_type_id"], 1054)
 
         resp = await admin_client.put(
             f"/polling/devices/{card['id']}", json={"dpd_device_id": new_id}
@@ -624,7 +631,6 @@ class TestPollingAnEnterpriseNow:
     async def test_a_site_with_nothing_fitted_says_so(
         self, admin_client, anon_client, targets
     ):
-        await _set_protocol(targets["corector_type_id"], 1054)
         card = await make_card(
             admin_client, enterprise_id=targets["enterprise_id"],
             phone="+380501234567",
@@ -655,7 +661,6 @@ class TestPollingAnEnterpriseNow:
         "жоден агент не на зв'язку" for a site that was never assigned goes
         looking at the workstation, which is fine, and finds it running.
         """
-        await _set_protocol(targets["corector_type_id"], 1054)
         await make_card(
             admin_client, enterprise_id=targets["enterprise_id"],
             phone="+380501234567",
@@ -676,7 +681,6 @@ class TestPollingAnEnterpriseNow:
         machine is named, because that is the one thing the operator needs in
         order to go and switch it on.
         """
-        await _set_protocol(targets["corector_type_id"], 1054)
         card = await make_card(
             admin_client, enterprise_id=targets["enterprise_id"],
             phone="+380501234567",
@@ -727,7 +731,6 @@ class TestPollingAnEnterpriseNow:
         """
         from backend.db.models.polling_model import PollDevice
 
-        await _set_protocol(targets["corector_type_id"], 1054)    # catalogue: ВЕГА
         card = await make_card(
             admin_client, enterprise_id=targets["enterprise_id"],
             phone="+380501234567",
@@ -763,7 +766,6 @@ class TestPollingAnEnterpriseNow:
     async def test_the_request_is_accepted_and_the_log_starts_clean(
         self, admin_client, anon_client, targets
     ):
-        await _set_protocol(targets["corector_type_id"], 1054)
         card = await make_card(
             admin_client, enterprise_id=targets["enterprise_id"],
             phone="+380501234567",
@@ -798,6 +800,28 @@ class TestPollingAnEnterpriseNow:
         assert watch["status"] == "waiting"
         assert watch["lines"] == []
 
+    async def test_an_operator_who_is_not_an_admin_can_poll_and_watch(
+        self, admin_client, viewer_client, anon_client, targets
+    ):
+        """Setting a modem up is administration; asking it to call is not.
+
+        The person who notices a meter went quiet is rarely an admin, so the
+        three things the poll screen does — ask, watch, stop — are open to any
+        signed-in user. The settings behind them stay admin-only.
+        """
+        card = await make_card(
+            admin_client, enterprise_id=targets["enterprise_id"],
+            phone="+380501234567",
+        )
+        await live_agent(admin_client, anon_client, card["id"])
+
+        path = f"/polling/enterprises/{targets['enterprise_id']}/poll"
+        assert (await viewer_client.post(path)).status_code == 202
+        assert (await viewer_client.get(path)).status_code == 200
+        assert (await viewer_client.post(f"{path}/cancel")).status_code == 200
+        # …but not the machinery behind it.
+        assert (await viewer_client.get("/polling/agents")).status_code == 403
+
     async def test_two_agents_mean_nobody_is_promised(
         self, admin_client, anon_client, targets
     ):
@@ -808,7 +832,6 @@ class TestPollingAnEnterpriseNow:
         call — sends an operator to watch a machine that is switched off while
         the other quietly takes the job.
         """
-        await _set_protocol(targets["corector_type_id"], 1054)
         card = await make_card(
             admin_client, enterprise_id=targets["enterprise_id"],
             phone="+380501234567",
@@ -843,7 +866,6 @@ class TestPollingAnEnterpriseNow:
     async def test_the_agent_on_the_line_is_named(
         self, admin_client, anon_client, targets
     ):
-        await _set_protocol(targets["corector_type_id"], 1054)
         card = await make_card(
             admin_client, enterprise_id=targets["enterprise_id"],
             phone="+380501234567",
@@ -871,7 +893,6 @@ class TestPollingAnEnterpriseNow:
         shows afterwards — so the test gets a folder of its own.
         """
         monkeypatch.setitem(backend_settings, "POLL_LOG_DIR", str(tmp_path))
-        await _set_protocol(targets["corector_type_id"], 1054)
         card = await make_card(
             admin_client, enterprise_id=targets["enterprise_id"],
             phone="+380501234567",
@@ -925,7 +946,6 @@ class TestTheScreenAndTheJournalAreOneFile:
         self, admin_client, anon_client, targets, tmp_path, monkeypatch
     ):
         monkeypatch.setitem(backend_settings, "POLL_LOG_DIR", str(tmp_path))
-        await _set_protocol(targets["corector_type_id"], 1054)
         card = await make_card(
             admin_client, enterprise_id=targets["enterprise_id"],
             phone="+380501234567",
@@ -1345,7 +1365,6 @@ class TestStoppingAPollThatWasStartedByMistake:
     """
 
     async def test_a_request_nobody_took_is_withdrawn(self, admin_client, targets):
-        await _set_protocol(targets["corector_type_id"], 1054)
         card = await make_card(
             admin_client, enterprise_id=targets["enterprise_id"],
             phone="+380501234567",
@@ -1381,7 +1400,6 @@ class TestStoppingAPollThatWasStartedByMistake:
         the site's owner saw — the request looked withdrawn and the second
         agent called anyway.
         """
-        await _set_protocol(targets["corector_type_id"], 1054)
         card = await make_card(
             admin_client, enterprise_id=targets["enterprise_id"],
             phone="+380501234567",
@@ -1409,7 +1427,6 @@ class TestStoppingAPollThatWasStartedByMistake:
         self, admin_client, anon_client, targets
     ):
         """The retry somebody presses straight after cancelling."""
-        await _set_protocol(targets["corector_type_id"], 1054)
         card = await make_card(
             admin_client, enterprise_id=targets["enterprise_id"],
             phone="+380501234567",
@@ -1431,7 +1448,6 @@ class TestStoppingAPollThatWasStartedByMistake:
         assert taken.status_code == 200, taken.text
 
     async def test_a_running_call_is_asked_to_hang_up(self, admin_client, targets):
-        await _set_protocol(targets["corector_type_id"], 1054)
         card = await make_card(
             admin_client, enterprise_id=targets["enterprise_id"],
             phone="+380501234567",

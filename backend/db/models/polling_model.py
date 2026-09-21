@@ -283,6 +283,33 @@ class PollDevice(HlBaseModel, table=True):
     polling_since: Optional[datetime] = Field(default=None)
 
 
+class PollGapAbsent(SQLModel, table=True):
+    """A period the corrector was asked for and did not have.
+
+    The plan sends an agent the holes in a card's archive, so that an hour
+    lost to a bad line — a page skipped, a call cut off — is read on the next
+    call instead of never. But some holes are real: the corrector was switched
+    off and wrote nothing. Asked for again on every call, such a hole costs a
+    request per hour for as long as it stays inside the window — for a ВЕГА,
+    a minute of the line per poll. So once an agent has read a range through
+    to the end without a failure and a period in it still has no row, that
+    period is remembered here and not asked for again.
+
+    Only a range read to its end counts: a period missing because the line
+    failed halfway is a hole, not an absence, and must be asked again.
+    """
+
+    __tablename__ = "poll_gap_absent"
+
+    poll_device_id: int = Field(
+        foreign_key="poll_device.id", ondelete="CASCADE",
+        primary_key=True, sa_type=BigInteger,
+    )
+    period_type: str = Field(max_length=8, primary_key=True)   # hourly | daily
+    stamp: datetime = Field(primary_key=True)
+    checked_at: datetime = Field(default_factory=datetime.now)
+
+
 class PollAgentDevice(SQLModel, table=True):
     """Who took which devices. Many-to-many, and not for future-proofing.
 

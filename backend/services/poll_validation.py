@@ -42,6 +42,56 @@ FLOUTEK_PROTOCOLS = frozenset({
 
 DEFAULT_DEVICE_ADDRESS = 1
 
+# Our agent's own family numbers — `hl_poller/hlv_poller/session.py`. Kept
+# equal to Ask2's driver ids where Ask2 had one (КПЛГ, ВЕГА), and numbered
+# from 2002 where it did not.
+KPLG = 1052
+VEGA = 1054
+FLOUTEK = 2002
+TANDEM = 2003
+UNIVERSAL = 2004
+
+# The model name, as the device catalogue spells it, to the family that reads
+# it. Matched on a fragment because the catalogue carries every revision as
+# its own model: ВЕГА-1.01, ВЕГА-1.01Н, ВЕГА-2.01Н… and " Тандем-Т" with a
+# space in front. Order matters only in that no fragment is part of another.
+_FAMILY_BY_FRAGMENT = (
+    ("КПЛГ", KPLG),
+    ("ВЕГА", VEGA),
+    ("VEGA", VEGA),
+    ("ФЛОУТЕК", FLOUTEK),
+    ("FLOUTEK", FLOUTEK),
+    ("ПК-В", FLOUTEK),
+    ("ТАНДЕМ", TANDEM),
+    ("TANDEM", TANDEM),
+    ("УНІВЕРСАЛ", UNIVERSAL),
+    ("УНИВЕРСАЛ", UNIVERSAL),
+    ("UNIVERSAL", UNIVERSAL),
+)
+
+
+def family_of_model(model_name: Optional[str]) -> Optional[int]:
+    """Which of our readers speaks to this model, from its name alone.
+
+    Replaces the «Драйвер опитування» number an administrator was asked to
+    type into the catalogue. Nobody could know it — it was an Ask2 assembly
+    number, the catalogue ended up holding three different numbering schemes
+    at once (71/72 for Універсал, 1052/1054 for КПЛГ/ВЕГА, nothing for Флоутек
+    and Тандем), and the agent understood only one of them. The model name is
+    already there and already right.
+
+    It is only ever a hint: the agent asks the corrector what it is on the
+    call and remembers the answer, so a model this does not recognise costs
+    one slower first call — every family tried — and nothing after.
+    """
+    name = (model_name or "").strip().upper()
+    if not name:
+        return None
+    for fragment, family in _FAMILY_BY_FRAGMENT:
+        if fragment in name:
+            return family
+    return None
+
 
 class PollValidationError(ValueError):
     """A message meant for the operator, not a traceback."""

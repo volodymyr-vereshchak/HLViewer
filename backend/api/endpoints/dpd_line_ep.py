@@ -140,10 +140,13 @@ async def _line_to_list(line: DpdLine, session: AsyncSession) -> DpdLineList:
             manufacturer_short_name=dev["manufacturer_short_name"],
             bound_to=bound_to,
         ))
+    archive = DpdLineArchiveDao(session)
     return DpdLineList(
         **line.model_dump(exclude={"devices"}),
         gsm=await _line_gsm(line.id, session),
         devices=devices,
+        last_hour=await archive.last_period(line.id, "hourly"),
+        last_day=await archive.last_period(line.id, "daily"),
     )
 
 

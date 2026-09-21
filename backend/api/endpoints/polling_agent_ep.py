@@ -14,6 +14,7 @@ paths are therefore exempt from the session middleware, and every one of them
 resolves the key itself — an exemption from "must be signed in" would otherwise
 be an exemption from any check at all.
 """
+import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -30,6 +31,8 @@ from backend.db.models.polling_model import PollAgent, PollDevice
 from backend.services import agent_version, poll_journal
 from backend.services.poll_schedule import is_due
 from backend.settings import backend_settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/polling/agent", tags=["polling-agent"])
 
@@ -93,6 +96,11 @@ class PlanDevice(BaseModel):
     # is what makes an incremental poll need no logic of its own.
     last_hour: Optional[datetime] = None
     last_day: Optional[datetime] = None
+    #: Holes behind those: [start, end] ranges, both ends included, of hours
+    #: and of days the archive has no row for and the corrector should still
+    #: hold. Read after the new records. Only filled in for a due card.
+    gap_hours: List[List[datetime]] = Field(default_factory=list)
+    gap_days: List[List[datetime]] = Field(default_factory=list)
 
     last_poll_at: Optional[datetime] = None
     manual_requested_at: Optional[datetime] = None
@@ -163,6 +171,10 @@ class DataBatch(BaseModel):
     ser_num: Optional[int] = None
     period_type: str  # hourly | daily
     rows: List[ArchiveRow] = Field(default_factory=list)
+    #: Holes from the plan that were read through to the end without the line
+    #: failing. A period in one of them still without a row is one the
+    #: corrector does not have, and is not asked for again.
+    checked: List[List[datetime]] = Field(default_factory=list)
 
 
 class Finish(BaseModel):
@@ -273,6 +285,10 @@ async def get_plan(
             due, reason = False, f"агент {agent.version or '—'}, потрібен {wanted}"
 
         last = coverage.get(card.id, {})
+        # Only for a call that is about to be made: finding holes reads the
+        # archive, and the plan is fetched every few seconds by every agent.
+        gaps = (await dao.archive_gaps(card, last.get("hourly"), last.get("daily"), now)
+                if due else {"hourly": [], "daily": []})
         devices.append(PlanDevice(
             id=card.id,
             due=due,
@@ -302,6 +318,8 @@ async def get_plan(
             modem_pause_after_connect_ms=card.modem_pause_after_connect_ms,
             last_hour=last.get("hourly"),
             last_day=last.get("daily"),
+            gap_hours=gaps["hourly"],
+            gap_days=gaps["daily"],
             last_poll_at=card.last_poll_at,
             manual_requested_at=card.manual_requested_at,
             # Sent for every card: which corrector answers is found on the
@@ -506,7 +524,26 @@ async def push_data(
             ),
         )
 
-    if not body.rows:
+    # A volume below zero is a totaliser that was set back — a corrector
+    # installed or its archive cleared — measured across the jump. The agent
+    # already skips those (tandem.volumes), but the server is where every
+    # family and every agent version meets, so it refuses them here too
+    # rather than let one old build subtract a thousand cubic metres from a
+    # day. The rest of the batch is stored as usual.
+    rows = [r for r in body.rows
+            if not ((r.volume is not None and r.volume < 0)
+                    or (r.volume_work is not None and r.volume_work < 0))]
+    if len(rows) != len(body.rows):
+        logger.warning(
+            "Poll card %s: %s %s rows with a negative volume dropped",
+            card.id, len(body.rows) - len(rows), body.period_type,
+        )
+    if not rows:
+        # Nothing to store — but a hole read to its end and found empty is
+        # still worth remembering, or it is asked for on every call.
+        if body.checked:
+            await dao.record_absent(card, body.period_type, body.checked)
+            await session.commit()
         return {"stored": 0}
 
     # Where the readings go. An enterprise card names no corrector, so the
@@ -539,7 +576,7 @@ async def push_data(
                     "temper": r.temperature,
                     "press_unit": r.press_unit,
                 }
-                for r in body.rows
+                for r in rows
             ],
             source="gsm",
         )
@@ -555,11 +592,14 @@ async def push_data(
                     "temperature": r.temperature,
                     "press_unit": r.press_unit,
                 }
-                for r in body.rows
+                for r in rows
             ],
         )
+    if body.checked:
+        await session.flush()
+        await dao.record_absent(card, body.period_type, body.checked)
     await session.commit()
-    return {"stored": len(body.rows)}
+    return {"stored": len(rows)}
 
 
 @router.post("/devices/{device_id}/finish")
