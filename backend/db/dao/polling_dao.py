@@ -23,7 +23,6 @@ from backend.db.models.polling_model import (
     PollAgentDevice,
     PollAttempt,
     PollDevice,
-    PollGapAbsent,
     PollSettings,
 )
 from backend.services.archive_gaps import (
@@ -746,14 +745,21 @@ class PollingDao:
         return [r if isinstance(r, datetime) else datetime.combine(r, datetime.min.time())
                 for r in rows]
 
-    async def _absent(self, card_id: int, period_type: str,
-                      lo: datetime) -> List[datetime]:
-        return list((await self.session.execute(
-            select(PollGapAbsent.stamp)
-            .where(PollGapAbsent.poll_device_id == card_id)
-            .where(PollGapAbsent.period_type == period_type)
-            .where(PollGapAbsent.stamp >= lo)
-        )).scalars().all())
+    async def _oldest(self, archive: Dict) -> tuple:
+        """The oldest hour and day this archive holds, or None where empty."""
+        if "line_id" in archive:
+            tables = ("dpd_line_hourly_archive", "dpd_line_daily_archive")
+            key, value = "dpd_line_id", archive["line_id"]
+        else:
+            tables = ("dpd_hourly_archive", "dpd_daily_archive")
+            key, value = "device_id", archive["device_id"]
+        hour = (await self.session.execute(
+            text(f"SELECT MIN(stamp) FROM {tables[0]} WHERE {key} = :id"),
+            {"id": value})).scalar()
+        day = (await self.session.execute(
+            text(f"SELECT MIN(day) FROM {tables[1]} WHERE {key} = :id"),
+            {"id": value})).scalar()
+        return hour, (datetime.combine(day, datetime.min.time()) if day else None)
 
     async def archive_gaps(self, card: PollDevice, newest_hour: Optional[datetime],
                            newest_day: Optional[datetime],
@@ -772,14 +778,23 @@ class PollingDao:
         `_archive_of`). Everything missing between the floor and the newest
         stored record is a hole — including history before our first record
         that the corrector still keeps. What is newer than the newest record is
-        read by the ordinary window. Periods the corrector was already asked
-        for and did not have (poll_gap_absent) are not asked for again.
+        read by the ordinary window.
+
+        Nothing is remembered about a hole the corrector could not fill: a
+        period it does not have is asked for again next call. What keeps that
+        cheap is asking only for what it can hold — the agent clips by where
+        its archive starts, and where that is not known (Флоутек, Універсал-02)
+        by `first`, the oldest record we hold, so that only holes BETWEEN our
+        records are read. A remembered "it does not have it" was tried, and one
+        wrong conclusion (agent 0.10.0 on a reset Тандем) lost a day for good.
         """
         now = now or datetime.now()
-        out: Dict[str, list] = {"hourly": [], "daily": []}
+        out: Dict[str, object] = {"hourly": [], "daily": [],
+                                  "first_hour": None, "first_day": None}
         archive = await self._archive_of(card)
         if archive is None:
             return out
+        out["first_hour"], out["first_day"] = await self._oldest(archive)
         since = archive["since"]
 
         if newest_hour is not None:
@@ -789,7 +804,6 @@ class PollingDao:
             hi = newest_hour.replace(minute=0, second=0, microsecond=0)
             if lo < hi:
                 have = await self._stored(archive, "hourly", lo, hi)
-                have += await self._absent(card.id, "hourly", lo)
                 holes = missing_hours(Window(lo, hi), have)
                 out["hourly"] = [[w.start, w.end] for w in as_ranges(holes)]
 
@@ -803,7 +817,6 @@ class PollingDao:
             hi = newest_day.replace(hour=0, minute=0, second=0, microsecond=0)
             if lo < hi:
                 have = {d.date() for d in await self._stored(archive, "daily", lo, hi)}
-                have |= {d.date() for d in await self._absent(card.id, "daily", lo)}
                 days = []
                 at = lo
                 while at <= hi:
@@ -813,47 +826,6 @@ class PollingDao:
                 out["daily"] = [[w.start, w.end]
                                 for w in as_ranges(days, step=timedelta(days=1))]
         return out
-
-    async def record_absent(self, card: PollDevice, period_type: str,
-                            checked: List[List[datetime]]) -> int:
-        """Remember what a range read to its end still did not have.
-
-        Called after the batch is stored, so a period the corrector DID have is
-        in the archive by now and is not marked. Returns how many were marked.
-        """
-        archive = await self._archive_of(card)
-        if archive is None or not checked:
-            return 0
-        hourly = period_type == "hourly"
-        step = timedelta(hours=1) if hourly else timedelta(days=1)
-        marked = 0
-        for start, end in checked:
-            if not hourly:
-                start = start.replace(hour=0, minute=0, second=0, microsecond=0)
-                end = end.replace(hour=0, minute=0, second=0, microsecond=0)
-            if end < start:
-                continue
-            have = set(await self._stored(archive, period_type, start, end))
-            at = start
-            while at <= end:
-                if at not in have:
-                    await self.session.execute(
-                        text("INSERT INTO poll_gap_absent "
-                             "(poll_device_id, period_type, stamp, checked_at) "
-                             "VALUES (:c, :p, :s, :now) ON CONFLICT DO NOTHING"),
-                        {"c": card.id, "p": period_type, "s": at,
-                         "now": datetime.now()},
-                    )
-                    marked += 1
-                at += step
-        # Nothing behind the window is ever asked for again; keep the table
-        # the size of the window.
-        await self.session.execute(
-            delete(PollGapAbsent)
-            .where(PollGapAbsent.poll_device_id == card.id)
-            .where(PollGapAbsent.stamp < datetime.now() - self.GAP_DAYS_BACK)
-        )
-        return marked
 
     async def archive_coverage(self, card_ids: List[int]) -> Dict[int, Dict]:
         """card id -> {"hourly": last stamp, "daily": last day} already stored.

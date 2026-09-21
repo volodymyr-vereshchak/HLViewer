@@ -978,9 +978,10 @@ class TestHolesAreReadAgain:
     one; the agent clips that by where this corrector's archive starts (known
     only on the call) and reads what is left. An enterprise's archive is kept
     by corrector, so the installation date does not limit it — the enterprise
-    takes the periods it needs by its own installation windows. An agent that reads a range to
-    its end and still finds nothing says so, so that a corrector which was
-    simply switched off is not asked for the same empty hours on every call.
+    takes the periods it needs by its own installation windows. Where the
+    agent cannot learn where the archive starts, the plan's oldest record is
+    the floor instead. Nothing is remembered about a hole that could not be
+    filled: it is simply asked for again.
     """
 
     @staticmethod
@@ -988,14 +989,12 @@ class TestHolesAreReadAgain:
         base = datetime.now().replace(minute=0, second=0, microsecond=0) - timedelta(hours=10)
         return base, [base + timedelta(hours=i) for i in range(9) if i not in (4, 5)]
 
-    async def _store(self, anon_client, agent, card, stamps, checked=(),
-                     period="hourly"):
+    async def _store(self, anon_client, agent, card, stamps, period="hourly"):
         resp = await anon_client.post(
             f"/polling/agent/devices/{card['id']}/data",
             json={
                 "ser_num": 555001, "period_type": period,
                 "rows": [{"stamp": s.isoformat(), "volume": 1.0} for s in stamps],
-                "checked": [[a.isoformat(), b.isoformat()] for a, b in checked],
             },
             headers=key(agent),
         )
@@ -1048,23 +1047,18 @@ class TestHolesAreReadAgain:
         device = await self._plan(anon_client, agent, card)
         assert device["gap_hours"][0][1] == (base - timedelta(hours=1)).isoformat()
 
-    async def test_a_hole_read_to_its_end_and_still_empty_is_not_asked_again(
-        self, anon_client, session_ready, fleet
+    async def test_the_plan_says_where_our_archive_begins(
+        self, anon_client, session_ready
     ):
+        """For a corrector whose own archive start the agent cannot learn
+        (Флоутек, Універсал-02), the oldest record we hold is the floor: only
+        holes between our records are read, not months it may not have."""
         agent, card = session_ready["agent"], session_ready["card"]
         base, stamps = self._hours()
-        await self._installed(fleet, base)
         await self._store(anon_client, agent, card, stamps)
-        hole = (base + timedelta(hours=4), base + timedelta(hours=5))
-
-        # Read through, nothing there: the corrector was off.
-        await self._store(anon_client, agent, card, [], checked=[hole])
-
         device = await self._plan(anon_client, agent, card)
-        assert self._range(*hole) not in device["gap_hours"]
-        assert all(start > (base + timedelta(hours=5)).isoformat()
-                   or end < (base + timedelta(hours=4)).isoformat()
-                   for start, end in device["gap_hours"])
+        assert device["first_hour"] == base.isoformat()
+        assert device["first_day"] is None
 
     async def test_a_hole_that_was_read_is_gone(
         self, anon_client, session_ready, fleet

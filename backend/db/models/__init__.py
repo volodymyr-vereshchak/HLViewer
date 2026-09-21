@@ -151,6 +151,5 @@ from .polling_model import (
     PollAgentDevice,
     PollAttempt,
     PollDevice,
-    PollGapAbsent,
     PollSettings,
 )

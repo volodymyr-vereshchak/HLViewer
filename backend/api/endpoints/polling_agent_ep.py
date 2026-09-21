@@ -101,6 +101,11 @@ class PlanDevice(BaseModel):
     #: hold. Read after the new records. Only filled in for a due card.
     gap_hours: List[List[datetime]] = Field(default_factory=list)
     gap_days: List[List[datetime]] = Field(default_factory=list)
+    #: The oldest hour and day we hold. Where the agent cannot learn where a
+    #: corrector's own archive starts, it reads only holes after these —
+    #: between our records — instead of asking for months it may not have.
+    first_hour: Optional[datetime] = None
+    first_day: Optional[datetime] = None
 
     last_poll_at: Optional[datetime] = None
     manual_requested_at: Optional[datetime] = None
@@ -171,10 +176,6 @@ class DataBatch(BaseModel):
     ser_num: Optional[int] = None
     period_type: str  # hourly | daily
     rows: List[ArchiveRow] = Field(default_factory=list)
-    #: Holes from the plan that were read through to the end without the line
-    #: failing. A period in one of them still without a row is one the
-    #: corrector does not have, and is not asked for again.
-    checked: List[List[datetime]] = Field(default_factory=list)
 
 
 class Finish(BaseModel):
@@ -288,7 +289,8 @@ async def get_plan(
         # Only for a call that is about to be made: finding holes reads the
         # archive, and the plan is fetched every few seconds by every agent.
         gaps = (await dao.archive_gaps(card, last.get("hourly"), last.get("daily"), now)
-                if due else {"hourly": [], "daily": []})
+                if due else {"hourly": [], "daily": [],
+                             "first_hour": None, "first_day": None})
         devices.append(PlanDevice(
             id=card.id,
             due=due,
@@ -320,6 +322,8 @@ async def get_plan(
             last_day=last.get("daily"),
             gap_hours=gaps["hourly"],
             gap_days=gaps["daily"],
+            first_hour=gaps["first_hour"],
+            first_day=gaps["first_day"],
             last_poll_at=card.last_poll_at,
             manual_requested_at=card.manual_requested_at,
             # Sent for every card: which corrector answers is found on the
@@ -539,11 +543,6 @@ async def push_data(
             card.id, len(body.rows) - len(rows), body.period_type,
         )
     if not rows:
-        # Nothing to store — but a hole read to its end and found empty is
-        # still worth remembering, or it is asked for on every call.
-        if body.checked:
-            await dao.record_absent(card, body.period_type, body.checked)
-            await session.commit()
         return {"stored": 0}
 
     # Where the readings go. An enterprise card names no corrector, so the
@@ -595,9 +594,6 @@ async def push_data(
                 for r in rows
             ],
         )
-    if body.checked:
-        await session.flush()
-        await dao.record_absent(card, body.period_type, body.checked)
     await session.commit()
     return {"stored": len(rows)}
 
