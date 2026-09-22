@@ -50,11 +50,11 @@ def test_the_outcome_closes_both(tmp_path):
     path = tmp_path / "enterprise-1.log"
     poll_journal.start(path, "Волана")
     poll_journal.append(path, lines(("debug", "--> 01 41 00 02")))
-    poll_journal.finish(path, "error", "Немає носійної", {"hour": 0, "day": 0}, 37000)
+    poll_journal.finish(path, "error", "Немає зв'язку з модемом", {"hour": 0, "day": 0}, 37000)
 
     for target in (path, poll_journal.debug_path(path)):
         text = poll_journal.read(target)
-        assert "Помилка" in text and "Немає носійної" in text
+        assert "Помилка" in text and "Немає зв'язку з модемом" in text
 
 
 def test_a_runaway_call_does_not_fill_the_disk(tmp_path, monkeypatch):
