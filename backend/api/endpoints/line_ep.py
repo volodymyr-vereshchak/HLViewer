@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends, status, HTTPException
+from datetime import date
+from typing import Optional
+
+from fastapi import APIRouter, Depends, Query, status, HTTPException
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -15,6 +18,7 @@ from backend.db.models import (
 from backend.db.models.gas_volume_calc_model import GasVolumeCalc
 from backend.db.models.line_model import Line
 from backend.db.models.lumg_model import Lumg
+from backend.services import line_archive_cleanup
 
 
 class LineRouter:
@@ -59,6 +63,36 @@ class LineRouter:
             endpoint=self.delete_line,
             methods=["DELETE"],
             status_code=status.HTTP_204_NO_CONTENT,
+        )
+
+        self.router.add_api_route(
+            path="/lines/{line_id}/archive/preview",
+            tags=["lines"],
+            endpoint=self.preview_archive_purge,
+            methods=["GET"],
+            status_code=status.HTTP_200_OK,
+            summary="How much of this line's archive a range holds",
+            description=(
+                "Counts by kind — добові, годинні, зміни, аварії, параметри — "
+                "plus the first and last day the line has anything on. Either "
+                "end of the range may be left out: only a start means "
+                "everything from that day on, only an end means everything up "
+                "to it, both mean the range between them, ends included."
+            ),
+        )
+        self.router.add_api_route(
+            path="/lines/{line_id}/archive",
+            tags=["lines"],
+            endpoint=self.purge_archive,
+            methods=["DELETE"],
+            status_code=status.HTTP_200_OK,
+            summary="Remove this line's archive over a range",
+            description=(
+                "All five archives of the line at once, over the same range as "
+                "the preview. Irreversible: what goes comes back only by "
+                "reading the hostlib files again, which is the update asked "
+                "for by hand on that path. Admin-only."
+            ),
         )
 
     async def get_lines(
@@ -106,6 +140,61 @@ class LineRouter:
         if not line_db:
             raise HTTPException(status_code=404, detail="Line not found")
         return line_db
+
+    async def _line_or_404(self, line_id: int, session: AsyncSession) -> Line:
+        line = await session.get(Line, line_id)
+        if not line:
+            raise HTTPException(status_code=404, detail="Line not found")
+        return line
+
+    @staticmethod
+    def _range(since: Optional[date], until: Optional[date],
+               removing: bool) -> None:
+        """Refuse a range that cannot be used.
+
+        Counting has no lower bar than making sense: with neither date it says
+        what the whole archive holds, which is what the screen opens with.
+        Removing does — two empty fields must not clear a line's history.
+        """
+        refusal = line_archive_cleanup.valid(since, until)
+        if refusal and (removing or since is not None or until is not None):
+            raise HTTPException(status_code=400, detail=refusal)
+
+    async def preview_archive_purge(
+        self,
+        line_id: int,
+        from_date: Optional[date] = Query(
+            None, description="Перший день, включно. Порожньо — від початку архіву"),
+        to_date: Optional[date] = Query(
+            None, description="Останній день, включно. Порожньо — до кінця архіву"),
+        session: AsyncSession = Depends(get_session),
+    ):
+        """What clearing this range would take, counted by kind."""
+        line = await self._line_or_404(line_id, session)
+        self._range(from_date, to_date, removing=False)
+        return {
+            "line_id": line.id,
+            "name": line.name,
+            "counts": await line_archive_cleanup.counts(
+                session, line_id, from_date, to_date),
+            "extent": await line_archive_cleanup.extent(session, line_id),
+        }
+
+    async def purge_archive(
+        self,
+        line_id: int,
+        from_date: Optional[date] = Query(None),
+        to_date: Optional[date] = Query(None),
+        session: AsyncSession = Depends(get_session),
+    ):
+        """Remove this line's archive over the range. Counted first by the
+        screen that calls it — see preview_archive_purge."""
+        await self._line_or_404(line_id, session)
+        self._range(from_date, to_date, removing=True)
+        removed = await line_archive_cleanup.purge(
+            session, line_id, from_date, to_date)
+        await session.commit()
+        return {"removed": removed}
 
     async def delete_line(self, line_id: int, session: AsyncSession = Depends(get_session)):
         exists = await session.get(Line, line_id)
