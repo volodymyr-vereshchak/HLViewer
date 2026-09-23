@@ -9,16 +9,37 @@ zip on each configured path changed, and if so we run the update.
 Detection is mtime/size polling (not an OS watcher) because the source is an
 SMB/UNC share, where inotify/watchdog events don't propagate reliably.
 
-What has been taken in is kept in `hostlib_archive_log`, for a day. It lived
-in this process's memory, which a restart erased and nothing else could see.
-A day is enough: every source folder gains a new snapshot each hour, and
-reading an archive twice inserts nothing — a closed record never changes in a
-later snapshot, and rows are only added where their key is absent.
+What has been read is kept in `hostlib_archive_log`, and an archive that is in
+it is not read again. Which archive to read used to be decided from the file
+NAME — it was taken apart into a source and a snapshot time, and only the
+newest snapshot of each source was read — so a source that renamed its files
+would have gone unread without a word, and the whole history of the share was
+re-read daily because a day-old record was forgotten. The name now decides
+nothing: read once, written down, done.
 
-An archive is taken in when it is the newest of its source, is not in the log
-as done, has not changed for a minute, and opens as a whole zip. A failed one
-is logged as such and tried again, but not more often than every fifteen
-minutes — an archive that cannot be read will not read on the next tick either.
+The path is the folder the archives arrive in — the administrator points it at
+the inbox — and everything in it is read. What was there yesterday the source
+itself moves into its archive folders, which is why a day's worth of files is
+all the poller ever looks at.
+
+An archive is taken in when it is not in the log, has not changed for a
+minute, and opens as a whole zip. A failed update is logged as such and comes
+round again, but not more often than every fifteen minutes.
+
+One that does not open as a zip at all is written down as `broken`: it is
+corrupt or was never copied to the end. The extraction passes over it (see
+UnzipUtils.unzip_files), so nothing waits on it. Re-copied, it arrives with
+another size or time — a different key — and is tried again at once.
+
+Rows are kept for a week after their file has left the folder; a file still
+lying there is remembered for as long as it lies there, so nothing is read
+twice because a log entry aged out. A folder that lists as empty is not taken
+at its word — an unmounted share says exactly what an emptied folder says.
+
+An update asked for BY HAND does not consult the log at all — it reads
+everything on the path. It is asked for because something has to be read
+again: an EIC code added after the files arrived, an archive cleared, a
+reading rule corrected.
 """
 import asyncio
 import logging
@@ -37,7 +58,7 @@ from backend.hl_engine.update_job_lock import run_guarded_update
 from backend.logging_config import setup_logging
 from backend.services import dpd_archive_refresh, dpd_line_refresh
 from backend.utils.path_utils import resolve_stored_path
-from utils.files_utils import UnzipUtils, zip_is_complete
+from utils.files_utils import all_zips, zip_is_complete
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -48,9 +69,13 @@ POLL_INTERVAL_SEC = 120
 # long — guards against reading a half-uploaded archive.
 SETTLE_SECONDS = 60
 
-# How long the log remembers an archive. Snapshots arrive hourly, so a day
-# covers every one that can still be the newest.
-LOG_KEEP = timedelta(days=1)
+# How long the log remembers an archive that has left the folder. One still
+# lying there is remembered for as long as it lies there, however old —
+# forgetting it would only mean reading it again for nothing. The days after
+# it is gone are not for the file, they are for the folder: a share that is
+# briefly unreachable lists as empty, and nothing that a single empty listing
+# says should be acted upon (see _forget_what_is_gone).
+FORGET_AFTER = timedelta(days=7)
 # How long a failed archive waits before it is tried again.
 RETRY_AFTER = timedelta(minutes=15)
 
@@ -71,12 +96,12 @@ async def _active_paths() -> list[str]:
 
 
 def _candidates(path: str) -> list[dict]:
-    """The newest archive of each source under `path`, with what the log keys
-    it by. Blocking filesystem work — run in a thread."""
+    """Every archive under `path`, newest first, with what the log keys it by.
+    Blocking filesystem work — run in a thread."""
     if not os.path.isdir(path):
         return []
     found = []
-    for archive in UnzipUtils._latest_zip_per_dir(path):
+    for archive in all_zips(path):
         try:
             stat = os.stat(archive)
         except OSError:
@@ -91,47 +116,124 @@ def _candidates(path: str) -> list[dict]:
 
 
 async def _pending() -> dict[str, list[dict]]:
-    """path -> archives ready to be taken in and not taken in yet."""
+    """path -> archives ready to be read and not read yet, newest first."""
     paths = await _active_paths()
     now = datetime.now()
+    on_disk = {path: await asyncio.to_thread(_candidates, path) for path in paths}
+
     async with async_session_factory() as session:
-        # A day old is forgotten: newer snapshots have superseded it.
-        await session.execute(
-            delete(HostlibArchiveLog).where(HostlibArchiveLog.processed_at < now - LOG_KEEP)
-        )
-        await session.commit()
         rows = (await session.execute(select(HostlibArchiveLog))).scalars().all()
-    done = {(r.path, r.filename, r.size) for r in rows if r.status == "ok"}
-    failed_recently = {
-        (r.path, r.filename, r.size) for r in rows
-        if r.status == "error" and r.processed_at >= now - RETRY_AFTER
-    }
+    # Newest row wins: a failed update leaves a row behind, and the run that
+    # succeeds afterwards must not be shadowed by it.
+    known: dict[tuple, HostlibArchiveLog] = {}
+    for row in sorted(rows, key=lambda r: r.processed_at):
+        known[_key(row.path, row.filename, row.size, row.file_mtime)] = row
 
     pending: dict[str, list[dict]] = {}
     for path in paths:
-        for archive in await asyncio.to_thread(_candidates, path):
-            key = (path, archive["filename"], archive["size"])
-            if key in done or key in failed_recently:
-                continue
+        for archive in on_disk[path]:
+            seen = known.get(_key(path, archive["filename"], archive["size"],
+                                  archive["mtime"]))
+            if seen is not None:
+                # Read, or broken, or a failed update still within RETRY_AFTER.
+                if seen.status != "error" or seen.processed_at >= now - RETRY_AFTER:
+                    continue
             age = (now - archive["mtime"]).total_seconds()
             if age < SETTLE_SECONDS:
-                logger.info("New file %r on %r still settling (%.0fs old) — waiting",
+                logger.info("Файл %r на %r ще пишеться (%.0f с) — чекаю",
                             archive["filename"], path, age)
                 continue
             if not await asyncio.to_thread(zip_is_complete, archive["file"]):
-                logger.info("New file %r on %r does not open as a zip yet — waiting",
-                            archive["filename"], path)
+                logger.warning("Архів %r на %r не відкривається як zip — "
+                               "пропускаю його, доки не перезаллють",
+                               archive["filename"], path)
+                await _mark_broken(path, archive)
                 continue
             pending.setdefault(path, []).append(archive)
+
+    await _forget_what_is_gone(on_disk, known, now)
     return pending
 
 
+async def _forget_what_is_gone(on_disk: dict[str, list[dict]],
+                               known: dict, now: datetime) -> None:
+    """Drop rows for archives that left the folder a week ago or more.
+
+    Only those: a file still lying on the share stays in the log however old
+    it is, because forgetting it is exactly what would have it read again.
+
+    A folder that came back empty is left alone entirely. An unmounted share,
+    a path renamed, a network that blinked — `os.walk` says the same thing for
+    all of them as for a folder somebody emptied, and on that reading the
+    whole log for that path would be dropped and every archive read a second
+    time when it came back.
+    """
+    speaking = {path for path, archives in on_disk.items() if archives}
+    here = {(path, a["filename"]) for path, archives in on_disk.items()
+            for a in archives}
+    gone = [row.id for row in known.values()
+            if row.path in speaking
+            and (row.path, row.filename) not in here
+            and row.processed_at < now - FORGET_AFTER]
+    if not gone:
+        return
+    async with async_session_factory() as session:
+        await session.execute(
+            delete(HostlibArchiveLog).where(HostlibArchiveLog.id.in_(gone))
+        )
+        await session.commit()
+
+
+def _key(path: str, filename: str, size: int, mtime: datetime) -> tuple:
+    """What tells one archive from the next copy of it: where it lies, what it
+    is called, how big it is, and when it was written.
+
+    Whole seconds: the file time makes the round trip through the database and
+    through st_mtime's float, and a microsecond lost on the way would make
+    every tick believe it is looking at a new file.
+    """
+    return path, filename, size, mtime.replace(microsecond=0)
+
+
+async def _mark_broken(path: str, archive: dict) -> None:
+    """Remember an archive that does not open, so it is passed over quietly.
+
+    It is written down as handled rather than left pending: the extraction
+    skips it (see UnzipUtils.unzip_files), so nothing is waiting on it, and
+    without a record of it the poller would open it again every two minutes
+    for as long as it sits on the share.
+    """
+    async with async_session_factory() as session:
+        session.add(HostlibArchiveLog(
+            path=path,
+            filename=archive["filename"],
+            size=archive["size"],
+            file_mtime=archive["mtime"],
+            status="broken",
+            error="файл не відкривається як zip — пошкоджений або недокопійований",
+            processed_at=datetime.now(),
+        ))
+        await session.commit()
+
+
 async def _log(pending: dict[str, list[dict]], failed: set[str]) -> None:
+    """Write down what this run did with each archive it took.
+
+    One row per archive, replaced rather than added to: a path that fails
+    twice would otherwise leave two rows saying the same thing, and the log is
+    kept for as long as the file lies in the folder.
+    """
     now = datetime.now()
     async with async_session_factory() as session:
         for path, archives in pending.items():
             status = "error" if path in failed else "ok"
             for archive in archives:
+                await session.execute(
+                    delete(HostlibArchiveLog).where(
+                        HostlibArchiveLog.path == path,
+                        HostlibArchiveLog.filename == archive["filename"],
+                    )
+                )
                 session.add(HostlibArchiveLog(
                     path=path,
                     filename=archive["filename"],
@@ -144,21 +246,34 @@ async def _log(pending: dict[str, list[dict]], failed: set[str]) -> None:
         await session.commit()
 
 
+def _listed(archives: list[dict], show: int = 8) -> str:
+    """A few names for the log. The whole list ran to 530 files and 24 000
+    characters, once every fifteen minutes."""
+    names = [a["filename"] for a in archives[:show]]
+    rest = len(archives) - len(names)
+    return ", ".join(names) + (f" та ще {rest}" if rest > 0 else "")
+
+
 async def poll_once() -> None:
     pending = await _pending()
     if not pending:
         return
 
     logger.info(
-        "New data detected — triggering update: %s",
-        "; ".join(f"{path}: {', '.join(a['filename'] for a in archives)}"
+        "Нові архіви — запускаю оновлення: %s",
+        "; ".join(f"{path}: {_listed(archives)}"
                   for path, archives in pending.items()),
     )
 
     failed: set[str] = set()
 
+    archives_by_path = {path: [a["file"] for a in archives]
+                        for path, archives in pending.items()}
+
     async def work(session, progress):
-        failed.update(await update_hostlibs(session=session, progress=progress))
+        failed.update(await update_hostlibs(
+            session=session, progress=progress,
+            archives_by_path=archives_by_path))
 
     ran = await run_guarded_update(work)
     if ran:

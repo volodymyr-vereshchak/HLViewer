@@ -106,11 +106,20 @@ async def _run_all_engines_parallel(path: str, lumg_id_val: int, chunk_size: int
 
 
 async def update_hostlibs(
-    session: AsyncSession, lumg_id: int | None = None, progress: dict | None = None
+    session: AsyncSession, lumg_id: int | None = None, progress: dict | None = None,
+    archives_by_path: dict[str, list[str]] | None = None,
 ) -> set[str]:
     """Ingest every active LUMG path. Returns the paths whose group FAILED —
     per-path errors are contained (one bad archive must not sink the rest), so
-    the caller needs them explicitly to decide what to retry."""
+    the caller needs them explicitly to decide what to retry.
+
+    `archives_by_path` names the archives to read on each path — what the
+    poller has not read before. Left out, every archive on the path is read,
+    which is what an update asked for by hand means: it is asked for because
+    something has to be read again — an EIC code that was added after the
+    files arrived, an archive cleared, a reading rule corrected — and the log
+    of what was read must not stand in the way of that.
+    """
     _cleanup_orphan_temp_dirs()
     failed_paths: set[str] = set()
     query = select(LumgDataPath).where(LumgDataPath.active == True)
@@ -170,8 +179,11 @@ async def update_hostlibs(
                     progress[lp.lumg_id] = "error"
             return
         try:
-            async with UnzipUtils(path) as unzip_utils:
-                logger.info(f"Unzipped {path!r} -> {unzip_utils.temp_path} (shared by {len(lumg_path_list)} LUMGs)")
+            archives = archives_by_path.get(path) if archives_by_path else None
+            async with UnzipUtils(path, archives) as unzip_utils:
+                logger.info(f"Unzipped {path!r} -> {unzip_utils.temp_path} "
+                            f"({len(archives) if archives is not None else 'усі'} "
+                            f"архівів, shared by {len(lumg_path_list)} LUMGs)")
                 eis_dirs = _find_eis_dirs(unzip_utils.temp_path)
                 if eis_dirs:
                     # Mode 1: EIS routing — discover dirs ONCE for the whole path group,

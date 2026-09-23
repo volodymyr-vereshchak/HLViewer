@@ -1,12 +1,16 @@
 import asyncio
 import glob
+import logging
 import os
 import re
 import shutil
 import struct
 import uuid
 import zipfile
+import zlib
 from dataclasses import asdict
+
+logger = logging.getLogger(__name__)
 
 
 # ── Extraction safety limits (zip-slip / zip-bomb guards) ─────────────────────
@@ -20,27 +24,33 @@ MAX_TOTAL_BYTES = 1024 * 1024 * 1024     # 1 GB per archive
 _EXTRACT_CHUNK = 1024 * 1024             # 1 MB streaming chunks
 
 
-#: "Dnipropetr_2026_09_11_23.zip" -> "Dnipropetr": the snapshot's date and
-#: hour number are dropped, what is left names the source.
-_SNAPSHOT_SUFFIX = re.compile(r"_(\d{4})_(\d{2})_(\d{2})(?:_(\d+))?\.zip$", re.IGNORECASE)
+def all_zips(path: str) -> list[str]:
+    """Every archive under `path`, the most recently written first.
 
+    Nothing is read out of the file name. Which archive holds what used to be
+    guessed from it — "Dnipropetr_2026_09_11_23.zip" was taken apart into a
+    source and a snapshot time, and only the newest snapshot of each source
+    was read — and a source that renamed its files would have gone unread
+    without a word. What has been read is remembered instead (see
+    hostlib_archive_log), so a name is only a name.
 
-def snapshot_order(path: str) -> tuple:
-    """Newest-first ordering key for a snapshot: the date and hour in its name,
-    then the file's time.
-
-    The name comes first because it is what the source wrote on purpose; the
-    file time is whatever the copy left — a copy that keeps the original time
-    would otherwise make a newer snapshot look older. The file time only
-    decides among names that carry no date.
+    The order decides nothing about correctness — everything here is read
+    sooner or later — it only puts today's data before last month's when a
+    run takes in a backlog.
     """
-    match = _SNAPSHOT_SUFFIX.search(os.path.basename(path))
-    stamp = tuple(int(g or 0) for g in match.groups()) if match else (0, 0, 0, 0)
-    try:
-        mtime = os.path.getmtime(path)
-    except OSError:
-        mtime = 0.0
-    return stamp + (mtime,)
+    found = []
+    for root, _dirs, files in os.walk(path):
+        for f in files:
+            if f.lower().endswith(".zip"):
+                found.append(os.path.join(root, f))
+
+    def written_at(p: str) -> float:
+        try:
+            return os.path.getmtime(p)
+        except OSError:
+            return 0.0
+
+    return sorted(found, key=written_at, reverse=True)
 
 
 def zip_is_complete(path: str) -> bool:
@@ -54,25 +64,23 @@ def zip_is_complete(path: str) -> bool:
         return False
 
 
-def _zip_source(filename: str) -> str:
-    """The data source a snapshot belongs to, from its file name.
-
-    A name without the date pattern is its own source, so an archive named
-    some other way is still read rather than dropped behind another one.
-    """
-    stripped = _SNAPSHOT_SUFFIX.sub("", filename)
-    return stripped if stripped != filename else filename
-
-
 class UnzipUtils:
 
-    def __init__(self, path: str):
+    def __init__(self, path: str, archives: list[str] | None = None):
         self.path = path
+        #: Exactly which archives to extract. The poller passes the ones it has
+        #: not read yet; None means everything under `path`, which is what a
+        #: person asking for an update by hand wants — they are asking because
+        #: something has to be read again.
+        self.archives = archives
         # Unique per-instance temp dir to avoid collisions when multiple LUMGs
         # are processed concurrently (each gets its own isolated temp directory).
         self.temp_path = os.path.join(
             os.getcwd(), "hostlibs", f"__temp_{uuid.uuid4().hex}__"
         )
+        #: Snapshots that did not open, absolute paths — reported by the
+        #: caller so a corrupt archive is named once and not met again.
+        self.broken: list[str] = []
 
     def __enter__(self):
         self.unzip_files()
@@ -90,97 +98,110 @@ class UnzipUtils:
         await asyncio.to_thread(self.delete_unzip_folder)
         return False
 
-    @staticmethod
-    def _latest_zip_per_dir(path: str) -> list[str]:
-        """The most recently modified zip of each data source under path.
-
-        When a data source uploads multiple hourly snapshots (e.g.
-        Zaporizgaz_2026_04_04_0.zip … Zaporizgaz_2026_04_04_19.zip) each
-        containing a full copy of all device files, we only need the newest one.
-        Extracting all 20 would take 20× as long for zero extra data.
-
-        Newest per SOURCE, not per directory. One folder can hold several
-        sources side by side — the Дніпро test folder has Dnipropetr_* (every
-        ГРС of the branch) and UGV_DNP_* (seven ГПУ devices) — and picking one
-        zip for the whole folder took whichever was written last: UGV_DNP, by
-        fourteen minutes, so the whole Dnipropetr archive was never read and
-        126 lines of two ЛВУМГ got nothing while their EIC codes matched.
-        """
-        result = []
-        for root, dirs, files in os.walk(path):
-            by_source: dict[str, list[str]] = {}
-            for f in files:
-                if f.lower().endswith(".zip"):
-                    by_source.setdefault(_zip_source(f), []).append(os.path.join(root, f))
-            for zips in by_source.values():
-                result.append(max(zips, key=snapshot_order))
-        return result
+    def _readable(self) -> list[str]:
+        """The archives to extract, minus the ones that do not open."""
+        chosen = []
+        for zip_path in (self.archives if self.archives is not None
+                         else all_zips(self.path)):
+            try:
+                with zipfile.ZipFile(zip_path, "r"):
+                    pass
+            except (zipfile.BadZipFile, OSError) as error:
+                self.broken.append(zip_path)
+                logger.warning("Архів %r не читається (%s) — пропускаю",
+                               zip_path, error)
+                continue
+            chosen.append(zip_path)
+        return chosen
 
     def unzip_files(self):
+        """Extract the archives this instance was given, into one temp dir.
+
+        An archive that does not open is skipped rather than fatal: a
+        truncated Dnipropetr_2026_01_18_23.zip, eight months old and never
+        re-copied, aborted the extraction of the whole share on every run, and
+        the branch took in nothing for forty hours (241 runs, 241 failures,
+        21–23.09.2026). What could not be read is left in `self.broken` for
+        the caller to write down, so it is passed over quietly from then on.
+
+        The size and byte caps below still stop everything, because a bomb is
+        somebody trying, not a copy that went wrong.
+        """
         os.makedirs(self.temp_path, exist_ok=True)
         temp_root = os.path.realpath(self.temp_path)
 
-        for zip_path in self._latest_zip_per_dir(self.path):
-            with zipfile.ZipFile(zip_path, "r") as zip_file:
-                infos = [i for i in zip_file.infolist() if not i.is_dir()]
-                if len(infos) > MAX_ZIP_ENTRIES:
+        for zip_path in self._readable():
+            try:
+                self._extract(zip_path, temp_root)
+            except (zipfile.BadZipFile, OSError, EOFError, zlib.error) as error:
+                # It opened and then came apart mid-read: half its files are
+                # in the temp dir, which is fine — the engines read what is
+                # there, and the rest arrives with the next snapshot.
+                self.broken.append(zip_path)
+                logger.warning("Архів %r обірвався під час розпакування (%s) "
+                               "— беру, що встиг", zip_path, error)
+
+    def _extract(self, zip_path: str, temp_root: str) -> None:
+        with zipfile.ZipFile(zip_path, "r") as zip_file:
+            infos = [i for i in zip_file.infolist() if not i.is_dir()]
+            if len(infos) > MAX_ZIP_ENTRIES:
+                raise ValueError(
+                    f"Refusing to extract {zip_path}: {len(infos)} entries "
+                    f"exceed limit {MAX_ZIP_ENTRIES}"
+                )
+
+            total_written = 0
+            for file_info in infos:
+                # Zip Slip: resolve the destination and require it to stay
+                # inside temp_path. We block traversal explicitly (with a log
+                # trail) instead of relying on extract()'s silent sanitizing.
+                dest = os.path.realpath(
+                    os.path.join(self.temp_path, file_info.filename)
+                )
+                if dest != temp_root and not dest.startswith(temp_root + os.sep):
                     raise ValueError(
-                        f"Refusing to extract {zip_path}: {len(infos)} entries "
-                        f"exceed limit {MAX_ZIP_ENTRIES}"
+                        f"Refusing path traversal in {zip_path}: "
+                        f"{file_info.filename!r}"
                     )
 
-                total_written = 0
-                for file_info in infos:
-                    # Zip Slip: resolve the destination and require it to stay
-                    # inside temp_path. We block traversal explicitly (with a log
-                    # trail) instead of relying on extract()'s silent sanitizing.
-                    dest = os.path.realpath(
-                        os.path.join(self.temp_path, file_info.filename)
+                # Zip Bomb: cheap pre-check on the declared uncompressed size.
+                if file_info.file_size > MAX_FILE_BYTES:
+                    raise ValueError(
+                        f"Refusing oversized entry in {zip_path}: "
+                        f"{file_info.filename} declares {file_info.file_size} bytes"
                     )
-                    if dest != temp_root and not dest.startswith(temp_root + os.sep):
-                        raise ValueError(
-                            f"Refusing path traversal in {zip_path}: "
-                            f"{file_info.filename!r}"
-                        )
 
-                    # Zip Bomb: cheap pre-check on the declared uncompressed size.
-                    if file_info.file_size > MAX_FILE_BYTES:
-                        raise ValueError(
-                            f"Refusing oversized entry in {zip_path}: "
-                            f"{file_info.filename} declares {file_info.file_size} bytes"
-                        )
+                # Preserve the original "only re-extract if larger" behaviour.
+                if os.path.isfile(dest):
+                    try:
+                        existing_size = os.path.getsize(dest)
+                    except OSError:
+                        existing_size = -1
+                    if file_info.file_size <= existing_size:
+                        continue
 
-                    # Preserve the original "only re-extract if larger" behaviour.
-                    if os.path.isfile(dest):
-                        try:
-                            existing_size = os.path.getsize(dest)
-                        except OSError:
-                            existing_size = -1
-                        if file_info.file_size <= existing_size:
-                            continue
-
-                    os.makedirs(os.path.dirname(dest), exist_ok=True)
-                    written = 0
-                    # Stream-extract with a hard byte cap so a lying header
-                    # (declares small, decompresses large) can't fill the disk.
-                    with zip_file.open(file_info) as src, open(dest, "wb") as out:
-                        while True:
-                            chunk = src.read(_EXTRACT_CHUNK)
-                            if not chunk:
-                                break
-                            written += len(chunk)
-                            total_written += len(chunk)
-                            if written > MAX_FILE_BYTES or total_written > MAX_TOTAL_BYTES:
-                                out.close()
-                                try:
-                                    os.remove(dest)
-                                except OSError:
-                                    pass
-                                raise ValueError(
-                                    f"Refusing decompression bomb in {zip_path}: "
-                                    f"size limit exceeded extracting {file_info.filename}"
-                                )
-                            out.write(chunk)
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                written = 0
+                # Stream-extract with a hard byte cap so a lying header
+                # (declares small, decompresses large) can't fill the disk.
+                with zip_file.open(file_info) as src, open(dest, "wb") as out:
+                    while True:
+                        chunk = src.read(_EXTRACT_CHUNK)
+                        if not chunk:
+                            break
+                        written += len(chunk)
+                        total_written += len(chunk)
+                        if written > MAX_FILE_BYTES or total_written > MAX_TOTAL_BYTES:
+                            out.close()
+                            try:
+                                os.remove(dest)
+                            except OSError:
+                                pass
+                            raise ValueError(
+                                f"Refusing decompression bomb in {zip_path}: "
+                                f"size limit exceeded extracting {file_info.filename}"
+                            )
+                        out.write(chunk)
 
     def delete_unzip_folder(self):
         # Tolerate races during teardown: on overlayfs (Docker) rmtree can hit a
@@ -190,41 +211,6 @@ class UnzipUtils:
         # never fail an update whose data was already written.
         if os.path.exists(self.temp_path):
             shutil.rmtree(self.temp_path, ignore_errors=True)
-
-
-def newest_zip_signature(path: str) -> tuple[frozenset, float]:
-    """Build a change-detection signature for the zips under `path`.
-
-    Mirrors UnzipUtils._latest_zip_per_dir exactly — the newest zip of each
-    data source, not of each directory. The two must agree: if the signature
-    looked at one zip per folder while the unzip read one per source, a new
-    Dnipropetr snapshot in a folder where a UGV_DNP one is newer would change
-    nothing the poller sees, and no update would ever be triggered for it.
-
-    The signature is a frozenset of (relpath, mtime, size) for those zips, plus
-    the maximum mtime across them. The poller compares signatures between
-    ticks: a changed signature means a new file arrived. `max_mtime` feeds the
-    settle-guard (don't act on a file that may still be mid-upload).
-    Missing/empty path → (frozenset(), 0.0).
-    """
-    entries: list[tuple[str, float, int]] = []
-    max_mtime = 0.0
-    if not os.path.isdir(path):
-        return frozenset(), 0.0
-    try:
-        newest = UnzipUtils._latest_zip_per_dir(path)
-    except OSError:
-        return frozenset(), 0.0
-    for latest in newest:
-        try:
-            mtime = os.path.getmtime(latest)
-            size = os.path.getsize(latest)
-        except OSError:
-            # File vanished between listing and stat (e.g. mid-upload churn).
-            continue
-        entries.append((os.path.relpath(latest, path), mtime, size))
-        max_mtime = max(max_mtime, mtime)
-    return frozenset(entries), max_mtime
 
 
 def find_files_by_mask(path: str, mask: str) -> list[str]:

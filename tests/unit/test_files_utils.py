@@ -4,7 +4,8 @@ import zipfile
 import pytest
 from unittest.mock import patch, mock_open
 
-from utils.files_utils import UnzipUtils, find_files_by_mask, read_archive_file
+from utils.files_utils import (UnzipUtils, all_zips, find_files_by_mask,
+                               read_archive_file)
 from backend.hl_engine.data_classes.hour_dataclass import HourStruct
 
 
@@ -252,13 +253,13 @@ class TestReadArchiveFile:
             assert record['hour'] == i
             assert record['volume'] == 1000.0 + i 
 
-class TestNewestSnapshotPerSource:
-    """One folder can hold several data sources side by side.
+class TestEveryArchiveIsFound:
+    """What to read is no longer guessed from the file name.
 
-    The Дніпро test folder has Dnipropetr_* (every ГРС of the branch) and
-    UGV_DNP_* (seven ГПУ devices). The newest zip of the whole folder was
-    UGV_DNP's, so the Dnipropetr archive was never read and two ЛВУМГ got no
-    data at all while their EIC codes matched.
+    It used to be: "Dnipropetr_2026_09_11_23.zip" was taken apart into a
+    source and a snapshot time, and only the newest snapshot of each source
+    was read. A source that renamed its files would have gone unread without a
+    word — and every run re-read the whole history of the share to be safe.
     """
 
     def _touch(self, folder, name, mtime):
@@ -268,46 +269,111 @@ class TestNewestSnapshotPerSource:
         os.utime(path, (mtime, mtime))
         return path
 
-    def test_each_source_gives_its_own_newest(self, tmp_path):
+    def test_every_zip_is_there_whatever_it_is_called(self, tmp_path):
         folder = str(tmp_path)
-        self._touch(folder, "Dnipropetr_2026_09_11_22.zip", 1000)
-        newest_dnp = self._touch(folder, "Dnipropetr_2026_09_11_23.zip", 2000)
-        self._touch(folder, "UGV_DNP_2026_09_11_22.zip", 1500)
-        newest_ugv = self._touch(folder, "UGV_DNP_2026_09_11_23.zip", 2800)
+        wanted = {
+            self._touch(folder, "Dnipropetr_2026_09_11_22.zip", 1000),
+            self._touch(folder, "Dnipropetr_2026_09_11_23.zip", 2000),
+            self._touch(folder, "UGV_DNP_2026_09_11_23.zip", 1500),
+            self._touch(folder, "manual-export.zip", 500),
+            self._touch(folder, "хай_буде_кирилиця.zip", 900),
+        }
+        assert set(all_zips(folder)) == wanted
 
-        picked = sorted(UnzipUtils._latest_zip_per_dir(folder))
-        assert picked == sorted([newest_dnp, newest_ugv])
-
-    def test_hourly_snapshots_of_one_source_still_give_one(self, tmp_path):
+    def test_the_newest_comes_first(self, tmp_path):
+        """Order decides nothing about what is read — everything is, sooner or
+        later — it only puts today's data before last month's."""
         folder = str(tmp_path)
-        for hour in range(20):
-            self._touch(folder, f"Zaporizgaz_2026_04_04_{hour}.zip", 1000 + hour)
-        picked = UnzipUtils._latest_zip_per_dir(folder)
-        assert [os.path.basename(p) for p in picked] == ["Zaporizgaz_2026_04_04_19.zip"]
+        self._touch(folder, "old.zip", 1000)
+        self._touch(folder, "new.zip", 3000)
+        self._touch(folder, "middle.zip", 2000)
+        assert [os.path.basename(z) for z in all_zips(folder)] == [
+            "new.zip", "middle.zip", "old.zip"]
 
-    def test_a_zip_named_some_other_way_is_not_dropped(self, tmp_path):
+    def test_subfolders_count_too(self, tmp_path):
         folder = str(tmp_path)
-        self._touch(folder, "Zaporizgaz_2026_04_04_0.zip", 1000)
-        odd = self._touch(folder, "manual-export.zip", 500)
-        assert odd in UnzipUtils._latest_zip_per_dir(folder)
+        os.makedirs(os.path.join(folder, "Arhiv", "18.01.2026"))
+        deep = self._touch(os.path.join(folder, "Arhiv", "18.01.2026"),
+                           "Dnipropetr_2026_01_18_23.zip", 1000)
+        assert deep in all_zips(folder)
 
 
-def test_the_signature_changes_when_any_source_gets_a_new_snapshot(tmp_path):
-    """The poller only reacts to what the signature sees. It looked at one zip
-    per folder, so a new Dnipropetr snapshot behind a newer UGV_DNP one changed
-    nothing and no update was triggered for it."""
-    from utils.files_utils import newest_zip_signature
+class TestOnlyWhatWasAskedFor:
+    """The poller hands over the archives it has not read; nothing else is
+    touched, however much else lies in the folder."""
 
-    def touch(name, mtime):
-        path = os.path.join(str(tmp_path), name)
+    def _touch(self, folder, name):
+        path = os.path.join(folder, name)
         with zipfile.ZipFile(path, "w") as z:
-            z.writestr("x.txt", name)
+            z.writestr(name + ".txt", name)
+        return path
+
+    def test_the_listed_archives_and_no_others(self, tmp_path):
+        folder = str(tmp_path)
+        asked = self._touch(folder, "new.zip")
+        self._touch(folder, "read-last-week.zip")
+        with UnzipUtils(folder, [asked]) as unzip:
+            assert os.listdir(unzip.temp_path) == ["new.zip.txt"]
+
+    def test_without_a_list_everything_is_read(self, tmp_path):
+        """What an update asked for by hand means: read it again."""
+        folder = str(tmp_path)
+        self._touch(folder, "a.zip")
+        self._touch(folder, "b.zip")
+        with UnzipUtils(folder) as unzip:
+            assert sorted(os.listdir(unzip.temp_path)) == ["a.zip.txt", "b.zip.txt"]
+
+
+class TestABrokenArchiveIsSkipped:
+    """One file that does not open must not cost the whole share.
+
+    A truncated Dnipropetr_2026_01_18_23.zip, eight months old and never
+    re-copied, aborted the extraction of /mnt/as4 on every run: 241 runs, 241
+    failures, and the branch took in nothing for forty hours (21–23.09.2026).
+    """
+
+    def _zip(self, folder, name, mtime=1000):
+        path = os.path.join(folder, name)
+        with zipfile.ZipFile(path, "w") as z:
+            z.writestr(name + ".txt", name)
         os.utime(path, (mtime, mtime))
+        return path
 
-    touch("Dnipropetr_2026_09_11_22.zip", 1000)
-    touch("UGV_DNP_2026_09_11_23.zip", 5000)
-    before, _ = newest_zip_signature(str(tmp_path))
+    def _rubbish(self, folder, name, mtime=1000):
+        path = os.path.join(folder, name)
+        with open(path, "wb") as f:
+            f.write(b"PK half an archive")
+        os.utime(path, (mtime, mtime))
+        return path
 
-    touch("Dnipropetr_2026_09_11_23.zip", 2000)       # still older than UGV_DNP
-    after, _ = newest_zip_signature(str(tmp_path))
-    assert before != after
+    def test_the_other_sources_are_still_read(self, tmp_path):
+        folder = str(tmp_path)
+        os.makedirs(os.path.join(folder, "Arhiv"))
+        self._rubbish(os.path.join(folder, "Arhiv"), "Dnipropetr_2026_01_18_23.zip")
+        self._zip(folder, "UGV_DNP_2026_09_23_9.zip", 3000)
+
+        with UnzipUtils(folder) as unzip:
+            files = os.listdir(unzip.temp_path)
+            assert "UGV_DNP_2026_09_23_9.zip.txt" in files
+            assert [os.path.basename(b) for b in unzip.broken] == [
+                "Dnipropetr_2026_01_18_23.zip"]
+
+    def test_the_rest_of_the_batch_still_arrives(self, tmp_path):
+        folder = str(tmp_path)
+        good = self._zip(folder, "UGV_DNP_2026_09_23_9.zip", 3000)
+        bad = self._rubbish(folder, "UGV_DNP_2026_09_23_10.zip", 4000)
+
+        with UnzipUtils(folder, [bad, good]) as unzip:
+            assert os.listdir(unzip.temp_path) == ["UGV_DNP_2026_09_23_9.zip.txt"]
+            assert unzip.broken == [bad]
+
+    def test_a_folder_of_nothing_but_broken_archives_is_survived(self, tmp_path):
+        folder = str(tmp_path)
+        self._rubbish(folder, "Dnipropetr_2026_09_23_8.zip", 2000)
+        self._rubbish(folder, "Dnipropetr_2026_09_23_9.zip", 3000)
+
+        with UnzipUtils(folder) as unzip:
+            assert os.listdir(unzip.temp_path) == []
+            assert len(unzip.broken) == 2
+
+
