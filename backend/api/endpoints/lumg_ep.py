@@ -1,9 +1,52 @@
+import asyncio
 import logging
 import os
 import re
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 
 _EIS_CODE_RE = re.compile(r'^[A-Z0-9]{6,}$')
+
+#: How many archives are read at once when scanning for EIC folders. The cost
+#: is the central directory of each file, so on a network share it is latency,
+#: not work: eight in flight turns a scan of thousands of archives from a
+#: queue into a stream. Beyond that the share, not the scanner, is the limit.
+_SCAN_WORKERS = 8
+
+
+def _folders_in(zip_path: str) -> set:
+    """Every directory name inside one archive.
+
+    The names are collected and matched afterwards: an archive holds ~1260
+    entries and a handful of distinct folders, and matching each entry's
+    segments would run the pattern a thousand times over the same few strings.
+    """
+    folders = set()
+    with zipfile.ZipFile(zip_path, "r") as archive:
+        for name in archive.namelist():
+            # Everything but the last segment is a directory — and for a
+            # directory entry, which ends in "/", the last segment is "".
+            for segment in name.split("/")[:-1]:
+                if segment:
+                    folders.add(segment)
+    return folders
+
+
+def _scan_for_eis(root: str) -> list:
+    """The EIC-coded folders under `root`, across every archive there.
+
+    Blocking: reads every zip on the path, so it is called in a thread. It
+    used to run on the event loop, where a share holding thousands of
+    archives stopped every other request for as long as it took.
+    """
+    archives = [os.path.join(where, name)
+                for where, _dirs, files in os.walk(root)
+                for name in files if name.endswith(".zip")]
+    folders = set()
+    with ThreadPoolExecutor(_SCAN_WORKERS) as pool:
+        for found in pool.map(_folders_in, archives):
+            folders |= found
+    return sorted(name for name in folders if _EIS_CODE_RE.match(name))
 
 from fastapi import APIRouter, Depends, status, HTTPException
 from sqlalchemy import text
@@ -231,22 +274,7 @@ class LumgRouter:
         if not resolved.exists():
             raise HTTPException(status_code=400, detail=f"Path does not exist: {data_path.path}")
         try:
-            folder_names = set()
-            for root, _, files in os.walk(resolved):
-                for file in files:
-                    if not file.endswith(".zip"):
-                        continue
-                    zip_path = os.path.join(root, file)
-                    with zipfile.ZipFile(zip_path, "r") as zf:
-                        for name in zf.namelist():
-                            parts = [p for p in name.split("/") if p]
-                            # Check all directory segments (all but last for files,
-                            # all for directory entries ending with '/')
-                            segments = parts if name.endswith("/") else parts[:-1]
-                            for seg in segments:
-                                if _EIS_CODE_RE.match(seg):
-                                    folder_names.add(seg)
-            return sorted(folder_names)
+            return await asyncio.to_thread(_scan_for_eis, str(resolved))
         except Exception as e:
             logger.error(f"Error scanning EIS codes for lumg_id={lumg_id}: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=str(e))
