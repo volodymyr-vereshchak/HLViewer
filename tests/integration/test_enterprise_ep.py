@@ -523,6 +523,9 @@ class TestEnterpriseVolumes:
                 "line_id": [seed_topology["line1"]],
                 "from_date": "2024-12-25",
                 "to_date": "2024-12-25",
+                # A read is served from the archive alone, so the data these
+                # shapes are made of comes in through a poll.
+                "live": "true",
             },
         )
         assert resp.status_code == 200, resp.text
@@ -594,6 +597,7 @@ class TestEnterpriseVolumes:
             "line_id": [seed_topology["line1"]],
             "from_date": "2024-12-25",
             "to_date": "2024-12-25",
+            "live": "true",          # progress belongs to a poll
         })
 
         kinds = [e["type"] for e in events]
@@ -627,6 +631,7 @@ class TestEnterpriseVolumes:
             "from_date": "2024-12-25",
             "to_date": "2024-12-25",
             "include_devices": "false",
+            "live": "true",
         })
 
         result = events[-1]["data"]
@@ -665,7 +670,10 @@ class TestEnterpriseVolumes:
             "include_devices": "false",
         }
 
-        every = (await read_stream_events(admin_client, params))[-1]["data"]
+        # The first request polls, so the hours are in the archive; the second
+        # only reads them back, which is where the narrowing has to hold.
+        every = (await read_stream_events(
+            admin_client, {**params, "live": "true"}))[-1]["data"]
         assert sorted(r["period"][11:13] for r in every) == ["02", "03", "12", "22"]
 
         # Same request, hours narrowed: the totals of the kept hours are
@@ -739,11 +747,12 @@ class TestEnterpriseVolumes:
             await resp.aread()
             assert resp.status_code == 400
 
-    async def test_stream_reports_dpd_failure_in_band(
+    async def test_a_poll_that_cannot_reach_dpd_still_answers(
         self, admin_client, seed_topology, mocker
     ):
-        """The stream is already 200 when the poll fails — the failure arrives
-        as an error event, not as an HTTP status."""
+        """«Опитати» with the API down is not an error on screen: the failure
+        is logged and the archive answers with whatever it holds. The stream is
+        already 200 by then anyway."""
         await admin_client.post(
             "/enterprise-mappings/", json=_enterprise_payload(seed_topology)
         )
@@ -758,10 +767,33 @@ class TestEnterpriseVolumes:
             "line_id": [seed_topology["line1"]],
             "from_date": "2024-12-25",
             "to_date": "2024-12-25",
+            "live": "true",
+        })
+
+        assert events[-1]["type"] == "result"
+        assert events[-1]["data"] == []
+
+    async def test_a_broken_read_is_reported_in_band(
+        self, admin_client, seed_topology, mocker
+    ):
+        """The stream is 200 before the work starts, so anything that goes
+        wrong afterwards has to travel as an event."""
+        await admin_client.post(
+            "/enterprise-mappings/", json=_enterprise_payload(seed_topology)
+        )
+        mocker.patch(
+            "backend.api.endpoints.enterprise_ep.fetch_dpd_volumes",
+            mocker.AsyncMock(side_effect=RuntimeError("архів недоступний")),
+        )
+
+        events = await read_stream_events(admin_client, {
+            "line_id": [seed_topology["line1"]],
+            "from_date": "2024-12-25",
+            "to_date": "2024-12-25",
         })
 
         assert events[-1]["type"] == "error"
-        assert "DPD is down" in events[-1]["detail"]
+        assert "архів недоступний" in events[-1]["detail"]
 
     async def test_stream_no_devices_returns_empty_result(
         self, admin_client, seed_topology
@@ -803,7 +835,9 @@ class TestEnterpriseVolumes:
             "from_date": "2024-12-25",
             "to_date": "2024-12-25",
         }
-        await admin_client.get("/enterprise/volumes/", params=params)
+        await admin_client.get("/enterprise/volumes/",
+                               params={**params, "live": "true"})
+        mock_client.get_volumes.assert_awaited_once()
 
         assert (await viewer_client.delete("/enterprise/cache/")).status_code == 403
 
@@ -811,19 +845,37 @@ class TestEnterpriseVolumes:
         assert resp.status_code == 200, resp.text
         assert resp.json()["cleared"] is True
 
-        # The next request finds an empty archive (coverage wiped) and
-        # backfills from DPD again.
+        # The archive is empty afterwards, and a read says so rather than
+        # going to DPD for it: what was wiped comes back when somebody polls
+        # or when the scheduler's refresh runs.
         mock_client.get_volumes.reset_mock()
-        await admin_client.get("/enterprise/volumes/", params=params)
-        mock_client.get_volumes.assert_awaited_once()
+        empty = await admin_client.get("/enterprise/volumes/", params=params)
+        assert empty.json() == []
+        mock_client.get_volumes.assert_not_awaited()
 
-    async def test_volumes_dpd_down_503(self, admin_client, seed_topology, mocker):
+        filled = await admin_client.get("/enterprise/volumes/",
+                                        params={**params, "live": "true"})
+        mock_client.get_volumes.assert_awaited_once()
+        assert filled.json()[0]["total_volume"] == 100.5
+
+    async def test_a_read_does_not_ask_dpd_at_all(
+        self, admin_client, seed_topology, mocker
+    ):
+        """DPD being down is no longer a failed report: a read is the archive,
+        so the request succeeds and answers with what is stored — nothing here.
+
+        This is the whole point of the change. The API used to be called to
+        backfill a range the archive did not cover, it answers per device and
+        does not raise when some of them fail, and coverage was lowered for the
+        batch regardless — so one timeout made a point read as "no
+        consumption" and the night report called its whole line population.
+        """
         await admin_client.post(
             "/enterprise-mappings/", json=_enterprise_payload(seed_topology)
         )
         mock_client = mocker.AsyncMock()
         mock_client.get_volumes.side_effect = ConnectionError("DPD is down")
-        mocker.patch(
+        for_branch = mocker.patch(
             "backend.services.enterprise_volume_service.DPDClient.for_branch",
             mocker.AsyncMock(return_value=mock_client),
         )
@@ -835,7 +887,10 @@ class TestEnterpriseVolumes:
                 "to_date": "2024-12-25",
             },
         )
-        assert resp.status_code == 503
+        assert resp.status_code == 200
+        assert resp.json() == []
+        for_branch.assert_not_awaited()
+        mock_client.get_volumes.assert_not_awaited()
 
 
 class TestTheModemOnTheEnterpriseCard:

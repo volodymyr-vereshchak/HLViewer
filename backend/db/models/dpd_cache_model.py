@@ -90,9 +90,9 @@ class DpdDeviceCoverage(SQLModel, table=True):
     """How far back a device's archive has ever been fetched from DPD.
 
     loaded_from = the earliest date ever requested from the API for this
-    device+period_type. A request with from_date < loaded_from triggers
-    an on-demand backfill of [from_date, loaded_from); everything at or
-    after loaded_from is served from the DB only. The scheduler lowers it
+    device+period_type. It is a record, not a decision: reads are served
+    from the DB alone, whatever it says, and a range the archive does not
+    hold reads as nothing rather than being fetched. The scheduler lowers it
     to today−window after each run. Nothing raises it any more: retention was
     removed, so a range fetched once stays fetched.
 

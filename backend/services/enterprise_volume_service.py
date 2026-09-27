@@ -113,32 +113,41 @@ async def fetch_dpd_volumes(
     live: bool = False,
     hours: Optional[List[int]] = None,
 ) -> List[Dict]:
-    """Raw volume records for the requested devices/range, served from the DB
-    archive; DPD is contacted only to backfill ranges older than a device's
-    coverage.
+    """Raw volume records for the requested devices/range, out of the DB.
 
-    ``live=True`` (the enterprise poll page): the WHOLE requested range is
-    re-polled from the DPD API for every device first (results upserted into
-    the archive), so the response carries fresh data; when the API poll
-    fails, the error is logged and the archive serves whatever it has —
-    DB data is the fallback, not the primary source.
+    **A read never contacts the DPD API.** It used to: a range older than a
+    device's recorded coverage was fetched on demand, and that is what made
+    the same September report come out differently twice. The API answers per
+    device and does not raise when some of them fail — a timeout, a 404, an
+    auth error all arrive as "no records" — and the coverage was then lowered
+    for every device of the batch regardless. A point whose corrector had
+    timed out was thereafter read from an empty archive as though it had
+    consumed nothing, and the night report, which subtracts industry from the
+    line, quietly reported the whole line as population. Later the scheduler's
+    refresh wrote those hours and the same export subtracted again.
+
+    So the archive is now the only source of a read, and it is filled by two
+    writers that are asked to write: the scheduler's refresh job, and an
+    explicit poll (``live=True``, the «Опитати» button) which re-polls the
+    whole requested range for every device and upserts it. A period the
+    archive does not hold reads as nothing — visibly nothing, which the report
+    says out loud, rather than as a silently changed number.
 
     ``events_cb`` (optional, SYNCHRONOUS, must be non-blocking) receives
     progress events for the streaming endpoint:
-    {"type":"status","phase":"waiting"} before backfill locks,
-    {"type":"progress","done":N,"total":M} as backfill device polls complete
-    (total=0 when nothing needs backfilling),
+    {"type":"status","phase":"waiting"} before the poll takes its device locks,
+    {"type":"progress","done":N,"total":M} as device polls complete,
     {"type":"status","phase":"aggregating"} before the DB read/aggregation.
+    A read emits only the last of these — there is nothing to wait for.
 
     ``hours`` (hourly only) restricts the response to those wall-clock hours.
-    Backfill is unaffected — a range is polled and stored whole, so the
-    archive stays complete for the next reader; only what comes back out is
-    narrowed.
+    A poll is unaffected: a range is polled and stored whole, so the archive
+    stays complete for the next reader; only what comes back out is narrowed.
 
-    Raises LookupError when a backfill is needed but no device carries a
-    branch_id, ValueError when the branch has no/incomplete credentials
+    Raises LookupError when a poll finds no device carrying a branch_id,
+    ValueError when the branch has no/incomplete credentials
     (DPDClient.for_branch), and whatever the HTTP client raises when the DPD
-    API is unreachable mid-backfill."""
+    API is unreachable mid-poll."""
     window_from, window_to = request_window(date_from, date_to, period_type)
     requested_from = date_from.date()
     # Assignments, keyed by history entry: the same corrector may appear twice
@@ -189,25 +198,6 @@ async def fetch_dpd_volumes(
                     logger.exception(
                         "Live DPD poll failed — serving archive data as fallback"
                     )
-            else:
-                backfill = await _plan_backfill(
-                    dao, device_ids, period_type, requested_from, date_to
-                )
-                if events_cb is not None:
-                    events_cb({"type": "progress", "done": 0, "total": len(backfill)})
-                if backfill:
-                    if events_cb is not None:
-                        events_cb({"type": "status", "phase": "waiting"})
-                    await _lock_backfill(session, backfill, period_type)
-                    # A concurrent request may have backfilled while we waited.
-                    backfill = await _plan_backfill(
-                        dao, list(backfill), period_type, requested_from, date_to,
-                    )
-                    if backfill:
-                        await _run_backfill(
-                            session, dao, by_assignment, backfill, period_type,
-                            requested_from, date_to, events_cb,
-                        )
             if events_cb is not None:
                 events_cb({"type": "status", "phase": "aggregating"})
 
@@ -284,33 +274,10 @@ def _read_window(assignment: Dict, window_from, window_to, period_type):
     return start, end
 
 
-async def _plan_backfill(
-    dao: DpdArchiveDao,
-    device_ids: List[int],
-    period_type: str,
-    requested_from: date,
-    date_to: datetime,
-) -> Dict[int, tuple]:
-    """device_id -> (span_from_date, span_to_date) for devices whose
-    coverage does not reach requested_from. Never-fetched devices (added
-    after the last scheduler run, or after a cache wipe) backfill the whole
-    requested range; covered devices only the missing head."""
-    coverage = await dao.get_coverage(list(device_ids), period_type)
-    spans: Dict[int, tuple] = {}
-    for device_id in device_ids:
-        loaded_from = coverage.get(device_id)
-        if loaded_from is None:
-            spans[device_id] = (requested_from, date_to.date())
-        elif requested_from < loaded_from:
-            spans[device_id] = (requested_from, loaded_from - timedelta(days=1))
-    return spans
-
-
 async def _lock_backfill(session, backfill: Dict[int, tuple], period_type: str):
-    """Sorted per-device advisory xact locks: concurrent backfills of the
-    same devices serialize (the follower then finds coverage already lowered
-    and skips), disjoint ones run in parallel. Backfills are rare — no
-    registry needed."""
+    """Sorted per-device advisory xact locks: concurrent polls of the same
+    devices serialize, disjoint ones run in parallel. Polls are deliberate and
+    rare — no registry needed."""
     keys = sorted(f"dpd-backfill-{device_id}-{period_type}" for device_id in backfill)
     await session.execute(
         text(
@@ -438,8 +405,10 @@ async def _run_backfill(
         # was fetched — a poll of a month fetches a month every time — but how
         # much of it was not already here.
         events_cb({"type": "written", **written})
-    # The whole span was ASKED, even where DPD had nothing: coverage lowers
-    # to the requested start so the empty stretches are not re-asked forever.
+    # A record of how far back this device has been asked for. It no longer
+    # decides anything — nothing reads it to skip an API call — and it is kept
+    # because it is the one place that says how much of a device's history the
+    # archive was ever offered.
     await dao.lower_loaded_from(list(backfill), period_type, requested_from)
     logger.info(
         f"DPD archive: backfill poll {poll_secs:.1f}s "

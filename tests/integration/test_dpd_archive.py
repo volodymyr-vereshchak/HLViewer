@@ -1,9 +1,10 @@
 """Integration tests for the scheduler-fed DPD archive (v4).
 
-Model under test: the DB is the primary source. Reads inside a device's
-coverage never touch the DPD API; ranges older than coverage are backfilled
-on demand per device; the refresh job re-polls the last window for all
-enterprises. DPDClient is mocked, Postgres is real."""
+Model under test: the DB is the ONLY source of a read — whatever the range,
+no read contacts the DPD API. The archive is written by the two writers that
+are asked to write: the refresh job, which re-polls the last window for every
+enterprise, and an explicit poll (live=True). DPDClient is mocked, Postgres is
+real."""
 
 import asyncio
 import json
@@ -220,34 +221,93 @@ class TestArchiveReads:
         assert got[-1] == (as_dt(D_OLD5) + timedelta(days=1, hours=6)).isoformat()
 
 
-class TestBackfill:
-    async def test_range_older_than_coverage_backfills_per_device(
+class TestAReadNeverCallsTheApi:
+    """What made the same September report come out twice differently.
+
+    A range older than a device's coverage used to be fetched on demand. The
+    API answers per device and does not raise when some of them fail — a
+    timeout, a 404 and an auth error all arrive as "no records" — and coverage
+    was then lowered for the whole batch anyway. The point whose corrector had
+    timed out was read from an empty archive ever after, so the night report
+    subtracted nothing for it and called the whole line population; when the
+    scheduler later wrote those hours, the same export subtracted again.
+    """
+
+    async def test_a_range_older_than_coverage_is_not_fetched(
         self, dpd_mock, make_enterprise
     ):
         dev = await make_enterprise(101)
         await seed_archive(dev, "daily", [D_OLD5, D_OLD3], loaded_from=D_OLD5)
-        dpd_mock.get_volumes.side_effect = daily_reply([D_OLD8])
 
         records = await fetch_dpd_volumes(
             [dev], as_dt(D_OLD10), as_dt(D_OLD3), "daily"
         )
 
-        dpd_mock.get_volumes.assert_awaited_once()
-        # The range rides on the device dict, not on the quad-keyed map: the
-        # backfill works in device ids and each device has its own missing head.
-        polled = dpd_mock.get_volumes.await_args.args[0]
-        assert len(polled) == 1
-        # Only the uncovered head [requested .. loaded_from-1] is fetched.
-        assert polled[0]["range"] == (
-            as_dt(D_OLD10), as_dt(D_OLD5 - timedelta(days=1))
+        dpd_mock.get_volumes.assert_not_awaited()
+        # Only what the archive holds. The older head is simply absent.
+        assert record_keys(records) == {
+            (101, D_OLD5.isoformat()), (101, D_OLD3.isoformat()),
+        }
+
+    async def test_a_device_never_fetched_reads_as_nothing(
+        self, dpd_mock, make_enterprise
+    ):
+        """Visibly nothing, which the report says out loud — not a number
+        quietly fetched behind the reader's back."""
+        dev = await make_enterprise(101)  # no coverage row, no rows
+
+        records = await fetch_dpd_volumes(
+            [dev], as_dt(D_OLD5), as_dt(D_OLD3), "daily"
         )
+
+        dpd_mock.get_volumes.assert_not_awaited()
+        assert records == []
+
+    async def test_coverage_is_left_alone_by_a_read(
+        self, dpd_mock, make_enterprise
+    ):
+        dev = await make_enterprise(101)
+        await seed_archive(dev, "daily", [D_OLD5], loaded_from=D_OLD5)
+
+        await fetch_dpd_volumes([dev], as_dt(D_OLD10), as_dt(D_OLD3), "daily")
+
+        assert await coverage_of(dev["device_id"], "daily") == D_OLD5
+
+    async def test_a_read_waits_for_nothing(self, dpd_mock, make_enterprise):
+        """No locks, no progress: there is nothing to make progress through."""
+        dev = await make_enterprise(101)
+        await seed_archive(dev, "daily", [D_OLD5], loaded_from=D_OLD10)
+        events = []
+
+        await fetch_dpd_volumes([dev], as_dt(D_OLD5), as_dt(D_OLD5), "daily",
+                                events_cb=events.append)
+
+        assert [(e.get("type"), e.get("phase")) for e in events] == [
+            ("status", "aggregating"),
+        ]
+
+
+class TestAPollDoesCallTheApi:
+    """`live=True` — the «Опитати» button, the one place a read of the screen
+    turns into a request to DPD."""
+
+    async def test_the_whole_range_is_polled_and_stored(
+        self, dpd_mock, make_enterprise
+    ):
+        dev = await make_enterprise(101)
+        dpd_mock.get_volumes.side_effect = daily_reply([D_OLD8, D_OLD5])
+
+        records = await fetch_dpd_volumes(
+            [dev], as_dt(D_OLD10), as_dt(D_OLD3), "daily", live=True
+        )
+
+        dpd_mock.get_volumes.assert_awaited_once()
+        polled = dpd_mock.get_volumes.await_args.args[0]
+        assert polled[0]["range"] == (as_dt(D_OLD10), as_dt(D_OLD3))
         assert record_keys(records) == {
             (101, D_OLD8.isoformat()), (101, D_OLD5.isoformat()),
-            (101, D_OLD3.isoformat()),
         }
-        # Coverage lowered → the same range is DB-only from now on,
-        # including the stretches DPD had nothing for.
-        assert await coverage_of(dev["device_id"], "daily") == D_OLD10
+        # And it is in the archive for the next reader, who will not poll.
         dpd_mock.get_volumes.reset_mock()
         again = await fetch_dpd_volumes(
             [dev], as_dt(D_OLD10), as_dt(D_OLD3), "daily"
@@ -255,73 +315,66 @@ class TestBackfill:
         dpd_mock.get_volumes.assert_not_awaited()
         assert record_keys(again) == record_keys(records)
 
-    async def test_never_fetched_device_backfills_whole_range(
-        self, dpd_mock, make_enterprise
-    ):
-        dev = await make_enterprise(101)  # no coverage row at all
-        dpd_mock.get_volumes.side_effect = daily_reply([D_OLD5])
-
-        records = await fetch_dpd_volumes(
-            [dev], as_dt(D_OLD5), as_dt(D_OLD3), "daily"
-        )
-
-        dpd_mock.get_volumes.assert_awaited_once()
-        polled = dpd_mock.get_volumes.await_args.args[0]
-        assert polled[0]["range"] == (as_dt(D_OLD5), as_dt(D_OLD3))
-        assert record_keys(records) == {(101, D_OLD5.isoformat())}
-
     async def test_skeleton_records_not_stored(self, dpd_mock, make_enterprise):
         dev = await make_enterprise(101)
         dpd_mock.get_volumes.side_effect = daily_reply([D_OLD5], blank=[D_OLD3])
 
-        await fetch_dpd_volumes([dev], as_dt(D_OLD5), as_dt(D_OLD3), "daily")
+        await fetch_dpd_volumes([dev], as_dt(D_OLD5), as_dt(D_OLD3), "daily",
+                                live=True)
 
         rows = await archive_rows("daily")
         assert len(rows) == 1
         assert rows[0]["day"] == D_OLD5
 
-    async def test_backfill_only_missing_devices(self, dpd_mock, make_enterprise):
+    async def test_every_device_of_the_request_is_polled(
+        self, dpd_mock, make_enterprise
+    ):
+        """A poll is asked for, so it asks about everything — what is already
+        in the archive is what it is meant to refresh."""
         dev_a = await make_enterprise(101)
         dev_b = await make_enterprise(102)
         await seed_archive(dev_a, "daily", [D_OLD8, D_OLD5], loaded_from=D_OLD10)
         dpd_mock.get_volumes.side_effect = daily_reply([D_OLD5])
 
         await fetch_dpd_volumes(
-            [dev_a, dev_b], as_dt(D_OLD10), as_dt(D_OLD5), "daily"
+            [dev_a, dev_b], as_dt(D_OLD10), as_dt(D_OLD5), "daily", live=True
         )
 
         dpd_mock.get_volumes.assert_awaited_once()
         polled = dpd_mock.get_volumes.await_args.args[0]
-        assert [d["serNum"] for d in polled] == [102]  # A is covered
+        assert sorted(d["serNum"] for d in polled) == [101, 102]
 
-    async def test_events_progress_on_backfill_and_none_on_db_read(
-        self, dpd_mock, make_enterprise
-    ):
+    async def test_progress_is_reported(self, dpd_mock, make_enterprise):
         dev = await make_enterprise(101)
         dpd_mock.get_volumes.side_effect = daily_reply([D_OLD5])
         events = []
 
         await fetch_dpd_volumes([dev], as_dt(D_OLD5), as_dt(D_OLD5), "daily",
-                                events_cb=events.append)
+                                events_cb=events.append, live=True)
+
         kinds = [(e.get("type"), e.get("phase")) for e in events]
-        assert ("progress", None) in kinds  # backfill of 1 device
         assert events[0] == {"type": "progress", "done": 0, "total": 1}
+        assert ("status", "waiting") in kinds
         assert kinds[-1] == ("status", "aggregating")
 
-        events.clear()
-        dpd_mock.get_volumes.reset_mock()
-        await fetch_dpd_volumes([dev], as_dt(D_OLD5), as_dt(D_OLD5), "daily",
-                                events_cb=events.append)
-        dpd_mock.get_volumes.assert_not_awaited()
-        assert [(e.get("type"), e.get("phase")) for e in events] == [
-            ("progress", None),  # total=0 — nothing to backfill
-            ("status", "aggregating"),
-        ]
-        assert events[0]["total"] == 0
+    async def test_a_failed_poll_still_serves_the_archive(
+        self, dpd_mock, make_enterprise
+    ):
+        """The API being down must not empty a screen the DB can fill."""
+        dev = await make_enterprise(101)
+        await seed_archive(dev, "daily", [D_OLD5], loaded_from=D_OLD10)
+        dpd_mock.get_volumes.side_effect = RuntimeError("DPD не відповідає")
 
-    async def test_concurrent_backfill_dedup(self, dpd_mock, make_enterprise):
-        """Two identical uncovered requests: the follower waits on the device
-        lock, re-reads coverage and skips its own DPD call."""
+        records = await fetch_dpd_volumes(
+            [dev], as_dt(D_OLD5), as_dt(D_OLD5), "daily", live=True
+        )
+
+        assert record_keys(records) == {(101, D_OLD5.isoformat())}
+
+    async def test_two_polls_of_one_device_do_not_deadlock(
+        self, dpd_mock, make_enterprise
+    ):
+        """They serialize on the device lock and both finish."""
         dev = await make_enterprise(101)
         started = asyncio.Event()
         release = asyncio.Event()
@@ -334,18 +387,16 @@ class TestBackfill:
             return daily_records(polled, [D_OLD5])
 
         dpd_mock.get_volumes = slow_get_volumes
-        leader = asyncio.create_task(
-            fetch_dpd_volumes([dev], as_dt(D_OLD5), as_dt(D_OLD3), "daily")
-        )
+        leader = asyncio.create_task(fetch_dpd_volumes(
+            [dev], as_dt(D_OLD5), as_dt(D_OLD3), "daily", live=True))
         await asyncio.wait_for(started.wait(), 5)
-        follower = asyncio.create_task(
-            fetch_dpd_volumes([dev], as_dt(D_OLD5), as_dt(D_OLD3), "daily")
-        )
+        follower = asyncio.create_task(fetch_dpd_volumes(
+            [dev], as_dt(D_OLD5), as_dt(D_OLD3), "daily", live=True))
         await asyncio.sleep(0.3)
         release.set()
 
         first, second = await asyncio.gather(leader, follower)
-        assert calls["count"] == 1
+        assert calls["count"] == 2
         assert record_keys(first) == record_keys(second)
 
 
@@ -614,11 +665,11 @@ class TestRefreshJob:
 
 
 class TestStreamCancellation:
-    async def test_cancelled_stream_releases_backfill_locks(
+    async def test_cancelled_stream_releases_the_device_locks(
         self, dpd_mock, make_enterprise
     ):
-        """A client aborting the stream mid-backfill must not leave device
-        locks behind: the next identical request completes."""
+        """A client aborting the stream mid-poll must not leave device locks
+        behind: the next poll of the same device completes."""
         dev = await make_enterprise(101)
         started = asyncio.Event()
         never = asyncio.Event()
@@ -630,7 +681,8 @@ class TestStreamCancellation:
 
         dpd_mock.get_volumes = hanging
         gen = EnterpriseRouter._volume_events(
-            [dev], as_dt(D_OLD5), as_dt(D_OLD5), "daily", None, False
+            [dev], as_dt(D_OLD5), as_dt(D_OLD5), "daily", None, False,
+            True, True,          # include_devices, live — only a poll locks
         )
         first = json.loads(await asyncio.wait_for(gen.__anext__(), 5))
         assert first["type"] in ("progress", "status")  # stream is live
@@ -642,7 +694,8 @@ class TestStreamCancellation:
 
         dpd_mock.get_volumes = quick
         records = await asyncio.wait_for(
-            fetch_dpd_volumes([dev], as_dt(D_OLD5), as_dt(D_OLD5), "daily"),
+            fetch_dpd_volumes([dev], as_dt(D_OLD5), as_dt(D_OLD5), "daily",
+                              live=True),
             timeout=10,
         )
         assert record_keys(records) == {(101, D_OLD5.isoformat())}

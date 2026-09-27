@@ -142,13 +142,20 @@ def dpd_mock(mocker):
     return client
 
 
-async def read_days(topology, point_ids, period_from, period_to) -> dict:
-    """{point name: {day: volume}} the way an endpoint would report it."""
+async def read_days(topology, point_ids, period_from, period_to,
+                    live: bool = False) -> dict:
+    """{point name: {day: volume}} the way an endpoint would report it.
+
+    A read by default, which is what it is: the archive answers and nobody is
+    asked. `live=True` where the poll itself is the subject — a corrector is
+    polled whole, whatever its install windows say — because that is also the
+    only way data gets into the archive without seeding it.
+    """
     async with async_session_factory() as session:
         # Points are linked to no line here, so they are addressed directly.
         assignments = await _assignments_for(session, point_ids, period_from, period_to)
     records = await fetch_dpd_volumes(
-        assignments, period_from, period_to, "daily"
+        assignments, period_from, period_to, "daily", live=live
     )
     result = aggregate_volumes(records, assignments, "daily")
     by_point: dict = {}
@@ -224,7 +231,7 @@ class TestMovedCorrector:
 
         async with async_session_factory() as session:
             assignments = await _assignments_for(session, [a, b], dt(1), dt(20))
-        await fetch_dpd_volumes(assignments, dt(1), dt(20), "daily")
+        await fetch_dpd_volumes(assignments, dt(1), dt(20), "daily", live=True)
 
         # Two assignments, one device → one poll, and its coverage now spans
         # the range for both points.
@@ -253,7 +260,7 @@ class TestPollingIgnoresWindows:
 
         async with async_session_factory() as session:
             assignments = await _assignments_for(session, [point], dt(1), dt(20))
-        await fetch_dpd_volumes(assignments, dt(1), dt(20), "daily")
+        await fetch_dpd_volumes(assignments, dt(1), dt(20), "daily", live=True)
 
         polled = dpd_mock.get_volumes.await_args.args[0]
         assert len(polled) == 1
@@ -273,7 +280,7 @@ class TestPollingIgnoresWindows:
         await topology["assign"](point, device, dt(10, 7))
         dpd_mock.get_volumes.side_effect = daily_reply([d(day) for day in range(5, 16)])
 
-        by_point, _ = await read_days(topology, [point], dt(1), dt(20))
+        by_point, _ = await read_days(topology, [point], dt(1), dt(20), live=True)
 
         assert await archived_days(device) == [d(day) for day in range(5, 16)]
         assert sorted(by_point["Точка А"]) == [
@@ -292,7 +299,7 @@ class TestPollingIgnoresWindows:
         await topology["assign"](b, device, dt(10, 7))
         dpd_mock.get_volumes.side_effect = daily_reply([d(day) for day in range(8, 13)])
 
-        by_point, _ = await read_days(topology, [a, b], dt(1), dt(20))
+        by_point, _ = await read_days(topology, [a, b], dt(1), dt(20), live=True)
 
         assert dpd_mock.get_volumes.await_count == 1
         # One entry in that call, not one per assignment: the request is the
