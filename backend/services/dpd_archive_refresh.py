@@ -298,7 +298,7 @@ async def _refresh_branch(
     branch_id: int,
     devices: list,
     window_from: date,
-    today: date,
+    window_to: date,
     progress: _ProgressWriter,
 ) -> None:
     if not devices:
@@ -323,13 +323,13 @@ async def _refresh_branch(
             span = (
                 datetime.combine(window_from, datetime.min.time())
                 + timedelta(hours=contract_hour),
-                datetime.combine(today, datetime.min.time())
+                datetime.combine(window_to, datetime.min.time())
                 + timedelta(days=1, hours=contract_hour - 1),
             )
         else:
             span = (
                 datetime.combine(window_from, datetime.min.time()),
-                datetime.combine(today, datetime.min.time()),
+                datetime.combine(window_to, datetime.min.time()),
             )
         # get_volumes builds and closes its own HTTP pool per call.
         records = await client.get_volumes(
@@ -378,14 +378,31 @@ async def _refresh_branch(
         await _heartbeat()
 
 
-async def execute_locked() -> None:
-    """Run the refresh. The dpd_refresh_job lock MUST already be acquired."""
+async def execute_locked(since: date | None = None,
+                         until: date | None = None) -> None:
+    """Run the refresh. The dpd_refresh_job lock MUST already be acquired.
+
+    Without dates this is the routine run: the last
+    DPD_ARCHIVE_WINDOW_DAYS for every enterprise of every branch that has
+    credentials. It is a window, not a catch-up — it re-polls those days
+    whatever the archive holds, and knows nothing about what is missing
+    further back.
+
+    With dates it is «Перечитати архів»: the same work over a period somebody
+    chose, which is how a gap older than the window is closed at all. Nothing
+    else fills one any more — a read of the archive never calls the API, and
+    the window never reaches back. Every device is polled from the start of
+    the period, not from its own install date: the archive belongs to the
+    corrector, so everything it answers with is worth keeping, and a corrector
+    that moved is read by each of its points through its own window anyway.
+    """
     status, error = "done", None
     try:
         today = date.today()
-        window_from = today - timedelta(
+        window_from = since or today - timedelta(
             days=backend_settings["DPD_ARCHIVE_WINDOW_DAYS"]
         )
+        window_to = min(until or today, today)
         branch_ids = await _branch_ids_with_credentials()
         # Load device lists up-front so the total device count (×2: daily +
         # hourly) is known before polling — that is the progress bar's 100%.
@@ -394,7 +411,7 @@ async def execute_locked() -> None:
         # ended before the refresh window are dropped before they are counted.
         contract_hour = backend_settings.get("CONTRACT_HOUR", 7)
         span_from = datetime.combine(window_from, datetime.min.time())
-        span_to = datetime.combine(today, datetime.min.time()) + timedelta(
+        span_to = datetime.combine(window_to, datetime.min.time()) + timedelta(
             days=1, hours=contract_hour - 1
         )
         async with async_session_factory() as session:
@@ -418,7 +435,7 @@ async def execute_locked() -> None:
         await _write_progress_total(total)
         logger.info(
             f"DPD refresh: starting for {len(branch_ids)} branches "
-            f"({total // 2} devices), window {window_from}..{today}"
+            f"({total // 2} devices), window {window_from}..{window_to}"
         )
         failures = []
         expected_offset = 0
@@ -427,7 +444,7 @@ async def execute_locked() -> None:
             expected_offset += 2 * branch_polls[branch_id]
             try:
                 await _refresh_branch(
-                    branch_id, devices, window_from, today, progress
+                    branch_id, devices, window_from, window_to, progress
                 )
             except Exception as e:
                 # One broken branch must not kill the whole run.

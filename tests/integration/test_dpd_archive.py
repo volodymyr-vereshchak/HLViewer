@@ -24,6 +24,7 @@ from backend.db.models.enterprise_model import (
 from backend.db.models.grmu_branch_model import GrmuBranch
 from backend.hl_engine.scheduler_runner import _last_due_refresh
 from backend.services import dpd_archive_refresh
+from backend.settings import backend_settings
 from backend.services.enterprise_volume_service import fetch_dpd_volumes
 
 TODAY = date.today()
@@ -701,6 +702,128 @@ class TestStreamCancellation:
             timeout=10,
         )
         assert record_keys(records) == {(101, D_OLD5.isoformat())}
+
+
+class TestRereadingOverAChosenPeriod:
+    """«Перечитати архів» — the only thing that closes a gap older than the
+    routine window.
+
+    The scheduled run re-polls a fixed DPD_ARCHIVE_WINDOW_DAYS and knows
+    nothing about what is missing further back; a read of the archive never
+    calls the API at all. So a month the server was off, or an enterprise
+    entered a year late, stays empty until somebody asks for that period.
+    """
+
+    async def _mock_branch(self, mocker, branch_id, seen):
+        client = mocker.AsyncMock()
+
+        async def get_volumes(devices, date_from, date_to, *, type_request,
+                              **kwargs):
+            seen.append((type_request, date_from, date_to))
+            return daily_records(devices, [D_OLD5]) if type_request == "daily" else []
+
+        client.get_volumes = get_volumes
+        mocker.patch(
+            "backend.services.dpd_archive_refresh.DPDClient.for_branch",
+            mocker.AsyncMock(return_value=client),
+        )
+        mocker.patch(
+            "backend.services.dpd_archive_refresh._branch_ids_with_credentials",
+            mocker.AsyncMock(return_value=[branch_id]),
+        )
+
+    async def test_the_period_asked_for_is_the_period_polled(
+        self, mocker, make_enterprise, branch_id
+    ):
+        await make_enterprise(101)
+        seen: list = []
+        await self._mock_branch(mocker, branch_id, seen)
+        since = date(2024, 1, 1)
+
+        await dpd_archive_refresh.execute_locked(since, TODAY)
+
+        daily = next(s for s in seen if s[0] == "daily")
+        assert daily[1] == as_dt(since)
+        assert daily[2].date() == TODAY
+
+    async def test_without_dates_it_is_still_the_routine_window(
+        self, mocker, make_enterprise, branch_id
+    ):
+        await make_enterprise(101)
+        seen: list = []
+        await self._mock_branch(mocker, branch_id, seen)
+
+        await dpd_archive_refresh.execute_locked()
+
+        daily = next(s for s in seen if s[0] == "daily")
+        window = backend_settings["DPD_ARCHIVE_WINDOW_DAYS"]
+        assert daily[1].date() == TODAY - timedelta(days=window)
+
+    async def test_the_future_is_not_asked_for(
+        self, mocker, make_enterprise, branch_id
+    ):
+        """A period ending next month ends today: DPD has nothing after now,
+        and asking for it only makes the request longer."""
+        await make_enterprise(101)
+        seen: list = []
+        await self._mock_branch(mocker, branch_id, seen)
+
+        await dpd_archive_refresh.execute_locked(D_OLD5, TODAY + timedelta(days=30))
+
+        daily = next(s for s in seen if s[0] == "daily")
+        assert daily[2].date() == TODAY
+
+    async def test_what_comes_back_is_stored(
+        self, mocker, make_enterprise, branch_id
+    ):
+        dev = await make_enterprise(101)
+        seen: list = []
+        await self._mock_branch(mocker, branch_id, seen)
+
+        await dpd_archive_refresh.execute_locked(date(2024, 1, 1), TODAY)
+
+        rows = await archive_rows("daily")
+        assert [(r["device_id"], r["day"]) for r in rows] == [
+            (dev["device_id"], D_OLD5)]
+
+
+class TestTheRereadEndpoint:
+    async def test_it_starts_the_job(self, admin_client, mocker):
+        started = mocker.patch(
+            "backend.services.dpd_archive_refresh.execute_locked",
+            mocker.AsyncMock(return_value=None),
+        )
+
+        resp = await admin_client.post("/enterprise/archive/reread", params={
+            "from_date": "2024-01-01", "to_date": TODAY.isoformat()})
+
+        assert resp.status_code == 202
+        assert resp.json()["from_date"] == "2024-01-01"
+        await asyncio.sleep(0)          # let the detached task run
+        started.assert_awaited_once()
+
+    async def test_a_backwards_period_is_refused(self, admin_client):
+        resp = await admin_client.post("/enterprise/archive/reread", params={
+            "from_date": "2024-06-01", "to_date": "2024-01-01"})
+        assert resp.status_code == 400
+
+    async def test_a_second_one_waits_for_the_first(self, admin_client, mocker):
+        mocker.patch(
+            "backend.services.dpd_archive_refresh.execute_locked",
+            mocker.AsyncMock(return_value=None),
+        )
+        params = {"from_date": "2024-01-01", "to_date": TODAY.isoformat()}
+
+        first = await admin_client.post("/enterprise/archive/reread", params=params)
+        second = await admin_client.post("/enterprise/archive/reread", params=params)
+
+        assert first.status_code == 202
+        assert second.status_code == 409
+
+    async def test_a_viewer_may_not_start_it(self, viewer_client):
+        resp = await viewer_client.post("/enterprise/archive/reread", params={
+            "from_date": "2024-01-01", "to_date": TODAY.isoformat()})
+        assert resp.status_code == 403
 
 
 class TestTheClockTheJobIsWrittenIn:

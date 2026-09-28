@@ -9,7 +9,7 @@ import asyncio
 import json
 import logging
 import pandas as pd
-from datetime import datetime
+from datetime import date, datetime
 from typing import Dict, List, Optional
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, Query, status, HTTPException, UploadFile, File
@@ -222,6 +222,24 @@ class EnterpriseRouter:
                 "Starts the same job the scheduler runs at DPD_REFRESH_TIMES: "
                 "re-poll the last DPD_ARCHIVE_WINDOW_DAYS for all enterprises. "
                 "409 when a refresh is already running. Admin-only (POST)."
+            ),
+        )
+        self.router.add_api_route(
+            path="/enterprise/archive/reread",
+            tags=["enterprise"],
+            endpoint=self.reread_archive,
+            methods=["POST"],
+            status_code=status.HTTP_202_ACCEPTED,
+            summary="Re-read the DPD archive over a chosen period",
+            description=(
+                "The same work as the scheduled refresh, over the period "
+                "given instead of the last DPD_ARCHIVE_WINDOW_DAYS. This is "
+                "what closes a gap older than that window: a read of the "
+                "archive never calls the API, and the routine window never "
+                "reaches back. Long — every enterprise of every branch with "
+                "credentials, daily and hourly, over the whole period. "
+                "Admin-only; shares the refresh job, so the card shows its "
+                "progress and a second run is refused while it runs."
             ),
         )
         self.router.add_api_route(
@@ -783,6 +801,45 @@ class EnterpriseRouter:
         _detached_refreshes.add(task)
         task.add_done_callback(_detached_refreshes.discard)
         return {"started": True}
+
+    async def reread_archive(
+        self,
+        from_date: date = Query(..., description="Перший день періоду (YYYY-MM-DD)"),
+        to_date: date = Query(..., description="Останній день, включно"),
+    ) -> dict:
+        """Re-read the archive over a chosen period.
+
+        Every device is polled from the start of the period rather than from
+        its own install date: the archive belongs to the corrector, so
+        everything it answers with is its own data and worth keeping, and
+        which point reads which stretch of it is decided on the way out.
+        """
+        today = date.today()
+        if from_date > to_date:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Початкова дата пізніша за кінцеву",
+            )
+        if from_date > today:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Період починається в майбутньому",
+            )
+        if not await dpd_archive_refresh.acquire():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Оновлення архіву вже виконується",
+            )
+        logger.info("DPD archive re-read requested for %s..%s",
+                    from_date, min(to_date, today))
+        # Detached, with the lock held — see trigger_archive_refresh.
+        task = asyncio.create_task(
+            dpd_archive_refresh.execute_locked(from_date, to_date)
+        )
+        _detached_refreshes.add(task)
+        task.add_done_callback(_detached_refreshes.discard)
+        return {"started": True, "from_date": from_date.isoformat(),
+                "to_date": min(to_date, today).isoformat()}
 
     async def archive_refresh_status(self) -> dict:
         return await dpd_archive_refresh.read_status()
