@@ -123,6 +123,64 @@ class TestTheRangeIsInGasDays:
         assert date(2026, 6, 7) in await days_left(point["device_id"])
 
 
+class TestAnOpenEnd:
+    """Either date may be left out, and both may be.
+
+    What this is for is a stretch that was read wrongly, and such a stretch is
+    described as "everything before we noticed", "everything since the swap"
+    or — when the readings were wrong end to end — simply everything.
+    """
+
+    async def test_no_dates_at_all_takes_the_whole_archive(self):
+        point = await one_point(7010)
+        await fill_hours(point["device_id"], datetime(2024, 3, 1, 7), 24)
+        await fill_days(point["device_id"], date(2026, 6, 3), 5)
+
+        async with async_session_factory() as session:
+            async with session.begin():
+                removed = await archive_cleanup.purge(session, point["enterprise_id"])
+
+        assert (removed["hourly"], removed["daily"]) == (24, 5)
+        assert await hours_left(point["device_id"]) == []
+        assert await days_left(point["device_id"]) == []
+
+    async def test_a_start_alone_leaves_what_came_before_it(self):
+        point = await one_point(7011)
+        await fill_days(point["device_id"], date(2026, 6, 3), 8)
+
+        since, _ = archive_cleanup.day_bounds(date(2026, 6, 6), date(2026, 6, 6))
+        async with async_session_factory() as session:
+            async with session.begin():
+                await archive_cleanup.purge(session, point["enterprise_id"], since, None)
+
+        left = await days_left(point["device_id"])
+        assert date(2026, 6, 5) in left
+        assert date(2026, 6, 6) not in left
+
+    async def test_an_end_alone_leaves_what_came_after(self):
+        point = await one_point(7012)
+        await fill_days(point["device_id"], date(2026, 6, 3), 8)
+
+        _, until = archive_cleanup.day_bounds(date(2026, 6, 5), date(2026, 6, 5))
+        async with async_session_factory() as session:
+            async with session.begin():
+                await archive_cleanup.purge(session, point["enterprise_id"], None, until)
+
+        left = await days_left(point["device_id"])
+        assert date(2026, 6, 5) not in left
+        assert date(2026, 6, 6) in left
+
+    async def test_a_preview_without_dates_counts_everything(self):
+        point = await one_point(7013)
+        await fill_days(point["device_id"], date(2026, 6, 3), 4)
+
+        async with async_session_factory() as session:
+            seen = await archive_cleanup.preview(session, point["enterprise_id"])
+
+        assert seen["daily"] == 4
+        assert await days_left(point["device_id"]) != []      # counted, not taken
+
+
 class TestItStaysInsideTheHistory:
     async def test_rows_a_corrector_made_elsewhere_are_left_alone(self):
         """The archive is keyed by corrector, and correctors move.

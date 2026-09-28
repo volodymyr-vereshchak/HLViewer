@@ -64,15 +64,31 @@ async def windows(session: AsyncSession, enterprise_id: int) -> List[Dict]:
     return [dict(r) for r in rows]
 
 
-def _clip(window: Dict, since: datetime, until: datetime):
-    """The window intersected with the range asked for, or None if they miss."""
+#: The range that means "everything this point ever had".
+#:
+#: An open end, not a date somebody picked: a corrector installed in 2019 and
+#: one still running tomorrow are both inside it, and the point's own
+#: installation windows do the rest of the clipping.
+WHOLE_ARCHIVE = (datetime(1990, 1, 1), datetime(2100, 1, 1))
+
+
+def _clip(window: Dict, since: Optional[datetime], until: Optional[datetime]):
+    """The window intersected with the range asked for, or None if they miss.
+
+    An absent bound is the open one: clearing with no dates at all takes
+    everything the point has, which is the only way to be rid of an archive
+    that was read wrongly end to end.
+    """
+    since = since or WHOLE_ARCHIVE[0]
+    until = until or WHOLE_ARCHIVE[1]
     start = max(window["installed_from"], since)
     end = until if window["removed_at"] is None else min(window["removed_at"], until)
     return None if start >= end else (start, end)
 
 
 async def _affected(
-    session: AsyncSession, enterprise_id: int, since: datetime, until: datetime,
+    session: AsyncSession, enterprise_id: int,
+    since: Optional[datetime], until: Optional[datetime],
     delete: bool,
 ) -> Dict:
     spans = []
@@ -119,20 +135,23 @@ async def _affected(
 
 
 async def preview(
-    session: AsyncSession, enterprise_id: int, since: datetime, until: datetime
+    session: AsyncSession, enterprise_id: int,
+    since: Optional[datetime] = None, until: Optional[datetime] = None,
 ) -> Dict:
     """How many rows this would remove, and from which correctors."""
     return await _affected(session, enterprise_id, since, until, delete=False)
 
 
 async def purge(
-    session: AsyncSession, enterprise_id: int, since: datetime, until: datetime
+    session: AsyncSession, enterprise_id: int,
+    since: Optional[datetime] = None, until: Optional[datetime] = None,
 ) -> Dict:
     """Remove them. The caller owns the transaction."""
     removed = await _affected(session, enterprise_id, since, until, delete=True)
     logger.warning(
         "Archive purge: enterprise %s, %s..%s — %s hourly, %s daily rows",
-        enterprise_id, since, until, removed["hourly"], removed["daily"],
+        enterprise_id, since or "початку", until or "кінця",
+        removed["hourly"], removed["daily"],
     )
     return removed
 

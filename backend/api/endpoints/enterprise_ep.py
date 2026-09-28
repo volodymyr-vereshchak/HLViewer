@@ -299,21 +299,23 @@ class EnterpriseRouter:
     async def preview_archive_purge(
         self,
         enterprise_id: int,
-        from_date: str = Query(..., description="Перший день (YYYY-MM-DD)"),
-        to_date: str = Query(..., description="Останній день, включно"),
+        from_date: Optional[str] = Query(
+            None, description="Перший день (YYYY-MM-DD). Порожньо — від початку"),
+        to_date: Optional[str] = Query(
+            None, description="Останній день, включно. Порожньо — до кінця"),
         session: AsyncSession = Depends(get_session),
     ) -> Dict:
         """What a purge of this range would take. Counts only."""
-        since, until = archive_cleanup.day_bounds(
-            *(moment.date() for moment in parse_date_range(from_date, to_date))
-        )
+        since, until = self._purge_bounds(from_date, to_date)
         return await archive_cleanup.preview(session, enterprise_id, since, until)
 
     async def purge_archive(
         self,
         enterprise_id: int,
-        from_date: str = Query(..., description="Перший день (YYYY-MM-DD)"),
-        to_date: str = Query(..., description="Останній день, включно"),
+        from_date: Optional[str] = Query(
+            None, description="Перший день (YYYY-MM-DD). Порожньо — від початку"),
+        to_date: Optional[str] = Query(
+            None, description="Останній день, включно. Порожньо — до кінця"),
         session: AsyncSession = Depends(get_session),
     ) -> Dict:
         """Remove this point's archive rows in that range.
@@ -322,12 +324,35 @@ class EnterpriseRouter:
         shows the count first: the numbers come back from DPD only where DPD
         still has them.
         """
-        since, until = archive_cleanup.day_bounds(
-            *(moment.date() for moment in parse_date_range(from_date, to_date))
-        )
+        since, until = self._purge_bounds(from_date, to_date)
         removed = await archive_cleanup.purge(session, enterprise_id, since, until)
         await session.commit()
         return removed
+
+    @staticmethod
+    def _purge_bounds(from_date: Optional[str], to_date: Optional[str]):
+        """The two dates as gas-day bounds, either of which may be absent.
+
+        Neither given means the whole archive of the point: the case where the
+        readings were wrong end to end and there is nothing to keep. One given
+        is open at the other end, which is how "everything before we noticed"
+        and "everything since the swap" are said.
+        """
+        if from_date and to_date:
+            return archive_cleanup.day_bounds(
+                *(moment.date() for moment in parse_date_range(from_date, to_date))
+            )
+        if from_date:
+            since, _ = archive_cleanup.day_bounds(
+                *(moment.date() for moment in parse_date_range(from_date, from_date))
+            )
+            return since, None
+        if to_date:
+            _, until = archive_cleanup.day_bounds(
+                *(moment.date() for moment in parse_date_range(to_date, to_date))
+            )
+            return None, until
+        return None, None
 
     async def stream_enterprise_poll(
         self,
