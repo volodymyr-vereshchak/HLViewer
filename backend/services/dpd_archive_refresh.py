@@ -90,6 +90,26 @@ async def write_refresh_times(times: list[str]) -> list[str]:
     return clean or default_refresh_times()
 
 
+#: Job timestamps are written with the APPLICATION's clock, not the database's.
+#:
+#: Only the app containers carry TZ=Europe/Kyiv; Postgres runs on UTC, so
+#: `now()` in SQL lands three hours behind everything else in this schema —
+#: the migration that made these columns NOT NULL backfilled them with
+#: `now() AT TIME ZONE 'Europe/Kyiv'`, which is the convention here.
+#:
+#: It was not only a wrong time on the admin card. The scheduler asks whether a
+#: slot has passed since the last run by comparing `started_at` from the
+#: database with `datetime.now()` in Python: a run at 15:51 local was written
+#: down as 12:51, which is before the 15:00 slot, so the slot stayed due and
+#: the refresh started again on the next tick — every two minutes for the three
+#: hours it took UTC to reach the slot's wall-clock time. 1121 runs in a week
+#: instead of 14 (logs of 21–28.09.2026), and with DPD credentials in place
+#: each of those is a month-long poll of the whole branch.
+#:
+#: `updated_at` stays on the database clock: it is only ever compared with
+#: `now()` inside the same statement, which is self-consistent.
+
+
 async def acquire() -> bool:
     """Atomically claim the refresh job. False if one is already running."""
     async with async_session_factory() as session:
@@ -100,7 +120,7 @@ async def acquire() -> bool:
             sa.text(
                 """
                 UPDATE dpd_refresh_job
-                SET status = 'running', started_at = now(), updated_at = now(),
+                SET status = 'running', started_at = :started, updated_at = now(),
                     finished_at = NULL, error = NULL,
                     progress_done = NULL, progress_total = NULL
                 WHERE id = 1
@@ -109,7 +129,7 @@ async def acquire() -> bool:
                 RETURNING id
                 """
             ),
-            {"stale": STALE_SECONDS},
+            {"stale": STALE_SECONDS, "started": datetime.now()},
         )
         acquired = result.scalar() is not None
         await session.commit()
@@ -206,10 +226,10 @@ async def _finalize(status: str, error: str | None) -> None:
             sa.text(
                 "UPDATE dpd_refresh_job SET status = :status, error = :error, "
                 "progress_done = NULL, progress_total = NULL, "
-                "finished_at = now(), updated_at = now() "
+                "finished_at = :finished, updated_at = now() "
                 "WHERE id = 1 AND status = 'running'"
             ),
-            {"status": status, "error": error},
+            {"status": status, "error": error, "finished": datetime.now()},
         )
         await session.commit()
 

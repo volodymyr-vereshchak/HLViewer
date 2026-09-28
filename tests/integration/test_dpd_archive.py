@@ -13,6 +13,7 @@ from datetime import date, datetime, timedelta
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
+from sqlalchemy import text as sa_text
 
 from backend.api.endpoints.enterprise_ep import EnterpriseRouter
 from backend.db.dao.dpd_archive_dao import DpdArchiveDao
@@ -21,6 +22,7 @@ from backend.db.models.enterprise_model import (
     DpdDevice, Enterprise, EnterpriseDevice, EPOCH_INSTALLED_FROM,
 )
 from backend.db.models.grmu_branch_model import GrmuBranch
+from backend.hl_engine.scheduler_runner import _last_due_refresh
 from backend.services import dpd_archive_refresh
 from backend.services.enterprise_volume_service import fetch_dpd_volumes
 
@@ -699,6 +701,55 @@ class TestStreamCancellation:
             timeout=10,
         )
         assert record_keys(records) == {(101, D_OLD5.isoformat())}
+
+
+class TestTheClockTheJobIsWrittenIn:
+    """`dpd_refresh_job.started_at` is a naive column, so it has to be written
+    in the clock the reader uses — the application's.
+
+    Only the app containers carry TZ=Europe/Kyiv; Postgres runs on UTC, so
+    `now()` in SQL landed three hours behind. The scheduler asks whether a slot
+    has passed by comparing this value with `datetime.now()`: a run at 15:51
+    was written down as 12:51, never reached the 15:00 slot, and started again
+    on the next tick — every two minutes for the three hours it took UTC to
+    catch up. 1121 runs in a week instead of 14 (prod logs, 21–28.09.2026),
+    each of them a month-long poll of the whole branch.
+
+    (`update_job` is not like this: its columns are `timestamptz`, where
+    `now()` is an absolute instant and correct.)
+    """
+
+    async def test_it_records_when_it_actually_started(self, clean_db):
+        async with async_session_factory() as session:
+            await session.execute(sa_text(
+                "INSERT INTO dpd_refresh_job (id, status) VALUES (1, 'idle') "
+                "ON CONFLICT (id) DO UPDATE SET status = 'idle'"
+            ))
+            await session.commit()
+
+        assert await dpd_archive_refresh.acquire() is True
+        started = await dpd_archive_refresh.last_started_at()
+
+        assert started is not None
+        assert abs(started - datetime.now()) < timedelta(minutes=5)
+
+    async def test_a_run_just_finished_makes_the_slot_no_longer_due(self, clean_db):
+        """The comparison this feeds, end to end: a slot earlier today is not
+        due again once a run has been recorded for it."""
+        async with async_session_factory() as session:
+            await session.execute(sa_text(
+                "INSERT INTO dpd_refresh_job (id, status) VALUES (1, 'idle') "
+                "ON CONFLICT (id) DO UPDATE SET status = 'idle'"
+            ))
+            await session.commit()
+        await dpd_archive_refresh.acquire()
+
+        now = datetime.now()
+        slot = (now - timedelta(minutes=30)).strftime("%H:%M")
+        due = _last_due_refresh(now, [slot])
+        started = await dpd_archive_refresh.last_started_at()
+
+        assert due is not None and started >= due
 
 
 class TestRefreshSchedule:
