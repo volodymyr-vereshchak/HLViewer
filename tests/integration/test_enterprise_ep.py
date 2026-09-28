@@ -6,7 +6,9 @@ import io
 import json
 
 import openpyxl
+import pytest
 import pytest_asyncio
+import sqlalchemy as sa
 
 from backend.db.engine import async_session_factory
 from backend.db.models.device_catalog_model import CorectorType, Manufacturer
@@ -857,6 +859,35 @@ class TestEnterpriseVolumes:
                                         params={**params, "live": "true"})
         mock_client.get_volumes.assert_awaited_once()
         assert filled.json()[0]["total_volume"] == 100.5
+
+    async def test_a_branch_without_credentials_is_told_so_once(
+        self, admin_client, seed_topology, caplog
+    ):
+        """Nobody entered the credentials — that is a branch half set up, not a
+        broken server. One line in the journal, a readable message in band, and
+        no traceback written twice (29 pairs of them in the week to 28.09)."""
+        import logging
+
+        await admin_client.post(
+            "/enterprise-mappings/", json=_enterprise_payload(seed_topology)
+        )
+        async with async_session_factory() as session:
+            await session.execute(sa.text(
+                "DELETE FROM grmu_branch_dpd_credential"))
+            await session.commit()
+
+        with caplog.at_level(logging.WARNING):
+            events = await read_stream_events(admin_client, {
+                "line_id": [seed_topology["line1"]],
+                "from_date": "2024-12-25",
+                "to_date": "2024-12-25",
+                "live": "true",
+            })
+
+        assert events[-1]["type"] == "error"
+        assert "облікові дані ДПД" in events[-1]["detail"]
+        assert "Traceback" not in caplog.text
+        assert caplog.text.count("не введені облікові дані") == 1
 
     async def test_a_read_does_not_ask_dpd_at_all(
         self, admin_client, seed_topology, mocker

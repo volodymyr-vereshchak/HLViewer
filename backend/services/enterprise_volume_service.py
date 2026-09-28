@@ -43,7 +43,7 @@ from backend.db.engine import async_session_factory
 from backend.db.dao.dpd_archive_dao import DpdArchiveDao
 from backend.db.models.enterprise_models import DeviceVolume, EnterpriseVolumeResponse
 from backend.services import device_history
-from backend.services.dpd_client import DPDClient
+from backend.services.dpd_client import DPDClient, MissingCredentials
 from backend.services.enterprise_mappings import volume_field_for_device
 from backend.settings import backend_settings
 from backend.utils.dpd_units import normalize_press_unit
@@ -194,6 +194,11 @@ async def fetch_dpd_volumes(
                         session, dao, by_assignment, spans, period_type,
                         requested_from, date_to, events_cb,
                     )
+                except MissingCredentials:
+                    # Not the API being unreachable — the branch was never set
+                    # up. The archive cannot stand in for that: whoever pressed
+                    # «Опитати» has to be told, so this one travels out.
+                    raise
                 except Exception:
                     logger.exception(
                         "Live DPD poll failed — serving archive data as fallback"

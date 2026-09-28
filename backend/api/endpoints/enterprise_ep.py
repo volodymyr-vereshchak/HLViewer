@@ -45,6 +45,7 @@ from backend.services.enterprise_mappings import (
     get_devices_for_lines_db,
     load_mappings,
 )
+from backend.services.dpd_client import MissingCredentials
 from backend.services.enterprise_volume_service import (
     aggregate_volumes,
     fetch_dpd_volumes,
@@ -81,19 +82,26 @@ def _check_inactive_scope(virtual: bool, include_inactive: bool) -> None:
         )
 
 
-async def _reap_poll(task: "asyncio.Task") -> None:
+async def _reap_poll(task: "asyncio.Task", reported: bool = False) -> None:
     """Await a (usually cancelled) poll task until it fully unwinds, so its
     transaction rolls back and the branch advisory lock is released.
 
     Runs DETACHED from the stream generator: awaiting the task inside the
     dying generator's finally can itself be re-cancelled mid-rollback, leaving
     the lock on a leaked connection (prod incident 2026-07-11: one cancelled
-    stream wedged its branch for ~50 minutes, queueing every later request)."""
+    stream wedged its branch for ~50 minutes, queueing every later request).
+
+    `reported` says the generator already awaited this task and logged what it
+    raised. Without it the same failure was written down twice, traceback and
+    all — 29 pairs in the journal of 21–28.09, which reads like twice as much
+    trouble as there was."""
     try:
         await task
     except asyncio.CancelledError:
         pass
     except Exception:
+        if reported:
+            return
         logger.exception("Enterprise poll cleanup failed")
 
 
@@ -574,6 +582,8 @@ class EnterpriseRouter:
 
         task = asyncio.create_task(run())
         silent = 0.0
+        #: Whether the failure below has already been written to the journal.
+        reported = False
         try:
             while True:
                 # Status events first (they are emitted before the progress
@@ -620,17 +630,24 @@ class EnterpriseRouter:
             # Client went away; the poll is reaped in the finally below.
             logger.info("Enterprise volume stream cancelled by client")
             raise
+        except MissingCredentials as e:
+            # Not a fault of this request: a branch nobody has finished setting
+            # up. One line, in band, without a traceback.
+            logger.warning("%s", e)
+            reported = True
+            yield dump({"type": "error", "detail": str(e)})
         except Exception as e:
             # The response is already streaming with status 200, so failures
             # can only be reported in-band.
             logger.exception("Enterprise volume stream failed")
+            reported = True
             yield dump({"type": "error", "detail": str(e)})
         finally:
             task.cancel()
             # Never await the unwind here: this generator may be dying under
             # cancellation and the await would be interrupted mid-rollback,
             # leaking the branch advisory lock. A detached reaper waits it out.
-            reaper = asyncio.create_task(_reap_poll(task))
+            reaper = asyncio.create_task(_reap_poll(task, reported))
             _poll_reapers.add(reaper)
             reaper.add_done_callback(_poll_reapers.discard)
 

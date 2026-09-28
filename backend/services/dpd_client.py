@@ -36,6 +36,16 @@ MAX_RELOGINS = 2
 EVENT_PAGE_SIZE = 5000
 
 
+class MissingCredentials(ValueError):
+    """Nobody has entered DPD credentials for this branch.
+
+    A ValueError still, so the endpoints that answer 400 to one keep doing so.
+    Its own class because it is not a fault of the request: it is a branch
+    somebody has not finished setting up, and it belongs in the journal as one
+    line, not as a traceback that reads like a broken server.
+    """
+
+
 class DPDClient:
     """Async HTTP client for DPD API with JWT authentication."""
 
@@ -103,8 +113,9 @@ class DPDClient:
         cred = result.scalars().first()
 
         if not cred:
-            raise ValueError(
-                f"No DPD credentials configured for branch_id={branch_id}."
+            raise MissingCredentials(
+                f"Для філії {branch_id} не введені облікові дані ДПД — "
+                f"«Адміністрування → ДПД»."
             )
         if not cred.api_base_url or not cred.auth_url:
             raise ValueError(
@@ -140,10 +151,18 @@ class DPDClient:
             logger.info("DPD API authentication successful")
 
         except httpx.HTTPStatusError as e:
-            logger.error(f"DPD API authentication failed: {e}")
+            logger.error("DPD API authentication failed at %s: %s",
+                         self.auth_url, e)
             raise
         except Exception as e:
-            logger.error(f"DPD API authentication error: {e}")
+            # The class, not just str(e). A ConnectTimeout stringifies to an
+            # empty string, so the journal of 28.09 read "DPD API
+            # authentication error: " — which looks like a rejected password,
+            # and was read that way, while what actually happened is that the
+            # TCP connection to auth_url never opened.
+            logger.error("DPD API authentication error at %s: %s%s",
+                         self.auth_url, type(e).__name__,
+                         f" — {e}" if str(e) else "")
             raise
 
     async def _get_device_indications(
