@@ -259,7 +259,13 @@ class DpdArchiveDao(BasicDao):
         )
 
     async def clear_all(self) -> None:
-        """Admin wipe: both archives + coverage (next scheduler run reloads)."""
+        """Admin wipe: both archives + coverage.
+
+        Everything, not only what came from the API: a row a modem polled over
+        GSM sits in the same table and goes with the rest. The scheduler
+        reloads its window afterwards and a re-read reloads the period asked
+        for — but only from DPD. What the modem read has no second source.
+        """
         for table in ("dpd_daily_archive", "dpd_hourly_archive",
                       "dpd_device_coverage"):
             await self.session.execute(text(f"DELETE FROM {table}"))

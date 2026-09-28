@@ -203,12 +203,17 @@ class EnterpriseRouter:
             endpoint=self.clear_dpd_archive,
             methods=["DELETE"],
             status_code=status.HTTP_200_OK,
-            summary="Wipe the DPD archive",
+            summary="Wipe every enterprise archive",
             description=(
-                "Deletes both archive tables and the coverage registry; the "
-                "next scheduler run (or manual refresh) reloads the window "
-                "from scratch. Admin-only (the auth middleware requires the "
-                "admin role for any DELETE)."
+                "Deletes both archive tables and the coverage registry — ALL "
+                "of it, including the rows a modem polled over GSM, which is "
+                "why the button for it sits with the enterprises and not with "
+                "the DPD credentials. What DPD still has comes back only for "
+                "the period somebody re-reads (the routine refresh reloads "
+                "its window, nothing older); what a modem read does not come "
+                "back at all, because the corrector keeps weeks, not years. "
+                "Admin-only (the auth middleware requires the admin role for "
+                "any DELETE)."
             ),
         )
         self.router.add_api_route(
@@ -782,7 +787,8 @@ class EnterpriseRouter:
     ) -> dict:
         await DpdArchiveDao(session).clear_all()
         await session.commit()
-        logger.info("DPD archive wiped (daily, hourly, coverage)")
+        logger.warning("Enterprise archives wiped (daily, hourly, coverage) — "
+                       "including anything polled over GSM")
         return {"cleared": True}
 
     async def trigger_archive_refresh(self) -> dict:
