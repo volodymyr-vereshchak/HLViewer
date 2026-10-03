@@ -19,6 +19,7 @@ Env knobs: LOG_DIR, LOG_LEVEL, LOG_MAX_BYTES (default 10 MB), LOG_BACKUP_COUNT
 
 import logging
 import os
+import time
 from logging import Logger
 
 try:
@@ -91,6 +92,8 @@ def setup_logging() -> None:
         lg.handlers = []
         lg.propagate = True
 
+    _sweep_rotation_leftovers()
+
     _configured = True
 
     if not _MP_SAFE:
@@ -98,6 +101,50 @@ def setup_logging() -> None:
             "concurrent-log-handler not installed; using RotatingFileHandler, which "
             "is NOT safe across multiple uvicorn workers (log lines may be lost on "
             "rotation). Install concurrent-log-handler to fix."
+        )
+
+
+#: How long a rotation temp file may plausibly be in use. The lock is held for
+#: milliseconds; an hour is only so that a sweep during somebody else's rollover
+#: cannot take a file still being moved.
+_ROTATE_TEMP_GRACE = 3600
+
+
+def _sweep_rotation_leftovers() -> None:
+    """Delete `*.log.rotate.*` files left behind by a broken rollover.
+
+    ConcurrentRotatingFileHandler rotates by renaming the live file to
+    `backend.log.rotate.<id>` under a lock and then shuffling the chain. When a
+    second handler rotates the same path without the lock — which is what the
+    old `utils.logger.logger_setup` did — the shuffle loses its target and the
+    temporary file stays. `backupCount` does not count those, so they are the
+    one thing here that grows without limit: 33 files, 330 MB, oldest from
+    06.08.2026, found on 03.10. A full disk is how Postgres ends up in recovery
+    mode and the server ends up looking hung.
+
+    The cause is fixed; this clears what it left and covers any future one.
+    """
+    now = time.time()
+    try:
+        entries = list(os.scandir(log_dir()))
+    except OSError:
+        return
+    freed = 0
+    for entry in entries:
+        if ".rotate." not in entry.name:
+            continue
+        try:
+            if now - entry.stat().st_mtime < _ROTATE_TEMP_GRACE:
+                continue
+            size = entry.stat().st_size
+            os.remove(entry.path)
+            freed += size
+        except OSError:
+            continue                    # somebody else is using it; leave it
+    if freed:
+        logging.getLogger(__name__).warning(
+            "Прибрано %d МБ недоротованих журналів (*.rotate.*)",
+            freed // (1024 * 1024),
         )
 
 
