@@ -15,15 +15,25 @@ class DbEngine:
     # ── Pool sizing ──────────────────────────────────────────────────────────
     # IMPORTANT: every uvicorn worker AND the scheduler is a separate process,
     # and each instantiates BOTH pools. Total connections to Postgres is roughly
-    #   processes × (API_cap)  +  update_cap (only ONE process updates at a time,
-    #                                          guarded by the update_job DB lock)
+    #   processes × API_cap  +  update_cap (only ONE process updates at a time,
+    #                                       guarded by the update_job DB lock)
+    # The API cap is the one that multiplies, so that is the one kept small.
     # With 4 workers + 1 scheduler and the defaults below:
-    #   5 × (10+5) + (25+10) = 110, which needs max_connections >= ~120.
-    # The compose files set Postgres max_connections=200 to leave headroom.
-    # Tune via env on constrained DBs (e.g. default Postgres max_connections=100).
-    API_POOL_SIZE = _int_env("DB_POOL_SIZE", 10)
-    API_MAX_OVERFLOW = _int_env("DB_MAX_OVERFLOW", 5)
-    UPDATE_POOL_SIZE = _int_env("DB_UPDATE_POOL_SIZE", 25)
+    #   5 × (5+2) + (20+10) = 65, which fits a stock Postgres — the default
+    #   max_connections=100, less the 3 held back for superusers.
+    # The update cap stays at 30 deliberately: hl_engine runs up to
+    # Semaphore(6) path groups × 5 archive engines = 30 concurrent sessions,
+    # and a smaller pool would only have them queue on pool_timeout.
+    #
+    # Raise these where the database is ours alone (the compose files give
+    # Postgres max_connections=200). Where several applications share one
+    # Postgres — as on the Windows production host, which runs three — these
+    # defaults are not enough on their own: a neighbour can still take every
+    # slot and leave us with "sorry, too many clients already". The server-side
+    # guard against that is a per-role CONNECTION LIMIT; see .env.sample.
+    API_POOL_SIZE = _int_env("DB_POOL_SIZE", 5)
+    API_MAX_OVERFLOW = _int_env("DB_MAX_OVERFLOW", 2)
+    UPDATE_POOL_SIZE = _int_env("DB_UPDATE_POOL_SIZE", 20)
     UPDATE_MAX_OVERFLOW = _int_env("DB_UPDATE_MAX_OVERFLOW", 10)
 
     def __init__(self):
