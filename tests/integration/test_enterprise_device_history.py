@@ -102,8 +102,6 @@ async def topology(branch_id):
                      "press": None, "temper": None, "press_unit": None}
                     for day in days
                 ])
-                # Fully covered: no read may reach the DPD API.
-                await dao.lower_loaded_from([device_id], "daily", d(1))
 
     async def seed_hours(device_id: int, stamps: list[datetime], volume: float):
         async with async_session_factory() as session:
@@ -115,7 +113,6 @@ async def topology(branch_id):
                      "press": None, "temper": None, "press_unit": None}
                     for s in stamps
                 ])
-                await dao.lower_loaded_from([device_id], "hourly", d(1))
 
     async def clear_history(point_id: int):
         async with async_session_factory() as session:
@@ -233,15 +230,11 @@ class TestMovedCorrector:
             assignments = await _assignments_for(session, [a, b], dt(1), dt(20))
         await fetch_dpd_volumes(assignments, dt(1), dt(20), "daily", live=True)
 
-        # Two assignments, one device → one poll, and its coverage now spans
-        # the range for both points.
+        # Two assignments, one device → one poll: the archive is the
+        # corrector's, and both points read their own slice of the one answer.
         assert dpd_mock.get_volumes.await_count == 1
-        async with async_session_factory() as session:
-            rows = (await session.execute(
-                text("SELECT device_id FROM dpd_device_coverage "
-                     "WHERE period_type = 'daily'")
-            )).scalars().all()
-        assert rows == [device]
+        polled = dpd_mock.get_volumes.await_args.args[0]
+        assert {p["device_id"] for p in polled} == {device}
 
 
 class TestPollingIgnoresWindows:

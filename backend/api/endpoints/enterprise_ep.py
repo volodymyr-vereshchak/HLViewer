@@ -225,7 +225,7 @@ class EnterpriseRouter:
             summary="Manually refresh the DPD archive now",
             description=(
                 "Starts the same job the scheduler runs at DPD_REFRESH_TIMES: "
-                "re-poll the last DPD_ARCHIVE_WINDOW_DAYS for all enterprises. "
+                "top every enterprise's archive up from where it ends. "
                 "409 when a refresh is already running. Admin-only (POST)."
             ),
         )
@@ -237,12 +237,13 @@ class EnterpriseRouter:
             status_code=status.HTTP_202_ACCEPTED,
             summary="Re-read the DPD archive over a chosen period",
             description=(
-                "The same work as the scheduled refresh, over the period "
-                "given instead of the last DPD_ARCHIVE_WINDOW_DAYS. This is "
-                "what closes a gap older than that window: a read of the "
-                "archive never calls the API, and the routine window never "
-                "reaches back. Long — every enterprise of every branch with "
-                "credentials, daily and hourly, over the whole period. "
+                "The same work as the scheduled refresh, but over the period "
+                "given and for every device regardless of what is stored. "
+                "This is what closes a stretch DPD never delivered: a read of "
+                "the archive never calls the API, and the routine run only "
+                "asks for what follows the newest stored period. Long — every "
+                "enterprise of every branch with credentials, daily and "
+                "hourly, over the whole period. "
                 "Admin-only; shares the refresh job, so the card shows its "
                 "progress and a second run is refused while it runs."
             ),
@@ -274,9 +275,10 @@ class EnterpriseRouter:
             summary="Remove this point's archive rows in a date range",
             description=(
                 "Both granularities. Admin-only (the auth middleware requires "
-                "the admin role for any DELETE). Rows inside the last "
-                "DPD_ARCHIVE_WINDOW_DAYS come back on the next nightly "
-                "refresh; older ones stay gone until that range is polled."
+                "the admin role for any DELETE). Deleting the newest rows "
+                "makes the next refresh ask for them again; deleting a "
+                "stretch in the middle leaves it gone until that period is "
+                "re-read, because a refresh only follows the newest row."
             ),
         )
         self.router.add_api_route(

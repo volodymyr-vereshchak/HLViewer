@@ -140,7 +140,6 @@ from .dpd_line_model import (
 from .dpd_cache_model import (
     DpdDailyArchive,
     DpdHourlyArchive,
-    DpdDeviceCoverage,
     DpdRefreshJob,
 )
 

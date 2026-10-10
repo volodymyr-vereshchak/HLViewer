@@ -13,11 +13,12 @@ class DpdDailyArchive(SQLModel, table=True):
     point reads slices of it through its assignment windows
     (enterprise_device). Moving a corrector needs no re-poll.
 
-    The DB is the primary source: the scheduler refreshes the last
-    DPD_ARCHIVE_WINDOW_DAYS twice a day, older ranges are backfilled on
-    demand (see dpd_device_coverage). Reads never hit the DPD API inside
-    the refreshed window. Skeleton records (both volume fields NULL) are
-    never stored.
+    The DB is the primary source: reads never hit the DPD API at all. The
+    scheduler tops each device up from its own newest stored period, and a
+    device with nothing stored is read from the start of the archive
+    (dpd_archive_refresh). A gap DPD never delivered is closed by
+    «Перечитати архів» over a period somebody chooses. Skeleton records (both
+    volume fields NULL) are never stored.
 
     Nothing is ever deleted (retention removed 07.09.2026). These tables were
     a cache while the DPD API was the only source and a dropped row could be
@@ -84,32 +85,6 @@ class DpdHourlyArchive(SQLModel, table=True):
         default="dpd", max_length=8,
         sa_column_kwargs={"server_default": "dpd"},
     )
-
-
-class DpdDeviceCoverage(SQLModel, table=True):
-    """How far back a device's archive has ever been fetched from DPD.
-
-    loaded_from = the earliest date ever requested from the API for this
-    device+period_type. It is a record, not a decision: reads are served
-    from the DB alone, whatever it says, and a range the archive does not
-    hold reads as nothing rather than being fetched. The scheduler lowers it
-    to today−window after each run. Nothing raises it any more: retention was
-    removed, so a range fetched once stays fetched.
-
-    Per DEVICE, so a corrector shared by two points over time is backfilled
-    once and the second point reads what the first already pulled."""
-
-    __tablename__ = "dpd_device_coverage"
-
-    device_id: int = Field(
-        sa_column=Column(
-            BigInteger,
-            ForeignKey("dpd_device.id", ondelete="CASCADE"),
-            primary_key=True,
-        )
-    )
-    period_type: str = Field(primary_key=True, max_length=8)  # "daily" | "hourly"
-    loaded_from: date
 
 
 class DpdRefreshJob(SQLModel, table=True):

@@ -1,14 +1,32 @@
 """Scheduled/manual refresh of the DPD archive tables.
 
-Polls the last DPD_ARCHIVE_WINDOW_DAYS of daily and hourly data for every
-corrector that stood at an active enterprise inside that window, in every
-branch with DPD credentials; upserts the archive tables and lowers coverage.
-Each device is asked once for the whole window regardless of
-how many points it served in it — the archive is the corrector's, and which
-point sees which stretch is settled when the data is read. Runs from the
-scheduler process
-(twice a day, see scheduler_runner) and from the admin endpoint
-POST /enterprise/archive/refresh — both guarded by the single-row
+Tops up daily and hourly data for every corrector that EVER stood at an
+active enterprise, in every branch with DPD credentials. Each device is
+carried on from the newest period its own archive already holds, up to the day
+its service ended (today while it is still installed); one with nothing stored
+is read from FIRST_EVER. Each is asked once regardless of how many points it
+served — the archive is the corrector's, and which point sees which stretch is
+settled when the data is read.
+
+Reaching back over the whole history is what makes a point entered today
+arrive complete: it may have had three correctors over three years, and only
+the one standing now would be found by looking at the present. It costs
+nothing on a settled installation, because a corrector that has been taken off
+is offered a range ending where its service ended and drops out of the plan as
+soon as its archive reaches that day.
+
+There used to be a fixed window here (DPD_ARCHIVE_WINDOW_DAYS, 30) and it was
+never a catch-up: it kept the recent tail fresh while a read older than a
+device's coverage backfilled the missing head on demand, and a prune raised
+coverage behind it. Both of those were removed — reads never call the API now,
+and nothing is pruned — which left the window as the only automatic mechanism
+while still being sized as a tail refresher. Asking each device for what it
+actually lacks replaces it: a device polled this morning costs a day, one
+nobody has touched costs the months it missed, and the 30-day re-read of
+everything (≈346k hourly records a run, five times a day) is gone.
+
+Runs from the scheduler process (see scheduler_runner) and from the admin
+endpoint POST /enterprise/archive/refresh — both guarded by the single-row
 dpd_refresh_job lock (same pattern as update_job_lock), so only one refresh
 runs at a time across all uvicorn workers and the scheduler."""
 import asyncio
@@ -20,6 +38,7 @@ import sqlalchemy as sa
 
 from backend.db.engine import async_session_factory
 from backend.db.dao.dpd_archive_dao import DpdArchiveDao
+from backend.services.archive_cleanup import FIRST_EVER
 from backend.services.dpd_client import DPDClient
 from backend.services.enterprise_mappings import get_devices_for_branch_db
 from backend.settings import backend_settings
@@ -27,9 +46,20 @@ from backend.utils.dpd_units import normalize_press_unit
 
 logger = logging.getLogger(__name__)
 
-# A refresh polls every device twice (daily + hourly); a heartbeat older than
-# this means the running process died — the lock may be taken over.
+# A refresh polls every device at least twice (daily + hourly); a heartbeat
+# older than this means the running process died — the lock may be taken over.
 STALE_SECONDS = 1800
+
+# One poll asks DPD for one device over one stretch of days, and the answers of
+# a whole batch are held in memory before they are handed to COPY. Two caps
+# keep that piece small: a device with nothing stored is read from FIRST_EVER,
+# which for hourly data is years at 24 records a day, and the first run after a
+# wipe has every device in that state at once. Worst case per batch is
+# _POLL_BATCH × _CHUNK_DAYS["hourly"] × 24 ≈ 48k records; the steady state is a
+# single day per device, so one batch covers 64 of them.
+_CHUNK_DAYS = {"daily": 366, "hourly": 31}
+_POLL_BATCH = 64
+
 
 
 _ENSURE_ROW = (
@@ -294,104 +324,224 @@ async def _branch_ids_with_credentials() -> list[int]:
         return [r[0] for r in rows]
 
 
-async def _refresh_branch(
-    branch_id: int,
-    devices: list,
-    window_from: date,
-    window_to: date,
-    progress: _ProgressWriter,
-) -> None:
-    if not devices:
-        logger.info(f"DPD refresh: branch {branch_id} has no active devices")
+def _chunks(start: date, end: date, period_type: str):
+    """Walk start..end in stretches no longer than _CHUNK_DAYS, inclusive."""
+    step = timedelta(days=_CHUNK_DAYS[period_type])
+    cursor = start
+    while cursor <= end:
+        last = min(cursor + step - timedelta(days=1), end)
+        yield cursor, last
+        cursor = last + timedelta(days=1)
+
+
+def _span(period_type: str, first: date, last: date,
+          contract_hour: int) -> tuple[datetime, datetime]:
+    """The datetimes one poll covers for the days first..last.
+
+    Hourly reaches contract_hour into the day after `last`, because the gas
+    day that is running now is filed under tomorrow's date; daily stops at
+    `last` itself. Chunk boundaries therefore overlap by a few hours for
+    hourly, which costs nothing — the upsert is idempotent — and guarantees
+    no hour falls between two chunks.
+    """
+    if period_type == "hourly":
+        return (
+            datetime.combine(first, datetime.min.time())
+            + timedelta(hours=contract_hour),
+            datetime.combine(last, datetime.min.time())
+            + timedelta(days=1, hours=contract_hour - 1),
+        )
+    return (
+        datetime.combine(first, datetime.min.time()),
+        datetime.combine(last, datetime.min.time()),
+    )
+
+
+def _carry_on_from(stamp, since: date | None) -> date:
+    """Which day a device is polled from.
+
+    With `since` the operator named the period and it applies to every device
+    («Перечитати архів»). Otherwise the device's own archive decides: from the
+    newest period it already holds, or from FIRST_EVER when it holds nothing.
+
+    The newest stored period is re-read rather than skipped past: a record of
+    the day that is still running keeps changing until the day closes, and
+    re-reading one day is cheaper than being wrong about it.
+    """
+    if since is not None:
+        return since
+    if stamp is None:
+        return FIRST_EVER
+    return stamp.date() if isinstance(stamp, datetime) else stamp
+
+
+def _served_until(assignments: list, window_to: date) -> dict[int, date]:
+    """device_id -> the last day it is worth asking DPD about.
+
+    `window_to` for a corrector still standing somewhere (win_to is None), and
+    the end of its last assignment for one that has been taken off everywhere.
+    A device that moved between two of our points is open again, so the later
+    assignment decides.
+
+    This is what makes it safe to consider the WHOLE history instead of only
+    assignments that ended recently: a corrector removed two years ago is
+    offered a range that ends where its service ended, so once its archive
+    reaches that day it has nothing left to ask for and drops out of the plan
+    by itself — while a point entered today still gets every corrector it ever
+    had, each over its own stretch.
+    """
+    until: dict[int, date] = {}
+    for assignment in assignments:
+        device_id = assignment["device_id"]
+        win_to = assignment["win_to"]
+        if win_to is None:
+            until[device_id] = window_to
+            continue
+        if until.get(device_id) == window_to:
+            continue                    # already open through another point
+        # win_to is the EXCLUSIVE end; its own date is kept because the gas day
+        # that was running when the corrector came off is filed under it.
+        ended = min(win_to.date(), window_to)
+        if ended > until.get(device_id, date.min):
+            until[device_id] = ended
+    return until
+
+
+async def _plan_branch(devices: list, since: date | None,
+                       window_to: date, contract_hour: int) -> list[dict]:
+    """One entry per poll this branch needs: a device, a period type and the
+    stretch of days to ask for.
+
+    `devices` are ASSIGNMENTS (one per history entry); what gets polled is the
+    distinct correctors among them. A device that stood at two points is asked
+    once over one stretch, not once per point: the archive is the corrector's,
+    and which point sees which part is decided on the read.
+    """
+    by_device = distinct_devices(devices)
+    if not by_device:
+        return []
+    device_ids = sorted(by_device)
+    until = _served_until(devices, window_to)
+    plan: list[dict] = []
+    async with async_session_factory() as session:
+        dao = DpdArchiveDao(session)
+        for period_type in ("daily", "hourly"):
+            # A dated re-read ignores what is stored, so do not ask for it.
+            last = ({} if since is not None
+                    else await dao.last_stamps(device_ids, period_type))
+            for device_id in device_ids:
+                start = _carry_on_from(last.get(device_id), since)
+                # A chosen period applies whole, to every device: that is what
+                # «Перечитати архів» is for. A routine run stops where the
+                # device stopped serving.
+                final = window_to if since is not None else until.get(
+                    device_id, window_to
+                )
+                if start > final:
+                    continue
+                if (since is None and final < window_to and start == final):
+                    # Taken off, and its archive already reaches the day it
+                    # came off. Nothing more will ever arrive for it.
+                    continue
+                for first, chunk_to in _chunks(start, final, period_type):
+                    plan.append({
+                        "period_type": period_type,
+                        "device": {
+                            **by_device[device_id],
+                            "tag": device_id,
+                            "range": _span(period_type, first, chunk_to,
+                                           contract_hour),
+                        },
+                    })
+    return plan
+
+
+def _rows_from(records: list, period_type: str, known: set) -> dict:
+    """Records as archive rows, keyed by (device, period) so a day that two
+    overlapping chunks both answered with is stored once."""
+    rows: dict = {}
+    for record in records:
+        if record.get("dvstAlwrk") is None and record.get("dvwrkAlwrk") is None:
+            continue  # skeleton — no data yet
+        device_id = record.get("tag")
+        if device_id not in known:
+            continue
+        raw = record.get("date") or record.get("period")
+        try:
+            if period_type == "hourly":
+                clean = str(raw).split(".")[0]
+                try:
+                    stamp = datetime.strptime(clean, "%Y-%m-%dT%H:%M:%S")
+                except ValueError:
+                    stamp = datetime.strptime(clean, "%Y-%m-%dT%H:%M")
+            else:
+                stamp = datetime.strptime(str(raw).split("T")[0], "%Y-%m-%d")
+        except Exception:
+            continue
+        rows[(device_id, stamp)] = {
+            "device_id": device_id,
+            "stamp": stamp,
+            "dvst_alwrk": record.get("dvstAlwrk"),
+            "dvwrk_alwrk": record.get("dvwrkAlwrk"),
+            "press": record.get("press"),
+            "temper": record.get("temper"),
+            "press_unit": normalize_press_unit(record.get("pressUnit")),
+        }
+    return rows
+
+
+async def _refresh_branch(branch_id: int, plan: list[dict],
+                          progress: _ProgressWriter) -> None:
+    if not plan:
+        logger.info(f"DPD refresh: branch {branch_id} has nothing to poll")
         return
     async with async_session_factory() as session:
         client = await DPDClient.for_branch(branch_id, session)
 
-    contract_hour = backend_settings.get("CONTRACT_HOUR", 7)
-    # `devices` are ASSIGNMENTS (one per history entry); what gets polled is
-    # the distinct correctors among them. Every device that stood somewhere
-    # inside the refresh window is asked for the WHOLE window, not for its own
-    # slice of it: the archive is the corrector's, so all of the answer is its
-    # own data, and which point sees which stretch is decided on the read.
-    by_device = distinct_devices(devices)
-    device_ids = sorted(by_device)
-    # No per-device `range`: every one is asked for the same whole span, so the
-    # client's own from/to applies.
-    poll_devices = [{**a, "tag": device_id} for device_id, a in by_device.items()]
     for period_type in ("daily", "hourly"):
-        if period_type == "hourly":
-            span = (
-                datetime.combine(window_from, datetime.min.time())
-                + timedelta(hours=contract_hour),
-                datetime.combine(window_to, datetime.min.time())
-                + timedelta(days=1, hours=contract_hour - 1),
+        polls = [p for p in plan if p["period_type"] == period_type]
+        fetched = stored = 0
+        for start in range(0, len(polls), _POLL_BATCH):
+            batch = [p["device"] for p in polls[start:start + _POLL_BATCH]]
+            # Each device carries its own "range", which get_volumes honours
+            # ahead of the from/to below; those only bound the batch.
+            span_from = min(d["range"][0] for d in batch)
+            span_to = max(d["range"][1] for d in batch)
+            # get_volumes builds and closes its own HTTP pool per call.
+            records = await client.get_volumes(
+                batch, span_from, span_to, type_request=period_type,
+                progress_cb=progress.segment_cb(len(batch)),
             )
-        else:
-            span = (
-                datetime.combine(window_from, datetime.min.time()),
-                datetime.combine(window_to, datetime.min.time()),
-            )
-        # get_volumes builds and closes its own HTTP pool per call.
-        records = await client.get_volumes(
-            poll_devices, span[0], span[1], type_request=period_type,
-            progress_cb=progress.segment_cb(len(poll_devices)),
-        )
-        rows = {}
-        for record in records:
-            if record.get("dvstAlwrk") is None and record.get("dvwrkAlwrk") is None:
-                continue  # skeleton — no data yet
-            device_id = record.get("tag")
-            if device_id not in by_device:
-                continue
-            raw = record.get("date") or record.get("period")
-            try:
-                if period_type == "hourly":
-                    clean = str(raw).split(".")[0]
-                    try:
-                        stamp = datetime.strptime(clean, "%Y-%m-%dT%H:%M:%S")
-                    except ValueError:
-                        stamp = datetime.strptime(clean, "%Y-%m-%dT%H:%M")
-                else:
-                    stamp = datetime.strptime(str(raw).split("T")[0], "%Y-%m-%d")
-            except Exception:
-                continue
-            rows[(device_id, stamp)] = {
-                "device_id": device_id,
-                "stamp": stamp,
-                "dvst_alwrk": record.get("dvstAlwrk"),
-                "dvwrk_alwrk": record.get("dvwrkAlwrk"),
-                "press": record.get("press"),
-                "temper": record.get("temper"),
-                "press_unit": normalize_press_unit(record.get("pressUnit")),
-            }
-        async with async_session_factory() as session:
-            async with session.begin():
-                dao = DpdArchiveDao(session)
-                await dao.upsert_records(period_type, list(rows.values()))
-                await dao.lower_loaded_from(
-                    device_ids, period_type, window_from
-                )
+            rows = _rows_from(records, period_type, {d["tag"] for d in batch})
+            async with async_session_factory() as session:
+                async with session.begin():
+                    await DpdArchiveDao(session).upsert_records(
+                        period_type, list(rows.values())
+                    )
+            fetched += len(records)
+            stored += len(rows)
+            await _heartbeat()
         logger.info(
             f"DPD refresh: branch {branch_id} {period_type} — "
-            f"{len(records)} records fetched, {len(rows)} stored"
+            f"{len(polls)} polls, {fetched} records fetched, {stored} stored"
         )
-        await _heartbeat()
 
 
 async def execute_locked(since: date | None = None,
                          until: date | None = None) -> None:
     """Run the refresh. The dpd_refresh_job lock MUST already be acquired.
 
-    Without dates this is the routine run: the last
-    DPD_ARCHIVE_WINDOW_DAYS for every enterprise of every branch that has
-    credentials. It is a window, not a catch-up — it re-polls those days
-    whatever the archive holds, and knows nothing about what is missing
-    further back.
+    Without dates this is the routine run: every device is carried on from the
+    newest period its own archive holds, up to today. A device with nothing
+    stored is read from FIRST_EVER, so a point entered today arrives with its
+    history and so does one whose archive was wiped. There is no fixed window
+    any more — the run asks for what is missing, which is a day or two for a
+    device polled this morning and years for one nobody has touched.
 
     With dates it is «Перечитати архів»: the same work over a period somebody
-    chose, which is how a gap older than the window is closed at all. Nothing
-    else fills one any more — a read of the archive never calls the API, and
-    the window never reaches back. Every device is polled from the start of
+    chose, for every device regardless of what is stored. That is what closes
+    a stretch DPD never delivered, and the only thing that does — a read of
+    the archive never calls the API. Every device is polled from the start of
     the period, not from its own install date: the archive belongs to the
     corrector, so everything it answers with is worth keeping, and a corrector
     that moved is read by each of its points through its own window anyway.
@@ -399,52 +549,57 @@ async def execute_locked(since: date | None = None,
     status, error = "done", None
     try:
         today = date.today()
-        window_from = since or today - timedelta(
-            days=backend_settings["DPD_ARCHIVE_WINDOW_DAYS"]
-        )
         window_to = min(until or today, today)
-        branch_ids = await _branch_ids_with_credentials()
-        # Load device lists up-front so the total device count (×2: daily +
-        # hourly) is known before polling — that is the progress bar's 100%.
-        branch_devices: dict[int, list] = {}
-        # Widest span the two period types can ask for, so assignments that
-        # ended before the refresh window are dropped before they are counted.
         contract_hour = backend_settings.get("CONTRACT_HOUR", 7)
-        span_from = datetime.combine(window_from, datetime.min.time())
+        # Every assignment of every active point, all the way back — not only
+        # the ones in force now. A point entered today may have had three
+        # correctors over three years, and each holds a stretch of its history
+        # that nothing else can supply. What keeps this from re-polling the
+        # whole past on every run is _served_until: a device that has been
+        # taken off is offered a range ending where its service ended, so it
+        # drops out as soon as its archive reaches that day.
+        span_from = datetime.combine(since or FIRST_EVER, datetime.min.time())
         span_to = datetime.combine(window_to, datetime.min.time()) + timedelta(
             days=1, hours=contract_hour - 1
         )
+        branch_ids = await _branch_ids_with_credentials()
+        # Plan every branch up front: the progress bar's 100% is the number of
+        # polls, and that is only known once each device's starting day is.
+        branch_plan: dict[int, list] = {}
+        device_count = 0
         async with async_session_factory() as session:
             for branch_id in branch_ids:
                 try:
-                    branch_devices[branch_id] = await get_devices_for_branch_db(
-                        branch_id, session, range_from=span_from, range_to=span_to,
+                    devices = await get_devices_for_branch_db(
+                        branch_id, session,
+                        range_from=span_from, range_to=span_to,
                     )
                 except Exception:
                     logger.exception(
                         f"DPD refresh: failed to load devices of branch {branch_id}"
                     )
-                    branch_devices[branch_id] = []
-        # The bar counts POLLS, and a device is polled once per period type no
-        # matter how many points it served inside the window.
-        branch_polls = {
-            b: len(distinct_devices(d)) for b, d in branch_devices.items()
-        }
-        total = 2 * sum(branch_polls.values())
+                    branch_plan[branch_id] = []
+                    continue
+                device_count += len(distinct_devices(devices))
+                branch_plan[branch_id] = await _plan_branch(
+                    devices, since, window_to, contract_hour
+                )
+        total = sum(len(p) for p in branch_plan.values())
         progress = _ProgressWriter(total)
         await _write_progress_total(total)
+        scope = (f"period {since}..{window_to}" if since is not None
+                 else f"carrying on to {window_to}")
         logger.info(
             f"DPD refresh: starting for {len(branch_ids)} branches "
-            f"({total // 2} devices), window {window_from}..{window_to}"
+            f"({device_count} devices, {total} polls), {scope}"
         )
         failures = []
         expected_offset = 0
         for branch_id in branch_ids:
-            devices = branch_devices[branch_id]
-            expected_offset += 2 * branch_polls[branch_id]
+            expected_offset += len(branch_plan[branch_id])
             try:
                 await _refresh_branch(
-                    branch_id, devices, window_from, window_to, progress
+                    branch_id, branch_plan[branch_id], progress
                 )
             except Exception as e:
                 # One broken branch must not kill the whole run.

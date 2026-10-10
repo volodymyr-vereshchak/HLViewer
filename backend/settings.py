@@ -20,12 +20,14 @@ backend_settings = {
     # reuses keep-alive connections instead of opening hundreds at once.
     "DPD_MAX_CONCURRENCY": int(os.getenv("DPD_MAX_CONCURRENCY", "10")),
     # DPD archive refresh: local times (HH:MM, comma-separated) at which the
-    # scheduler re-polls the last DPD_ARCHIVE_WINDOW_DAYS for all enterprises.
+    # scheduler tops every enterprise's archive up. The admin panel overrides
+    # this (dpd_refresh_job.refresh_times); each run asks each device only for
+    # what its archive lacks, so these times set how fresh the data is, not how
+    # much work a run is.
     "DPD_REFRESH_TIMES": [
         t.strip() for t in os.getenv("DPD_REFRESH_TIMES", "10:00,16:00").split(",")
         if t.strip()
     ],
-    "DPD_ARCHIVE_WINDOW_DAYS": int(os.getenv("DPD_ARCHIVE_WINDOW_DAYS", "30")),
     "BOT_TOKEN": os.getenv("BOT_TOKEN"),
     "CHAT_ID": os.getenv("CHAT_ID"),
     "SENDER_EMAIL": os.getenv("SENDER_EMAIL", ""),

@@ -2,7 +2,7 @@
 
 All methods flush but never commit — the caller owns the transaction."""
 import logging
-from datetime import date, datetime
+from datetime import datetime
 from typing import Dict, List
 
 from sqlalchemy import text
@@ -13,7 +13,6 @@ from backend.db.dao.basic_dao import BasicDao
 # anywhere create_all is used) — the DAO itself speaks raw SQL.
 from backend.db.models.dpd_cache_model import (  # noqa: F401
     DpdDailyArchive,
-    DpdDeviceCoverage,
     DpdHourlyArchive,
     DpdRefreshJob,
 )
@@ -223,49 +222,53 @@ class DpdArchiveDao(BasicDao):
         inserted = sum(1 for new in written if new)
         return {"inserted": inserted, "updated": len(written) - inserted}
 
-    async def get_coverage(
+    async def last_stamps(
         self, device_ids: List[int], period_type: str
-    ) -> Dict[int, date]:
-        """device_id -> loaded_from. Devices absent from the result were
-        never fetched at all."""
+    ) -> Dict[int, datetime]:
+        """device_id -> newest period stored for it. Absent from the result
+        means nothing is stored for that device at all.
+
+        This is what tells the refresh where to carry on from. It counts rows
+        of EVERY source, not only the ones DPD answered with: the question is
+        where this device's archive ends, and a row a modem brought is as much
+        a row as any other. It matters because the refresh asks about every
+        corrector of the branch, modem-read ones included (see
+        get_devices_for_branch_db) — keyed on DPD-sourced rows alone, a device
+        that only a modem ever reads would ask DPD for everything since the
+        start of the archive on every single run, forever, and get nothing.
+
+        The cost is that a stretch DPD never delivered stays missing when a
+        modem has since filled a later period for the same device. That is the
+        same gap «Перечитати архів» exists to close, and it closes this one too.
+        """
         if not device_ids:
             return {}
+        table, stamp_col = _table(period_type)
+        # One index lookup per device, not one pass over the table. The
+        # obvious `max(...) GROUP BY device_id` cannot use the
+        # (device_id, stamp) index — Postgres has no skip scan — so with most
+        # devices in the list it chooses a parallel seq scan and gets slower
+        # as the archive grows: measured 143 ms over 1.45M hourly rows against
+        # 8.5 ms for the form below, which stays flat because each subquery is
+        # an Index Only Scan Backward stopping at the first row.
         rows = await self.session.execute(
             text(
-                "SELECT device_id, loaded_from FROM dpd_device_coverage "
-                "WHERE period_type = :pt AND device_id = ANY(:ids)"
+                "SELECT d.device_id, "
+                f"(SELECT max({stamp_col}) FROM {table} a "
+                " WHERE a.device_id = d.device_id) "
+                "FROM unnest(CAST(:ids AS bigint[])) AS d(device_id)"
             ),
-            {"pt": period_type, "ids": device_ids},
+            {"ids": device_ids},
         )
-        return {r[0]: r[1] for r in rows}
-
-    async def lower_loaded_from(
-        self, device_ids: List[int], period_type: str, loaded_from: date
-    ) -> None:
-        """Record that [loaded_from, ...] has now been requested from DPD for
-        these devices (insert or lower, never raise)."""
-        if not device_ids:
-            return
-        await self.session.execute(
-            text(
-                "INSERT INTO dpd_device_coverage "
-                "(device_id, period_type, loaded_from) "
-                "SELECT unnest(CAST(:ids AS bigint[])), :pt, :lf "
-                "ON CONFLICT (device_id, period_type) "
-                "DO UPDATE SET loaded_from = LEAST("
-                "dpd_device_coverage.loaded_from, EXCLUDED.loaded_from)"
-            ),
-            {"ids": device_ids, "pt": period_type, "lf": loaded_from},
-        )
+        return {r[0]: r[1] for r in rows if r[1] is not None}
 
     async def clear_all(self) -> None:
-        """Admin wipe: both archives + coverage.
+        """Admin wipe: both archives.
 
         Everything, not only what came from the API: a row a modem polled over
         GSM sits in the same table and goes with the rest. The scheduler
         reloads its window afterwards and a re-read reloads the period asked
         for — but only from DPD. What the modem read has no second source.
         """
-        for table in ("dpd_daily_archive", "dpd_hourly_archive",
-                      "dpd_device_coverage"):
+        for table in ("dpd_daily_archive", "dpd_hourly_archive"):
             await self.session.execute(text(f"DELETE FROM {table}"))

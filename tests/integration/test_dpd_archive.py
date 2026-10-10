@@ -23,8 +23,7 @@ from backend.db.models.enterprise_model import (
 )
 from backend.db.models.grmu_branch_model import GrmuBranch
 from backend.hl_engine.scheduler_runner import _last_due_refresh
-from backend.services import dpd_archive_refresh
-from backend.settings import backend_settings
+from backend.services import archive_cleanup, dpd_archive_refresh
 from backend.services.enterprise_volume_service import fetch_dpd_volumes
 
 TODAY = date.today()
@@ -152,21 +151,17 @@ def dpd_mock(mocker):
     return client
 
 
-async def seed_archive(device: dict, period_type: str, days: list[date],
-                       loaded_from: date) -> None:
-    """Simulate a past scheduler run: store records + set coverage."""
+async def seed_archive(device: dict, period_type: str,
+                       days: list[date]) -> None:
+    """Simulate a past scheduler run: store records."""
     async with async_session_factory() as session:
         async with session.begin():
-            dao = DpdArchiveDao(session)
-            await dao.upsert_records(period_type, [
+            await DpdArchiveDao(session).upsert_records(period_type, [
                 {"device_id": device["device_id"], "stamp": as_dt(day),
                  "dvst_alwrk": 10.0, "dvwrk_alwrk": None,
                  "press": 101.3, "temper": 15.0, "press_unit": "kPa"}
                 for day in days
             ])
-            await dao.lower_loaded_from(
-                [device["device_id"]], period_type, loaded_from
-            )
 
 
 async def archive_rows(period_type: str) -> list:
@@ -177,21 +172,12 @@ async def archive_rows(period_type: str) -> list:
         )).mappings().all()
 
 
-async def coverage_of(device_id: int, period_type: str):
-    async with async_session_factory() as session:
-        return (await session.execute(
-            text("SELECT loaded_from FROM dpd_device_coverage "
-                 "WHERE device_id = :e AND period_type = :p"),
-            {"e": device_id, "p": period_type},
-        )).scalar()
-
-
 class TestArchiveReads:
     async def test_covered_range_served_from_db_without_dpd(
         self, dpd_mock, make_enterprise
     ):
         dev = await make_enterprise(101)
-        await seed_archive(dev, "daily", [D_OLD5, D_OLD3], loaded_from=D_OLD10)
+        await seed_archive(dev, "daily", [D_OLD5, D_OLD3])
 
         records = await fetch_dpd_volumes([dev], as_dt(D_OLD10), as_dt(TODAY), "daily")
 
@@ -213,7 +199,6 @@ class TestArchiveReads:
                      "press": None, "temper": None, "press_unit": None}
                     for s in stamps
                 ])
-                await dao.lower_loaded_from([dev["device_id"]], "hourly", D_OLD10)
 
         records = await fetch_dpd_volumes([dev], as_dt(D_OLD5), as_dt(D_OLD5), "hourly")
 
@@ -240,7 +225,7 @@ class TestAReadNeverCallsTheApi:
         self, dpd_mock, make_enterprise
     ):
         dev = await make_enterprise(101)
-        await seed_archive(dev, "daily", [D_OLD5, D_OLD3], loaded_from=D_OLD5)
+        await seed_archive(dev, "daily", [D_OLD5, D_OLD3])
 
         records = await fetch_dpd_volumes(
             [dev], as_dt(D_OLD10), as_dt(D_OLD3), "daily"
@@ -266,20 +251,10 @@ class TestAReadNeverCallsTheApi:
         dpd_mock.get_volumes.assert_not_awaited()
         assert records == []
 
-    async def test_coverage_is_left_alone_by_a_read(
-        self, dpd_mock, make_enterprise
-    ):
-        dev = await make_enterprise(101)
-        await seed_archive(dev, "daily", [D_OLD5], loaded_from=D_OLD5)
-
-        await fetch_dpd_volumes([dev], as_dt(D_OLD10), as_dt(D_OLD3), "daily")
-
-        assert await coverage_of(dev["device_id"], "daily") == D_OLD5
-
     async def test_a_read_waits_for_nothing(self, dpd_mock, make_enterprise):
         """No locks, no progress: there is nothing to make progress through."""
         dev = await make_enterprise(101)
-        await seed_archive(dev, "daily", [D_OLD5], loaded_from=D_OLD10)
+        await seed_archive(dev, "daily", [D_OLD5])
         events = []
 
         await fetch_dpd_volumes([dev], as_dt(D_OLD5), as_dt(D_OLD5), "daily",
@@ -336,7 +311,7 @@ class TestAPollDoesCallTheApi:
         in the archive is what it is meant to refresh."""
         dev_a = await make_enterprise(101)
         dev_b = await make_enterprise(102)
-        await seed_archive(dev_a, "daily", [D_OLD8, D_OLD5], loaded_from=D_OLD10)
+        await seed_archive(dev_a, "daily", [D_OLD8, D_OLD5])
         dpd_mock.get_volumes.side_effect = daily_reply([D_OLD5])
 
         await fetch_dpd_volumes(
@@ -365,7 +340,7 @@ class TestAPollDoesCallTheApi:
     ):
         """The API being down must not empty a screen the DB can fill."""
         dev = await make_enterprise(101)
-        await seed_archive(dev, "daily", [D_OLD5], loaded_from=D_OLD10)
+        await seed_archive(dev, "daily", [D_OLD5])
         dpd_mock.get_volumes.side_effect = RuntimeError("DPD не відповідає")
 
         records = await fetch_dpd_volumes(
@@ -417,18 +392,10 @@ class TestRetentionIsOff:
     ):
         dev = await make_enterprise(101)
         ancient = TODAY - timedelta(days=400)
-        await seed_archive(dev, "daily", [ancient, D_OLD5], loaded_from=ancient)
+        await seed_archive(dev, "daily", [ancient, D_OLD5])
 
         rows = await archive_rows("daily")
         assert sorted(r["day"] for r in rows) == sorted([ancient, D_OLD5])
-
-    async def test_coverage_is_never_raised_back(self, dpd_mock, make_enterprise):
-        # Retention used to raise loaded_from so a pruned range could be
-        # re-fetched. With nothing pruned, a range fetched once stays fetched.
-        dev = await make_enterprise(101)
-        ancient = TODAY - timedelta(days=400)
-        await seed_archive(dev, "daily", [ancient], loaded_from=ancient)
-        assert await coverage_of(dev["device_id"], "daily") == ancient
 
 
 class TestSource:
@@ -457,14 +424,14 @@ class TestSource:
 
     async def test_the_api_refresh_marks_its_rows(self, dpd_mock, make_enterprise):
         dev = await make_enterprise(101)
-        await seed_archive(dev, "daily", [D_OLD5], loaded_from=D_OLD5)
+        await seed_archive(dev, "daily", [D_OLD5])
         assert (await archive_rows("daily"))[0]["source"] == "dpd"
 
     async def test_a_gsm_row_survives_a_dpd_refresh(self, dpd_mock, make_enterprise):
         dev = await make_enterprise(101)
         await self._poll_over_gsm(dev, 777.0)
 
-        await seed_archive(dev, "daily", [D_OLD5], loaded_from=D_OLD5)
+        await seed_archive(dev, "daily", [D_OLD5])
 
         row = (await archive_rows("daily"))[0]
         assert row["source"] == "gsm"
@@ -474,7 +441,7 @@ class TestSource:
         self, dpd_mock, make_enterprise
     ):
         dev = await make_enterprise(101)
-        await seed_archive(dev, "daily", [D_OLD5], loaded_from=D_OLD5)
+        await seed_archive(dev, "daily", [D_OLD5])
         await self._poll_over_gsm(dev, 777.0)
 
         row = (await archive_rows("daily"))[0]
@@ -499,7 +466,7 @@ class TestSource:
         under a column captioned кгс/см² instead of МПа, a factor of ten.
         """
         dev = await make_enterprise(101)
-        await seed_archive(dev, "daily", [D_OLD5], loaded_from=D_OLD5)
+        await seed_archive(dev, "daily", [D_OLD5])
         async with async_session_factory() as session:
             async with session.begin():
                 await DpdArchiveDao(session).upsert_records("daily", [
@@ -557,19 +524,16 @@ class TestRefreshJob:
         assert ran is True
         assert len(await archive_rows("daily")) == 2
         assert len(await archive_rows("hourly")) == 3
-        window_from = TODAY - timedelta(days=30)
-        assert await coverage_of(dev["device_id"], "daily") == window_from
-        assert await coverage_of(dev["device_id"], "hourly") == window_from
         status = await dpd_archive_refresh.read_status()
         assert status["status"] == "done"
 
-    async def test_shared_corrector_is_polled_once_for_the_whole_window(
+    async def test_shared_corrector_is_polled_once_as_a_device(
         self, mocker, make_enterprise, branch_id
     ):
-        """A corrector moved between two points inside the refresh window is
-        one device with one archive: one request per period type, for the whole
-        window. Which point reads which stretch is settled on the read, so the
-        refresh has no reason to know about the windows at all."""
+        """A corrector moved between two points is one device with one
+        archive: it is asked once per period type, over its own stretch, not
+        once per point. Which point reads which part is settled on the read,
+        so the refresh has no reason to know about the windows at all."""
         first = await make_enterprise(101, removed_at=as_dt(D_OLD5))
         async with async_session_factory() as session:
             second = Enterprise(
@@ -583,6 +547,10 @@ class TestRefreshJob:
                 installed_from=as_dt(D_OLD5),
             ))
             await session.commit()
+
+        # A stretch already stored, so the device needs one chunk and the
+        # count below is about points, not about how long the stretch is.
+        await seed_archive(first, "daily", [D_OLD10])
 
         calls = []
         client = mocker.AsyncMock()
@@ -607,19 +575,25 @@ class TestRefreshJob:
         daily = [c for c in calls if c[0] == "daily"]
         assert len(daily) == 1
         assert daily[0][1] == [first["device_id"]]  # once, as a device
-        assert daily[0][2] == as_dt(TODAY - timedelta(days=30))
-        # One row for one device, not one per point it served.
-        assert len(await archive_rows("daily")) == 1
+        # One row for one device, not one per point it served. D_OLD10 was
+        # seeded, D_OLD3 came back from the poll.
+        assert sorted(r["day"] for r in await archive_rows("daily")) == [
+            D_OLD10, D_OLD3]
         status = await dpd_archive_refresh.read_status()
         assert status["progress_total"] is None  # cleared on finish
 
     async def test_refresh_reports_progress(
         self, mocker, make_enterprise, branch_id
     ):
-        """A running refresh exposes progress_done/progress_total (devices ×2,
-        daily + hourly) for the admin progress bar and clears them on finish."""
-        await make_enterprise(101)
-        await make_enterprise(102)
+        """A running refresh exposes progress_done/progress_total for the
+        admin progress bar and clears them on finish. The unit is POLLS: a
+        device needs one per period type while it is up to date, and more when
+        it has a long stretch to catch up on."""
+        for code in (101, 102):
+            dev = await make_enterprise(code)
+            # Up to date, so each device is exactly one poll per period type.
+            await seed_archive(dev, "daily", [D_OLD3])
+            await seed_archive(dev, "hourly", [D_OLD3])
         mid_status = {}
 
         async def get_volumes(devices, date_from, date_to, *, type_request,
@@ -705,13 +679,13 @@ class TestStreamCancellation:
 
 
 class TestRereadingOverAChosenPeriod:
-    """«Перечитати архів» — the only thing that closes a gap older than the
-    routine window.
+    """How much each run asks for.
 
-    The scheduled run re-polls a fixed DPD_ARCHIVE_WINDOW_DAYS and knows
-    nothing about what is missing further back; a read of the archive never
-    calls the API at all. So a month the server was off, or an enterprise
-    entered a year late, stays empty until somebody asks for that period.
+    The routine run carries every device on from the newest period its own
+    archive holds, and reads one that holds nothing from FIRST_EVER. It
+    therefore never looks for a hole in the middle: a read of the archive
+    never calls the API, so a month the server was off stays empty until
+    «Перечитати архів» asks for exactly that period.
     """
 
     async def _mock_branch(self, mocker, branch_id, seen):
@@ -719,7 +693,10 @@ class TestRereadingOverAChosenPeriod:
 
         async def get_volumes(devices, date_from, date_to, *, type_request,
                               **kwargs):
-            seen.append((type_request, date_from, date_to))
+            # The range that counts is each device's own; date_from/date_to
+            # only bound the batch.
+            for device in devices:
+                seen.append((type_request, device["tag"], *device["range"]))
             return daily_records(devices, [D_OLD5]) if type_request == "daily" else []
 
         client.get_volumes = get_volumes
@@ -732,6 +709,10 @@ class TestRereadingOverAChosenPeriod:
             mocker.AsyncMock(return_value=[branch_id]),
         )
 
+    @staticmethod
+    def _daily(seen):
+        return [s for s in seen if s[0] == "daily"]
+
     async def test_the_period_asked_for_is_the_period_polled(
         self, mocker, make_enterprise, branch_id
     ):
@@ -742,11 +723,42 @@ class TestRereadingOverAChosenPeriod:
 
         await dpd_archive_refresh.execute_locked(since, TODAY)
 
-        daily = next(s for s in seen if s[0] == "daily")
-        assert daily[1] == as_dt(since)
-        assert daily[2].date() == TODAY
+        daily = self._daily(seen)
+        assert daily[0][2] == as_dt(since)
+        assert daily[-1][3].date() == TODAY
 
-    async def test_without_dates_it_is_still_the_routine_window(
+    async def test_a_dated_reread_ignores_what_is_already_stored(
+        self, mocker, make_enterprise, branch_id
+    ):
+        """The operator named the period, so it applies whole. Otherwise
+        asking for a period you already hold part of could not repair it."""
+        dev = await make_enterprise(101)
+        await seed_archive(dev, "daily", [D_OLD3])
+        seen: list = []
+        await self._mock_branch(mocker, branch_id, seen)
+
+        await dpd_archive_refresh.execute_locked(D_OLD10, TODAY)
+
+        assert self._daily(seen)[0][2] == as_dt(D_OLD10)
+
+    async def test_without_dates_a_device_carries_on_from_its_newest_record(
+        self, mocker, make_enterprise, branch_id
+    ):
+        dev = await make_enterprise(101)
+        await seed_archive(dev, "daily", [D_OLD8, D_OLD3])
+        seen: list = []
+        await self._mock_branch(mocker, branch_id, seen)
+
+        await dpd_archive_refresh.execute_locked()
+
+        daily = self._daily(seen)
+        assert len(daily) == 1
+        # The newest stored day itself, not the day after it: a record of a day
+        # that is still running keeps changing.
+        assert daily[0][2] == as_dt(D_OLD3)
+        assert daily[0][3].date() == TODAY
+
+    async def test_without_dates_an_empty_archive_is_read_from_the_start(
         self, mocker, make_enterprise, branch_id
     ):
         await make_enterprise(101)
@@ -755,9 +767,41 @@ class TestRereadingOverAChosenPeriod:
 
         await dpd_archive_refresh.execute_locked()
 
-        daily = next(s for s in seen if s[0] == "daily")
-        window = backend_settings["DPD_ARCHIVE_WINDOW_DAYS"]
-        assert daily[1].date() == TODAY - timedelta(days=window)
+        assert self._daily(seen)[0][2] == as_dt(archive_cleanup.FIRST_EVER)
+
+    async def test_a_device_that_is_up_to_date_is_not_polled(
+        self, mocker, make_enterprise, branch_id
+    ):
+        """Its newest record is today, so there is no day left to ask for."""
+        dev = await make_enterprise(101)
+        await seed_archive(dev, "daily", [TODAY])
+        seen: list = []
+        await self._mock_branch(mocker, branch_id, seen)
+
+        await dpd_archive_refresh.execute_locked()
+
+        # Today itself is re-read (it is still running), nothing before it.
+        assert [s[2] for s in self._daily(seen)] == [as_dt(TODAY)]
+
+    async def test_a_long_stretch_is_split_into_chunks(
+        self, mocker, make_enterprise, branch_id
+    ):
+        """Hourly data is 24 records a day, and a cold device reaches back
+        years. One answer per chunk keeps what is held in memory bounded."""
+        await make_enterprise(101)
+        seen: list = []
+        await self._mock_branch(mocker, branch_id, seen)
+
+        await dpd_archive_refresh.execute_locked()
+
+        hourly = [s for s in seen if s[0] == "hourly"]
+        step = dpd_archive_refresh._CHUNK_DAYS["hourly"]
+        assert len(hourly) > 1
+        for _, _, chunk_from, chunk_to in hourly:
+            assert (chunk_to - chunk_from).days <= step + 1
+        # Together they cover the whole stretch without a day in between.
+        assert hourly[0][2].date() == archive_cleanup.FIRST_EVER
+        assert hourly[-1][3].date() == TODAY + timedelta(days=1)
 
     async def test_the_future_is_not_asked_for(
         self, mocker, make_enterprise, branch_id
@@ -770,8 +814,103 @@ class TestRereadingOverAChosenPeriod:
 
         await dpd_archive_refresh.execute_locked(D_OLD5, TODAY + timedelta(days=30))
 
-        daily = next(s for s in seen if s[0] == "daily")
-        assert daily[2].date() == TODAY
+        assert self._daily(seen)[-1][3].date() == TODAY
+
+    async def _point_with_two_correctors(self, branch_id):
+        """A point entered today whose history says one corrector stood there
+        through 2024 and another took over in 2025 — the shape a point
+        migrated from paper arrives in."""
+        changed = datetime(2025, 1, 1)
+        async with async_session_factory() as session:
+            ent = Enterprise(
+                enterprise_name="ent-two-correctors", active=True,
+                enabled=True, branch_id=branch_id, line_id=None,
+            )
+            session.add(ent)
+            await session.flush()
+            old = DpdDevice(ser_num=7001, mf_dev=1, type_dev=3, ch_num=0)
+            new = DpdDevice(ser_num=7002, mf_dev=1, type_dev=3, ch_num=0)
+            session.add_all([old, new])
+            await session.flush()
+            session.add_all([
+                EnterpriseDevice(
+                    enterprise_id=ent.id, device_id=old.id,
+                    installed_from=datetime(2024, 1, 1), removed_at=changed,
+                ),
+                EnterpriseDevice(
+                    enterprise_id=ent.id, device_id=new.id,
+                    installed_from=changed,
+                ),
+            ])
+            await session.commit()
+            return {"old": old.id, "new": new.id, "changed": changed}
+
+    async def test_a_corrector_that_is_already_gone_is_still_read(
+        self, mocker, branch_id
+    ):
+        """The point's 2024 belongs to a corrector that was taken off in 2025.
+        Nothing but that corrector can supply it, so the routine run has to
+        reach back past the one standing now."""
+        ids = await self._point_with_two_correctors(branch_id)
+        seen: list = []
+        await self._mock_branch(mocker, branch_id, seen)
+
+        await dpd_archive_refresh.execute_locked()
+
+        asked = {s[1] for s in self._daily(seen)}
+        assert asked == {ids["old"], ids["new"]}
+
+    async def test_each_is_read_over_its_own_stretch(self, mocker, branch_id):
+        """The one still installed runs to today; the one taken off stops
+        where it came off, so the run does not ask DPD for a year of nothing.
+        """
+        ids = await self._point_with_two_correctors(branch_id)
+        seen: list = []
+        await self._mock_branch(mocker, branch_id, seen)
+
+        await dpd_archive_refresh.execute_locked()
+
+        gone = [s for s in self._daily(seen) if s[1] == ids["old"]]
+        here = [s for s in self._daily(seen) if s[1] == ids["new"]]
+        assert gone[0][2] == as_dt(archive_cleanup.FIRST_EVER)
+        assert gone[-1][3].date() == ids["changed"].date()
+        assert here[-1][3].date() == TODAY
+
+    async def test_a_corrector_whose_archive_is_complete_is_dropped(
+        self, mocker, branch_id
+    ):
+        """Once the archive reaches the day it came off, there is nothing left
+        for it to answer — so it stops being asked, every run, forever."""
+        ids = await self._point_with_two_correctors(branch_id)
+        async with async_session_factory() as session:
+            async with session.begin():
+                await DpdArchiveDao(session).upsert_records("daily", [
+                    {"device_id": ids["old"], "stamp": ids["changed"],
+                     "dvst_alwrk": 1.0, "dvwrk_alwrk": None, "press": None,
+                     "temper": None, "press_unit": None},
+                ])
+        seen: list = []
+        await self._mock_branch(mocker, branch_id, seen)
+
+        await dpd_archive_refresh.execute_locked()
+
+        assert {s[1] for s in self._daily(seen)} == {ids["new"]}
+
+    async def test_a_dated_reread_still_covers_the_whole_period(
+        self, mocker, branch_id
+    ):
+        """«Перечитати архів» names the period, so it applies to both whole —
+        including the one that is complete and would be skipped otherwise."""
+        ids = await self._point_with_two_correctors(branch_id)
+        seen: list = []
+        await self._mock_branch(mocker, branch_id, seen)
+
+        await dpd_archive_refresh.execute_locked(date(2024, 1, 1), TODAY)
+
+        for device_id in (ids["old"], ids["new"]):
+            mine = [s for s in self._daily(seen) if s[1] == device_id]
+            assert mine[0][2] == as_dt(date(2024, 1, 1))
+            assert mine[-1][3].date() == TODAY
 
     async def test_what_comes_back_is_stored(
         self, mocker, make_enterprise, branch_id

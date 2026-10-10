@@ -13,11 +13,13 @@ The only real differences are captured by two parameters:
   volumes as 0.0, the plain one preserves None (the frontend shows a gap).
 
 Data model (v4, user decisions 2026-07-12): the DB archive tables
-(dpd_daily_archive / dpd_hourly_archive) are the PRIMARY source. The scheduler
-refreshes the last DPD_ARCHIVE_WINDOW_DAYS twice a day (dpd_archive_refresh);
-reads inside that window never touch the DPD API. Ranges older than a device's
-coverage (dpd_device_coverage.loaded_from) are backfilled from DPD on demand,
-per device, then served from the DB like everything else.
+(dpd_daily_archive / dpd_hourly_archive) are the PRIMARY source and the only
+one a read ever touches. The scheduler tops each device up from the newest
+period its archive holds (dpd_archive_refresh); a stretch DPD never delivered
+is closed by «Перечитати архів» over a period somebody chooses. Nothing is
+fetched on the read path — a range the archive does not hold reads as nothing.
+The one place that still polls live is «Опитати» on the poll screen, which
+asks for the range it was given and stores what comes back.
 
 v5 (device history): the archive is keyed by the CORRECTOR, not by the
 metering point. Reads work in ASSIGNMENTS — "device D stood at point E from …
@@ -192,7 +194,7 @@ async def fetch_dpd_volumes(
                 try:
                     await _run_backfill(
                         session, dao, by_assignment, spans, period_type,
-                        requested_from, date_to, events_cb,
+                        date_to, events_cb,
                     )
                 except MissingCredentials:
                     # Not the API being unreachable — the branch was never set
@@ -299,7 +301,6 @@ async def _run_backfill(
     by_assignment: Dict[int, Dict],
     backfill: Dict[int, tuple],
     period_type: str,
-    requested_from: date,
     date_to: datetime,
     events_cb: Optional[Callable[[Dict], None]],
 ) -> None:
@@ -345,9 +346,6 @@ async def _run_backfill(
         poll_devices.append({**a, "tag": device_id, "range": span_bounds(*span)})
 
     if not poll_devices:
-        # Nothing to ask — still record that the span was asked for, so the
-        # empty stretch is not re-planned on every request.
-        await dao.lower_loaded_from(list(backfill), period_type, requested_from)
         return
 
     branch_id = pick_branch_id(poll_devices)
@@ -410,11 +408,6 @@ async def _run_backfill(
         # was fetched — a poll of a month fetches a month every time — but how
         # much of it was not already here.
         events_cb({"type": "written", **written})
-    # A record of how far back this device has been asked for. It no longer
-    # decides anything — nothing reads it to skip an API call — and it is kept
-    # because it is the one place that says how much of a device's history the
-    # archive was ever offered.
-    await dao.lower_loaded_from(list(backfill), period_type, requested_from)
     logger.info(
         f"DPD archive: backfill poll {poll_secs:.1f}s "
         f"({len(fresh_records)} records, {len(unique)} stored)"
