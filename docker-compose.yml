@@ -41,6 +41,13 @@ services:
     container_name: fastapi_app_v2
     volumes:
       - .:/app
+      # AS4 archive share, read-only: the ingest only reads it (archives are
+      # extracted into /app/hostlibs). Mounting //server/share onto the host
+      # stays the host's job (fstab / systemd) — see docs/deployment-docker.md.
+      # This only hands that host directory to the container, so a share kept
+      # somewhere other than /mnt/as4 is a one-line .env change and never an
+      # edit to this file (which would conflict on every update).
+      - ${AS4_HOST_PATH:-/mnt/as4}:/mnt/as4:ro
     working_dir: /app
     env_file:
       - .env
@@ -93,6 +100,13 @@ services:
     container_name: scheduler_app_v2
     volumes:
       - .:/app
+      # AS4 archive share, read-only: the ingest only reads it (archives are
+      # extracted into /app/hostlibs). Mounting //server/share onto the host
+      # stays the host's job (fstab / systemd) — see docs/deployment-docker.md.
+      # This only hands that host directory to the container, so a share kept
+      # somewhere other than /mnt/as4 is a one-line .env change and never an
+      # edit to this file (which would conflict on every update).
+      - ${AS4_HOST_PATH:-/mnt/as4}:/mnt/as4:ro
     working_dir: /app
     env_file:
       - .env
