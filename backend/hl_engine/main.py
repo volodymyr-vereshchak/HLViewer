@@ -92,15 +92,16 @@ async def update_worker(
     await update_archive(archives_gen, archive_dao, constraint, session, overwrite_on)
 
 
-# The last column: daily and hourly rows are keyed by (line_id, period) alone
-# and a later import whose volume differs replaces the row. The source
-# re-exports the same records with the last float32 bit changed, which used to
-# pile up as duplicates while volume was part of the key.
+# The last column: daily and hourly rows are keyed by (line_id, period), events
+# by (line_id, period, sys_type_id), and a later import whose volume differs
+# replaces the row. The source re-exports the same records with the last
+# float32 bit changed, which used to pile up as duplicates while volume was
+# part of the key.
 WORKERS = [
     (DailyEngine,  DailyArchiveDao,  DAILY_ARCHIVE_CONSTRAINT,  "volume"),
     (HourlyEngine, HourlyArchiveDao, HOURLY_ARCHIVE_CONSTRAINT, "volume"),
     (EditEngine,   EditArchiveDao,   EDIT_ARCHIVE_CONSTRAINT,   None),
-    (SysEngine,    SysArchiveDao,    SYS_ARCHIVE_CONSTRAINT,    None),
+    (SysEngine,    SysArchiveDao,    SYS_ARCHIVE_CONSTRAINT,    "volume"),
     (ParamEngine,  ParamDao,         PARAM_CONSTRAINT,          None),
 ]
 

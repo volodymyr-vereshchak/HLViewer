@@ -136,3 +136,66 @@ async def test_cleanup_without_duplicates_changes_nothing(seed_topology, old_key
     await _plant("hourly_archive", line, datetime(2024, 10, 27, 3), 14778.84)
     rows = await _cleanup("hourly_archive")
     assert [r.volume for r in rows] == [pytest.approx(14778.84)]
+
+
+SYS_MIGRATION = (
+    Path(__file__).parents[2]
+    / "backend/db/alembic/versions/09ed82b9aa99_sys_archive_key_without_volume.py"
+)
+
+
+def _load(path: Path, name: str):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+sys_migration = _load(SYS_MIGRATION, "sys_key_migration")
+
+
+@pytest.fixture
+async def old_sys_key():
+    await _execute([f"ALTER TABLE sys_archive DROP CONSTRAINT {sys_migration.CONSTRAINT}"])
+    try:
+        yield
+    finally:
+        await _execute([
+            "DELETE FROM sys_archive",
+            f"ALTER TABLE sys_archive ADD CONSTRAINT {sys_migration.CONSTRAINT} "
+            f"UNIQUE (line_id, period, sys_type_id)",
+        ])
+
+
+async def _event(line_id: int, period: datetime, sys_type_id: int, volume: float):
+    await _execute([
+        "INSERT INTO sys_archive (line_id, period, sys_type_id, volume, "
+        "created_at, updated_at) VALUES (:l, :p, :t, :v, NOW(), NOW())"
+    ], {"l": line_id, "p": period, "t": sys_type_id, "v": volume})
+
+
+async def test_sys_cleanup(seed_topology, old_sys_key):
+    line = seed_topology["line1"]
+    noise = datetime(2026, 10, 3, 23, 53, 45)
+    await _event(line, noise, 2, 119860.9765625)
+    await _event(line, noise, 2, 119861.0)            # newer export, newest wins
+    twin = datetime(2025, 4, 22, 15, 23)
+    await _event(line, twin, 12, 8.274288)
+    await _event(line, twin, 12, 1090807000.0)        # float bits as int, newer
+    copies = datetime(2026, 9, 1, 10, 20, 45)
+    for _ in range(3):
+        await _event(line, copies, 259, 19.3)
+    await _event(line, noise, 3, 5.0)                 # another type, same moment
+
+    await _execute(sys_migration.STATEMENTS)
+
+    async with async_session_factory() as session:
+        rows = (await session.execute(text(
+            "SELECT period, sys_type_id, volume FROM sys_archive "
+            "ORDER BY period, sys_type_id"))).all()
+    assert [(r.period, r.sys_type_id, r.volume) for r in rows] == [
+        (twin, 12, pytest.approx(8.274288)),
+        (copies, 259, pytest.approx(19.3)),
+        (noise, 2, 119861.0),
+        (noise, 3, 5.0),
+    ]

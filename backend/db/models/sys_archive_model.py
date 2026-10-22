@@ -16,7 +16,7 @@ class SysArchiveBase(HlBaseModel):
     volume: float
 
 
-SYS_ARCHIVE_CONSTRAINT = ["period", "sys_type_id", "line_id", "volume"]
+SYS_ARCHIVE_CONSTRAINT = ["line_id", "period", "sys_type_id"]
 
 
 class SysArchive(SysArchiveBase, table=True):

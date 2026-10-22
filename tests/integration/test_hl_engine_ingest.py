@@ -203,3 +203,34 @@ class TestSamePeriodTwice:
         async with async_session_factory() as session:
             [row] = (await session.execute(select(HourlyArchive))).scalars().all()
         assert row.volume == 101.0
+
+
+class TestSysEvents:
+    async def test_a_re_export_overwrites_an_event_instead_of_adding_it(
+        self, seed_topology, tmp_path
+    ):
+        from backend.db.dao.sys_archive_dao import SysArchiveDao
+        from backend.db.models.sys_archive_model import SYS_ARCHIVE_CONSTRAINT, SysArchive
+        from backend.hl_engine.sys_engine import SysEngine
+
+        def event(volume: float) -> bytes:
+            return struct.pack("=6BHBf", 10, 3, 26, 23, 53, 45, 2, 0, volume)
+
+        async def ingest():
+            async with async_session_factory() as session:
+                engine = SysEngine(session=session, path=str(tmp_path),
+                                   lumg_id=seed_topology["lumg"])
+                await update_archive(engine.read(), SysArchiveDao,
+                                     SYS_ARCHIVE_CONSTRAINT, session, "volume")
+
+        archive = tmp_path / "S012R1A.A26"
+        # the same event twice in one file, as the exports carry it
+        archive.write_bytes(event(119860.9765625) * 2)
+        await ingest()
+        archive.write_bytes(event(119861.0))
+        await ingest()
+
+        async with async_session_factory() as session:
+            [row] = (await session.execute(select(SysArchive))).scalars().all()
+        assert row.volume == 119861.0
+        assert row.updated_at > row.created_at
