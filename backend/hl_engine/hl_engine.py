@@ -13,14 +13,21 @@ from backend.db.dao.line_dao import LineDao
 from backend.db.models import HlBaseModel
 from backend.db.models.gas_volume_calc_model import GasVolumeCalc
 from backend.db.models.line_model import Line as LineModel
+from backend.hl_engine.archive_merge import merge_same_period
 from backend.hl_engine.data_classes.base_dataclass import BaseDataclass
 from utils.files_utils import find_files_by_mask, read_archive_file
 from utils.logger import logger_setup
 
 
-def _read_file_records_sync(file: str, struct, date_flag: bool, line_id: int, model_fields: set) -> list[dict]:
+def _read_file_records_sync(
+    file: str, struct, date_flag: bool, line_id: int, model_fields: set,
+    merge_duplicates: bool = False,
+) -> list[dict]:
     """Read all records from a binary archive file synchronously.
-    Intended to run in a thread pool via asyncio.to_thread."""
+    Intended to run in a thread pool via asyncio.to_thread.
+
+    `merge_duplicates` folds records sharing a period into one (daily and
+    hourly archives, see archive_merge)."""
     records = []
     for file_dict in read_archive_file(file, struct):
         try:
@@ -47,7 +54,24 @@ def _read_file_records_sync(file: str, struct, date_flag: bool, line_id: int, mo
             records.append(row)
         except (ValueError, KeyError):
             continue
+    if merge_duplicates:
+        records = merge_same_period(records, source=file)
     return records
+
+
+def _file_order(path: str) -> tuple:
+    """Sort key putting one line's monthly files in calendar order.
+
+    The extension is the month as one hex-like digit (1–9, A–C) followed by
+    the two-digit year: S100R2D.926 is September 2026, S100R2D.A26 October.
+    Plain string order would put January 2026 (.126) before December 2025
+    (.C25). Anything not in that shape sorts by name after the dated ones.
+    """
+    stem, _, ext = os.path.basename(path).rpartition(".")
+    month = "123456789ABC".find(ext[:1].upper()) + 1
+    if len(ext) == 3 and month and ext[1:].isdigit():
+        return os.path.dirname(path), stem, 0, int(ext[1:]), month
+    return os.path.dirname(path), stem, 1, 0, 0, ext
 
 
 class Hostlib:
@@ -61,6 +85,7 @@ class Hostlib:
         chunk_size: int = 900,
         lumg_id: int = 1,
         date_flag: bool = True,
+        merge_duplicates: bool = False,
     ) -> None:
         self.logger = logger_setup("backend")
         self.path = path
@@ -71,9 +96,13 @@ class Hostlib:
         self.struct = struct
         self.create_class = create_class
         self.date_flag = date_flag
+        self.merge_duplicates = merge_duplicates
 
     async def read(self):
-        files = find_files_by_mask(self.path, self.mask)
+        # Oldest month first: when two files hold the same period the later
+        # file wins (main.update_archive), so the order must be the archive's,
+        # not whatever glob returns.
+        files = sorted(find_files_by_mask(self.path, self.mask), key=_file_order)
         archive_dict_list = []
         gas_volume_dao = GasVolumeCalcDao(session=self.session)
         line_dao = LineDao(session=self.session)
@@ -116,7 +145,8 @@ class Hostlib:
 
             # Read binary file in thread pool — avoids blocking the event loop
             file_records = await asyncio.to_thread(
-                _read_file_records_sync, file, self.struct, self.date_flag, line_id, model_fields
+                _read_file_records_sync, file, self.struct, self.date_flag, line_id,
+                model_fields, self.merge_duplicates,
             )
 
             for record in file_records:

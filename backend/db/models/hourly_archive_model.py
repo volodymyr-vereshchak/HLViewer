@@ -20,7 +20,7 @@ class HourlyArchiveBase(HlBaseModel):
     density: float
 
 
-HOURLY_ARCHIVE_CONSTRAINT = ["line_id", "period", "volume"]
+HOURLY_ARCHIVE_CONSTRAINT = ["line_id", "period"]
 
 
 class HourlyArchive(HourlyArchiveBase, table=True):

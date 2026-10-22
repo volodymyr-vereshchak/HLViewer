@@ -67,41 +67,58 @@ def _cleanup_orphan_temp_dirs():
                 logger.warning(f"Failed to clean orphan temp dir {path}: {e}")
 
 
-async def update_archive(archive_gen, dao, constraint_list: list, session):
+async def update_archive(
+    archive_gen, dao, constraint_list: list, session, overwrite_on: str | None = None
+):
     all_records = []
     async for archives_list in archive_gen:
         all_records.extend(archives_list)
-    await dao(session=session).bulk_upsert_via_copy(all_records, constraint_list)
+    overwritten = await dao(session=session).bulk_upsert_via_copy(
+        all_records, constraint_list, overwrite_on=overwrite_on
+    )
+    if overwritten:
+        logger.info(
+            "%s: %d рядків перезаписано іншим значенням %s",
+            dao.__name__, overwritten, overwrite_on,
+        )
 
 
 async def update_worker(
-    engine, path: str, archive_dao, constraint, chunk_size: int, session: AsyncSession, lumg_id: int = 1
+    engine, path: str, archive_dao, constraint, chunk_size: int, session: AsyncSession,
+    lumg_id: int = 1, overwrite_on: str | None = None,
 ):
     archive_engine = engine(path=path, chunk_size=chunk_size, session=session, lumg_id=lumg_id)
     archives_gen = archive_engine.read()
-    await update_archive(archives_gen, archive_dao, constraint, session)
+    await update_archive(archives_gen, archive_dao, constraint, session, overwrite_on)
 
 
+# The last column: daily and hourly rows are keyed by (line_id, period) alone
+# and a later import whose volume differs replaces the row. The source
+# re-exports the same records with the last float32 bit changed, which used to
+# pile up as duplicates while volume was part of the key.
 WORKERS = [
-    (DailyEngine,  DailyArchiveDao,  DAILY_ARCHIVE_CONSTRAINT),
-    (HourlyEngine, HourlyArchiveDao, HOURLY_ARCHIVE_CONSTRAINT),
-    (EditEngine,   EditArchiveDao,   EDIT_ARCHIVE_CONSTRAINT),
-    (SysEngine,    SysArchiveDao,    SYS_ARCHIVE_CONSTRAINT),
-    (ParamEngine,  ParamDao,         PARAM_CONSTRAINT),
+    (DailyEngine,  DailyArchiveDao,  DAILY_ARCHIVE_CONSTRAINT,  "volume"),
+    (HourlyEngine, HourlyArchiveDao, HOURLY_ARCHIVE_CONSTRAINT, "volume"),
+    (EditEngine,   EditArchiveDao,   EDIT_ARCHIVE_CONSTRAINT,   None),
+    (SysEngine,    SysArchiveDao,    SYS_ARCHIVE_CONSTRAINT,    None),
+    (ParamEngine,  ParamDao,         PARAM_CONSTRAINT,          None),
 ]
 
 
-async def _run_engine(engine, path, archive_dao, constraint, chunk_size, lumg_id_val):
+async def _run_engine(engine, path, archive_dao, constraint, chunk_size, lumg_id_val, overwrite_on):
     """Run a single engine in its own session."""
     async with update_session_factory() as worker_session:
-        await update_worker(engine, path, archive_dao, constraint, chunk_size, worker_session, lumg_id_val)
+        await update_worker(
+            engine, path, archive_dao, constraint, chunk_size, worker_session,
+            lumg_id_val, overwrite_on,
+        )
 
 
 async def _run_all_engines_parallel(path: str, lumg_id_val: int, chunk_size: int):
     """Run all 5 archive engines in parallel for one (path, lumg_id) pair."""
     await asyncio.gather(*[
-        _run_engine(engine, path, archive_dao, constraint, chunk_size, lumg_id_val)
-        for engine, archive_dao, constraint in WORKERS
+        _run_engine(engine, path, archive_dao, constraint, chunk_size, lumg_id_val, overwrite_on)
+        for engine, archive_dao, constraint, overwrite_on in WORKERS
     ])
 
 

@@ -129,8 +129,9 @@ class TestHourlyArchive:
         assert resp.json()["last_period"] is None
 
     async def test_counts(self, admin_client, seed_topology):
-        line1 = seed_topology["line1"]
-        await _add(_hour(line1, 0), _hour(line1, 0, volume=101.0), _hour(line1, 1))
+        # one row per (line_id, period): two records in one hour means two lines
+        line1, line2 = seed_topology["line1"], seed_topology["line2"]
+        await _add(_hour(line1, 0), _hour(line2, 0, volume=101.0), _hour(line1, 1))
         resp = await admin_client.get(
             "/hourly_counts/",
             params={

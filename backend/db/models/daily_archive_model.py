@@ -19,7 +19,7 @@ class DailyArchiveBase(HlBaseModel):
     density: float
 
 
-DAILY_ARCHIVE_CONSTRAINT = ["line_id", "period", "volume"]
+DAILY_ARCHIVE_CONSTRAINT = ["line_id", "period"]
 
 
 class DailyArchive(DailyArchiveBase, table=True):

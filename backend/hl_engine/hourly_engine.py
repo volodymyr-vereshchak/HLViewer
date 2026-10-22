@@ -22,5 +22,6 @@ class HourlyEngine(Hostlib):
             create_class=HourlyArchiveCreate,
             chunk_size=chunk_size,
             lumg_id=lumg_id,
+            merge_duplicates=True,
             date_flag=False,
         )

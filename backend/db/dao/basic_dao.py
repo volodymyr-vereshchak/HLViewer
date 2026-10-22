@@ -43,11 +43,26 @@ class BasicDao:
         self,
         all_records: list,
         list_of_constraints: list[str],
-    ):
+        overwrite_on: str | None = None,
+    ) -> int:
         """Fast bulk upsert: asyncpg COPY into temp table (no constraint checks),
-        then single INSERT...WHERE NOT EXISTS (hash join, O(n) vs O(n log m) per-row)."""
+        then single INSERT...WHERE NOT EXISTS (hash join, O(n) vs O(n log m) per-row).
+
+        By default a row already present under the constraint key is left
+        alone. With `overwrite_on` it is overwritten instead whenever that
+        column differs (exact comparison), and its updated_at moves to NOW() —
+        so updated_at <> created_at marks every row a later import changed.
+        Within the batch the last record per key wins, which is also what lets
+        ON CONFLICT work at all: Postgres refuses one statement touching the
+        same key twice. Returns the number of rows overwritten."""
         if not all_records:
-            return
+            return 0
+        if overwrite_on is not None:
+            last_per_key = {
+                tuple(r[c] for c in list_of_constraints): r for r in all_records
+            }
+            all_records = list(last_per_key.values())
+        overwritten = 0
         try:
             # Map Python field names → actual DB column names (handles mixed case like A0su)
             field_to_col = {col.key: col.name for col in self.model.__table__.columns}
@@ -124,6 +139,25 @@ class BasicDao:
             else:
                 where_clause = ""
 
+            if overwrite_on is not None:
+                key_cond = " AND ".join(
+                    f'm."{c}" = {col_to_alias[c]}' for c in list_of_constraints
+                )
+                set_cols = [
+                    f'"{n}" = t.c{i}' for i, n in enumerate(data_col_names)
+                    if n not in list_of_constraints
+                ]
+                if ("updated_at" in self.model.__table__.columns
+                        and "updated_at" not in data_col_names):
+                    set_cols.append('"updated_at" = NOW()')
+                result = await self.session.execute(text(
+                    f"UPDATE {main_table} m SET {', '.join(set_cols)} "
+                    f"FROM {temp_table} t WHERE {key_cond} "
+                    f'AND m."{overwrite_on}" IS DISTINCT FROM '
+                    f"{col_to_alias[overwrite_on]}"
+                ))
+                overwritten = result.rowcount
+
             await self.session.execute(text(
                 f"INSERT INTO {main_table} ({insert_cols}{auto_insert}) "
                 f"SELECT {select_cols}{auto_select} FROM {temp_table} t"
@@ -133,6 +167,7 @@ class BasicDao:
 
             await self.session.execute(text(f"DROP TABLE {temp_table}"))
             await self.session.commit()
+            return overwritten
         except Exception as e:
             self.logger.error(
                 f"Unexpected error in bulk_upsert_via_copy: {e}", exc_info=True

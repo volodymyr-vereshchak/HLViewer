@@ -107,6 +107,67 @@ class TestBulkUpsertViaCopy:
         assert await _all_hourly() == []
 
 
+class TestOverwriteOnVolume:
+    """Daily/hourly import mode: one row per (line_id, period); a later import
+    with a different volume replaces it and moves updated_at."""
+
+    async def _upsert(self, records) -> int:
+        async with async_session_factory() as session:
+            return await HourlyArchiveDao(session).bulk_upsert_via_copy(
+                records, HOURLY_ARCHIVE_CONSTRAINT, overwrite_on="volume"
+            )
+
+    async def test_same_volume_is_left_alone(self, seed_topology):
+        line_id = seed_topology["line1"]
+        await self._upsert([_hour_record(line_id, 0)])
+        assert await self._upsert([_hour_record(line_id, 0, pressure=9.9)]) == 0
+        [row] = await _all_hourly()
+        assert row.pressure == 5.2
+        assert row.updated_at == row.created_at
+
+    async def test_different_volume_overwrites_the_row(self, seed_topology):
+        """The source re-exports a record with the last float32 bit changed;
+        exact comparison counts that as different, by decision."""
+        line_id = seed_topology["line1"]
+        await self._upsert([_hour_record(line_id, 0, volume=90969.90625)])
+        changed = _hour_record(line_id, 0, volume=90969.9140625, pressure=6.1)
+        assert await self._upsert([changed]) == 1
+        [row] = await _all_hourly()
+        assert row.volume == 90969.9140625
+        assert row.pressure == 6.1
+        assert row.updated_at > row.created_at
+
+    async def test_zero_overwrites_too(self, seed_topology):
+        line_id = seed_topology["line1"]
+        await self._upsert([_hour_record(line_id, 0, volume=5000.0)])
+        assert await self._upsert([_hour_record(line_id, 0, volume=0.0)]) == 1
+        [row] = await _all_hourly()
+        assert row.volume == 0.0
+
+    async def test_same_key_twice_in_one_batch_last_wins(self, seed_topology):
+        """Two monthly files can both hold the boundary period; Postgres would
+        refuse an UPDATE touching one row twice."""
+        line_id = seed_topology["line1"]
+        await self._upsert([_hour_record(line_id, 0, volume=1.0)])
+        await self._upsert([
+            _hour_record(line_id, 0, volume=2.0),
+            _hour_record(line_id, 0, volume=3.0),
+            _hour_record(line_id, 1, volume=4.0),
+            _hour_record(line_id, 1, volume=5.0),
+        ])
+        rows = await _all_hourly()
+        assert [(r.period.hour, r.volume) for r in rows] == [(0, 3.0), (1, 5.0)]
+
+    async def test_overwrites_do_not_burn_sequence(self, seed_topology):
+        line_id = seed_topology["line1"]
+        await self._upsert([_hour_record(line_id, h) for h in range(3)])
+        for volume in (101.0, 102.0, 103.0):
+            await self._upsert([_hour_record(line_id, h, volume=volume) for h in range(3)])
+        rows = await _all_hourly()
+        assert max(r.id for r in rows) == 3
+        assert {r.volume for r in rows} == {103.0}
+
+
 class TestBulkUpsertWithUpdate:
     async def test_conflict_updates_row(self, seed_topology):
         line_id = seed_topology["line1"]
@@ -114,7 +175,7 @@ class TestBulkUpsertWithUpdate:
         async with async_session_factory() as session:
             dao = HourlyArchiveDao(session)
             await dao.bulk_upsert_with_update([record], HOURLY_ARCHIVE_CONSTRAINT)
-            # same constraint key (line_id, period, volume) → update, not insert
+            # same constraint key (line_id, period) → update, not insert
             changed = dict(record, pressure=9.9)
             await dao.bulk_upsert_with_update([changed], HOURLY_ARCHIVE_CONSTRAINT)
         rows = await _all_hourly()

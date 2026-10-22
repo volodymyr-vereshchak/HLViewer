@@ -6,6 +6,7 @@ test database. Verifies auto-creation of calcs/lines, cache reuse and chunking.
 import struct
 from datetime import date, datetime
 
+import pytest
 from sqlmodel import select
 
 from backend.db.dao.daily_archive_dao import DailyArchiveDao
@@ -19,6 +20,7 @@ from backend.db.models.hourly_archive_model import (
 )
 from backend.hl_engine.daily_engine import DailyEngine
 from backend.hl_engine.hourly_engine import HourlyEngine
+from backend.hl_engine.main import update_archive
 
 
 def _pack_hours(day: int, hours: range) -> bytes:
@@ -150,3 +152,54 @@ class TestDailyIngest:
         periods = sorted(r.period for r in rows)
         assert periods[0] == date(2024, 12, 20)
         assert periods[-1] == date(2024, 12, 24)
+
+
+def _pack_hour(month: int, day: int, year: int, hour: int, volume: float,
+               pressure: float = 37.3, temperature: float = 20.0) -> bytes:
+    return struct.pack(
+        "=5B6f", month, day, year, hour, 0, volume, 0.0, 0.1, pressure, temperature, 0.7
+    )
+
+
+async def _ingest_like_updater(path: str, lumg_id: int) -> None:
+    """The production path: whole engine output → one keyed upsert."""
+    async with async_session_factory() as session:
+        engine = HourlyEngine(session=session, path=path, lumg_id=lumg_id)
+        await update_archive(
+            engine.read(), HourlyArchiveDao, HOURLY_ARCHIVE_CONSTRAINT, session,
+            overwrite_on="volume",
+        )
+
+
+class TestSamePeriodTwice:
+    async def test_clock_back_hour_in_one_file_is_one_summed_row(
+        self, seed_topology, tmp_path
+    ):
+        """«Побут 1», 27.10.2024: the meter wrote 03:00 twice."""
+        (tmp_path / "S012R1R.A24").write_bytes(
+            _pack_hour(10, 27, 24, 2, 7452.0)
+            + _pack_hour(10, 27, 24, 3, 7395.0, pressure=37.2)
+            + _pack_hour(10, 27, 24, 3, 7383.0, pressure=37.4)
+            + _pack_hour(10, 27, 24, 4, 7498.0)
+        )
+        await _ingest_like_updater(str(tmp_path), seed_topology["lumg"])
+
+        async with async_session_factory() as session:
+            rows = (await session.execute(
+                select(HourlyArchive).order_by(HourlyArchive.period)
+            )).scalars().all()
+        assert [(r.period.hour, r.volume) for r in rows] == [
+            (2, 7452.0), (3, 14778.0), (4, 7498.0),
+        ]
+        assert rows[1].pressure == pytest.approx(37.3)
+
+    async def test_two_monthly_files_later_one_wins(self, seed_topology, tmp_path):
+        """The same moment in two files is one record read twice: never
+        summed, the later month's file replaces the earlier one's."""
+        (tmp_path / "S012R1R.926").write_bytes(_pack_hour(10, 1, 26, 6, 100.0))
+        (tmp_path / "S012R1R.A26").write_bytes(_pack_hour(10, 1, 26, 6, 101.0))
+        await _ingest_like_updater(str(tmp_path), seed_topology["lumg"])
+
+        async with async_session_factory() as session:
+            [row] = (await session.execute(select(HourlyArchive))).scalars().all()
+        assert row.volume == 101.0
