@@ -11,7 +11,7 @@ the frontend trends consume all three line kinds identically.
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -31,7 +31,8 @@ from backend.db.models.dpd_line_model import (
     DpdLineDeviceRead,
     DpdLineList,
 )
-from backend.services import dpd_line_refresh
+from backend.db.models.grmu_branch_model import GrmuBranch
+from backend.services import dpd_line_archive_cleanup, dpd_line_refresh
 from backend.utils.dpd_units import normalize_press_unit
 
 logger = logging.getLogger(__name__)
@@ -212,6 +213,49 @@ class DpdLineRouter:
             summary="Init/update job status of the line",
         )
         self.router.add_api_route(
+            path="/dpd_lines/{dl_id}/archive/preview",
+            tags=["dpd_lines"],
+            endpoint=self.preview_archive_purge,
+            methods=["GET"],
+            summary="How much of this DPD line's archive a range holds",
+            description=(
+                "Daily and hourly counts over a range of commercial days "
+                "(07:00 to 07:00), plus the first and last day stored. Either "
+                "end may be left out; neither means the whole archive."
+            ),
+        )
+        self.router.add_api_route(
+            path="/dpd_lines/{dl_id}/archive",
+            tags=["dpd_lines"],
+            endpoint=self.purge_archive,
+            methods=["DELETE"],
+            summary="Remove this DPD line's archive over a range",
+            description=(
+                "Daily and hourly rows together. 409 while the line's init or "
+                "update is running. Admin-only (DELETE)."
+            ),
+        )
+        self.router.add_api_route(
+            path="/dpd_lines/archive/bulk/preview",
+            tags=["dpd_lines"],
+            endpoint=self.preview_bulk_archive_purge,
+            methods=["GET"],
+            summary="How much of many DPD lines' archives a range holds",
+            description="Every DPD line of `branch_id`, or of all branches when left out.",
+        )
+        self.router.add_api_route(
+            path="/dpd_lines/archive/bulk",
+            tags=["dpd_lines"],
+            endpoint=self.purge_bulk_archive,
+            methods=["DELETE"],
+            summary="Remove the archives of every DPD line of a branch, or of all",
+            description=(
+                "Every DPD line of `branch_id` — of every branch when it is "
+                "left out — in one transaction. 409 while any of those lines "
+                "is being initialized or updated. Admin-only (DELETE)."
+            ),
+        )
+        self.router.add_api_route(
             path="/daily_dpd/",
             tags=["dpd_lines"],
             endpoint=self.get_daily_archive,
@@ -332,6 +376,99 @@ class DpdLineRouter:
 
     async def init_status(self, dl_id: int) -> dict:
         return await dpd_line_refresh.read_status(dl_id)
+
+    # ── archive purge ─────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _purge_range(since: Optional[date], until: Optional[date],
+                     removing: bool) -> None:
+        """Refuse a range that reads backwards. No dates is the whole archive."""
+        refusal = dpd_line_archive_cleanup.valid(since, until)
+        if refusal:
+            raise HTTPException(status_code=400, detail=refusal)
+
+    @staticmethod
+    def _refuse_busy(names: List[str]) -> None:
+        if names:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Зараз оновлюється: " + ", ".join(names)
+                       + ". Дочекайтеся кінця і повторіть",
+            )
+
+    async def preview_archive_purge(
+        self,
+        dl_id: int,
+        from_date: Optional[date] = Query(
+            None, description="Перша комерційна доба, включно. Порожньо — від початку"),
+        to_date: Optional[date] = Query(
+            None, description="Остання комерційна доба, включно. Порожньо — до кінця"),
+        session: AsyncSession = Depends(get_session),
+    ) -> dict:
+        line = await session.get(DpdLine, dl_id)
+        if not line:
+            raise HTTPException(status_code=404, detail="DPD line not found")
+        self._purge_range(from_date, to_date, removing=False)
+        return {
+            "line_id": line.id,
+            "name": line.name,
+            "counts": await dpd_line_archive_cleanup.counts(
+                session, dl_id, from_date, to_date),
+            "extent": await dpd_line_archive_cleanup.extent(session, dl_id),
+        }
+
+    async def purge_archive(
+        self,
+        dl_id: int,
+        from_date: Optional[date] = Query(None),
+        to_date: Optional[date] = Query(None),
+        session: AsyncSession = Depends(get_session),
+    ) -> dict:
+        if not await session.get(DpdLine, dl_id):
+            raise HTTPException(status_code=404, detail="DPD line not found")
+        self._purge_range(from_date, to_date, removing=True)
+        self._refuse_busy(await dpd_line_archive_cleanup.line_busy(session, dl_id))
+        removed = await dpd_line_archive_cleanup.purge(
+            session, dl_id, from_date, to_date)
+        await session.commit()
+        return {"removed": removed}
+
+    @staticmethod
+    async def _branch_or_404(branch_id: Optional[int], session: AsyncSession) -> None:
+        if branch_id is not None and not await session.get(GrmuBranch, branch_id):
+            raise HTTPException(status_code=404, detail="Branch not found")
+
+    async def preview_bulk_archive_purge(
+        self,
+        branch_id: Optional[int] = Query(None, description="Філія. Порожньо — усі філії"),
+        from_date: Optional[date] = Query(None),
+        to_date: Optional[date] = Query(None),
+        session: AsyncSession = Depends(get_session),
+    ) -> dict:
+        await self._branch_or_404(branch_id, session)
+        self._purge_range(from_date, to_date, removing=False)
+        return {
+            "branch_id": branch_id,
+            "lines": await dpd_line_archive_cleanup.bulk_line_count(session, branch_id),
+            "counts": await dpd_line_archive_cleanup.bulk_counts(
+                session, branch_id, from_date, to_date),
+            "extent": await dpd_line_archive_cleanup.bulk_extent(session, branch_id),
+        }
+
+    async def purge_bulk_archive(
+        self,
+        branch_id: Optional[int] = Query(None),
+        from_date: Optional[date] = Query(None),
+        to_date: Optional[date] = Query(None),
+        session: AsyncSession = Depends(get_session),
+    ) -> dict:
+        await self._branch_or_404(branch_id, session)
+        self._purge_range(from_date, to_date, removing=True)
+        self._refuse_busy(await dpd_line_archive_cleanup.bulk_busy(session, branch_id))
+        removed = await dpd_line_archive_cleanup.bulk_purge(
+            session, branch_id, from_date, to_date)
+        await session.commit()
+        return {"removed": removed}
 
     # ── archives ──────────────────────────────────────────────────────────────
 

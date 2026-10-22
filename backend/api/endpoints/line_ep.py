@@ -16,6 +16,7 @@ from backend.db.models import (
     LineUpdate,
 )
 from backend.db.models.gas_volume_calc_model import GasVolumeCalc
+from backend.db.models.grmu_branch_model import GrmuBranch
 from backend.db.models.line_model import Line
 from backend.db.models.lumg_model import Lumg
 from backend.services import line_archive_cleanup
@@ -74,10 +75,11 @@ class LineRouter:
             summary="How much of this line's archive a range holds",
             description=(
                 "Counts by kind — добові, годинні, зміни, аварії, параметри — "
-                "plus the first and last day the line has anything on. Either "
-                "end of the range may be left out: only a start means "
-                "everything from that day on, only an end means everything up "
-                "to it, both mean the range between them, ends included."
+                "plus the first and last day the line has anything on. Days are "
+                "commercial (07:00 to 07:00). Either end of the range may be "
+                "left out: only a start means everything from that day on, "
+                "only an end means everything up to it, both mean the range "
+                "between them, ends included, and neither the whole archive."
             ),
         )
         self.router.add_api_route(
@@ -92,6 +94,34 @@ class LineRouter:
                 "the preview. Irreversible: what goes comes back only by "
                 "reading the hostlib files again, which is the update asked "
                 "for by hand on that path. Admin-only."
+            ),
+        )
+        # Not under /lines/{line_id}: "/lines/archive/bulk" differs from every
+        # per-line path in a literal segment, so the int id never meets it.
+        self.router.add_api_route(
+            path="/lines/archive/bulk/preview",
+            tags=["lines"],
+            endpoint=self.preview_bulk_archive_purge,
+            methods=["GET"],
+            status_code=status.HTTP_200_OK,
+            summary="How much of many lines' archives a range holds",
+            description=(
+                "The per-line preview summed over every line of `branch_id`, "
+                "or of all branches when it is left out, plus how many lines "
+                "that is. Same range rules."
+            ),
+        )
+        self.router.add_api_route(
+            path="/lines/archive/bulk",
+            tags=["lines"],
+            endpoint=self.purge_bulk_archive,
+            methods=["DELETE"],
+            status_code=status.HTTP_200_OK,
+            summary="Remove the archives of every line of a branch, or of all",
+            description=(
+                "All five archives of every line of `branch_id` — of every "
+                "branch when it is left out — in one transaction. "
+                "Irreversible, like the per-line purge. Admin-only."
             ),
         )
 
@@ -150,14 +180,10 @@ class LineRouter:
     @staticmethod
     def _range(since: Optional[date], until: Optional[date],
                removing: bool) -> None:
-        """Refuse a range that cannot be used.
-
-        Counting has no lower bar than making sense: with neither date it says
-        what the whole archive holds, which is what the screen opens with.
-        Removing does — two empty fields must not clear a line's history.
-        """
+        """Refuse a range that reads backwards. No dates is the whole archive
+        — for the preview as for the removal."""
         refusal = line_archive_cleanup.valid(since, until)
-        if refusal and (removing or since is not None or until is not None):
+        if refusal:
             raise HTTPException(status_code=400, detail=refusal)
 
     async def preview_archive_purge(
@@ -193,6 +219,49 @@ class LineRouter:
         self._range(from_date, to_date, removing=True)
         removed = await line_archive_cleanup.purge(
             session, line_id, from_date, to_date)
+        await session.commit()
+        return {"removed": removed}
+
+    @staticmethod
+    async def _branch_or_404(branch_id: Optional[int], session: AsyncSession) -> None:
+        if branch_id is not None and not await session.get(GrmuBranch, branch_id):
+            raise HTTPException(status_code=404, detail="Branch not found")
+
+    async def preview_bulk_archive_purge(
+        self,
+        branch_id: Optional[int] = Query(
+            None, description="Філія. Порожньо — усі філії"),
+        from_date: Optional[date] = Query(
+            None, description="Перший день, включно. Порожньо — від початку архіву"),
+        to_date: Optional[date] = Query(
+            None, description="Останній день, включно. Порожньо — до кінця архіву"),
+        session: AsyncSession = Depends(get_session),
+    ):
+        """What clearing this range on every line of the branch (or of all
+        branches) would take."""
+        await self._branch_or_404(branch_id, session)
+        self._range(from_date, to_date, removing=False)
+        return {
+            "branch_id": branch_id,
+            "lines": await line_archive_cleanup.bulk_line_count(session, branch_id),
+            "counts": await line_archive_cleanup.bulk_counts(
+                session, branch_id, from_date, to_date),
+            "extent": await line_archive_cleanup.bulk_extent(session, branch_id),
+        }
+
+    async def purge_bulk_archive(
+        self,
+        branch_id: Optional[int] = Query(None),
+        from_date: Optional[date] = Query(None),
+        to_date: Optional[date] = Query(None),
+        session: AsyncSession = Depends(get_session),
+    ):
+        """Remove the range from every line of the branch, or of all branches.
+        Counted first by the screen that calls it."""
+        await self._branch_or_404(branch_id, session)
+        self._range(from_date, to_date, removing=True)
+        removed = await line_archive_cleanup.bulk_purge(
+            session, branch_id, from_date, to_date)
         await session.commit()
         return {"removed": removed}
 
