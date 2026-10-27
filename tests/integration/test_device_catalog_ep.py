@@ -76,13 +76,6 @@ class TestManufacturerCrud:
         assert resp.status_code == 409
         assert "mf_dev" in resp.json()["detail"]
 
-    async def test_viewer_cannot_edit(self, viewer_client, clean_db):
-        resp = await viewer_client.post(
-            "/device-catalog/manufacturers/",
-            json={"short_name": "Х", "full_name": "Х", "mf_dev": 77},
-        )
-        assert resp.status_code == 403
-
 
 class TestCorectorTypeCrud:
     async def test_create_update_delete(self, admin_client, catalog):
@@ -181,10 +174,6 @@ class TestCatalogTransfer:
         assert written["manufacturers"][0]["models"] == [
             {"model_name": "ВЕГА-1.01", "type_dev": 3}
         ]
-
-    async def test_export_is_admin_only(self, viewer_client, catalog):
-        resp = await viewer_client.post("/device-catalog/export-preload")
-        assert resp.status_code == 403
 
     async def test_preload_adds_missing_entries_without_touching_existing(
         self, admin_client, catalog

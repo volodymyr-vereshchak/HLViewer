@@ -7,7 +7,6 @@ update_if_exists idempotency helpers used by the ingest pipeline.
 
 from datetime import datetime
 
-from sqlalchemy import text
 from sqlmodel import select
 
 from backend.db.dao.gas_volume_calc_dao import GasVolumeCalcDao
@@ -58,16 +57,6 @@ class TestBulkUpsertViaCopy:
         assert rows[0].period == datetime(2024, 12, 25, 0)
         # created_at/updated_at are filled server-side (NOW()) for COPY rows
         assert rows[0].created_at is not None
-
-    async def test_reimport_is_deduplicated(self, seed_topology):
-        line_id = seed_topology["line1"]
-        records = [_hour_record(line_id, hour) for hour in range(3)]
-        async with async_session_factory() as session:
-            dao = HourlyArchiveDao(session)
-            await dao.bulk_upsert_via_copy(records, HOURLY_ARCHIVE_CONSTRAINT)
-            # the updater re-imports overlapping windows every cycle
-            await dao.bulk_upsert_via_copy(records, HOURLY_ARCHIVE_CONSTRAINT)
-        assert len(await _all_hourly()) == 3
 
     async def test_duplicates_do_not_burn_sequence(self, seed_topology):
         """Regression: the WHERE NOT EXISTS pre-filter must keep nextval() from

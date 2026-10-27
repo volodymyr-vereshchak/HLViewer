@@ -67,16 +67,11 @@ class TestTheLegacyHelper:
     """It used to attach a second rotating handler to the same file and cut the
     whole `backend.*` tree off the root handlers."""
 
-    def test_it_adds_no_handlers(self):
-        logger = logger_setup("backend-test-no-handlers")
-        assert logger.handlers == []
-
-    def test_it_keeps_propagation(self):
+    def test_it_is_the_plain_module_logger(self):
         """Every module logger is `backend.something`. With propagation off at
         "backend", none of them reached the root's files — from whenever the
         first DAO happened to be constructed."""
-        logger = logger_setup("backend-test-propagates")
+        logger = logger_setup("backend")
+        assert logger is logging.getLogger("backend")
+        assert logger.handlers == []
         assert logger.propagate is True
-
-    def test_it_is_the_same_logger_the_module_name_gives(self):
-        assert logger_setup("backend") is logging.getLogger("backend")

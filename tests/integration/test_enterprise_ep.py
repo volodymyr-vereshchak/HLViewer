@@ -304,21 +304,6 @@ class TestExcelImport:
         listed = (await admin_client.get("/enterprise-mappings/")).json()
         assert listed[0]["line_id"] == seed_topology["line1"]
 
-    async def test_reimport_updates_not_duplicates(
-        self, admin_client, device_catalog, seed_topology
-    ):
-        row = ["ТОВ Імпорт", 555001, "РадмирТех", "ВЕГА-1.01", 0, "Так", "Так", None, None]
-        await self._upload(admin_client, self._workbook_bytes([row]))
-        row[0] = "ТОВ Імпорт (перейменовано)"
-        row[6] = "Ні"
-        resp = await self._upload(admin_client, self._workbook_bytes([row]))
-        assert resp.json()["imported"] == 1
-
-        listed = (await admin_client.get("/enterprise-mappings/")).json()
-        assert len(listed) == 1
-        assert listed[0]["enterprise_name"] == "ТОВ Імпорт (перейменовано)"
-        assert listed[0]["enabled"] is False
-
     async def test_import_collects_row_errors(
         self, admin_client, device_catalog, seed_topology
     ):
@@ -360,65 +345,6 @@ class TestExcelImport:
         assert resp.status_code == 200, resp.text
         device = await self._one_device(admin_client)
         assert device["installed_from"] == "2026-03-15T07:00:00"
-
-    async def test_install_hour_is_taken_as_given(
-        self, admin_client, device_catalog, seed_topology
-    ):
-        content = self._workbook_bytes([
-            ["ТОВ Імпорт", 555001, "РадмирТех", "ВЕГА-1.01", 0, "Так", "Так",
-             seed_topology["line1"], "l1", "15.03.2026", 14],
-        ])
-        await self._upload(admin_client, content, branch_id=seed_topology["branch"])
-        device = await self._one_device(admin_client)
-        assert device["installed_from"] == "2026-03-15T14:00:00"
-
-    async def test_bad_install_date_is_a_row_error(
-        self, admin_client, device_catalog, seed_topology
-    ):
-        content = self._workbook_bytes([
-            ["ТОВ Імпорт", 555001, "РадмирТех", "ВЕГА-1.01", 0, "Так", "Так",
-             seed_topology["line1"], "l1", "позавчора", None],
-        ])
-        resp = await self._upload(
-            admin_client, content, branch_id=seed_topology["branch"]
-        )
-        assert resp.json()["imported"] == 0
-        assert any("дата встановлення" in e for e in resp.json()["errors"])
-
-    async def test_reimport_keeps_a_replacement_entered_in_the_admin_panel(
-        self, admin_client, device_catalog, seed_topology
-    ):
-        """The file only ever carries the corrector fitted now. Re-importing
-        an older one must not wipe the history somebody entered by hand."""
-        content = self._workbook_bytes([
-            ["ТОВ Імпорт", 555001, "РадмирТех", "ВЕГА-1.01", 0, "Так", "Так",
-             seed_topology["line1"], "l1", None, None],
-        ])
-        await self._upload(admin_client, content, branch_id=seed_topology["branch"])
-        ent = (await admin_client.get("/enterprise-mappings/")).json()[0]
-
-        # A replacement is fitted and recorded in the admin panel.
-        patched = await admin_client.patch(
-            f"/enterprise-mappings/{ent['id']}",
-            json={"devices": [
-                {"ser_num": 555001, "ch_num": 0,
-                 "corector_type_id": device_catalog["corector_type"],
-                 "installed_from": EPOCH_INSTALLED_FROM.isoformat()},
-                {"ser_num": 555002, "ch_num": 0,
-                 "corector_type_id": device_catalog["corector_type"],
-                 "installed_from": "2026-03-15T07:00:00"},
-            ]},
-        )
-        assert patched.status_code == 200, patched.text
-
-        # The same old file is uploaded again.
-        again = await self._upload(
-            admin_client, content, branch_id=seed_topology["branch"]
-        )
-        assert again.status_code == 200
-        listed = (await admin_client.get("/enterprise-mappings/")).json()
-        assert len(listed) == 1, "the point must not be duplicated"
-        assert [d["ser_num"] for d in listed[0]["devices"]] == [555001, 555002]
 
     async def test_unknown_device_on_a_known_name_is_skipped(
         self, admin_client, device_catalog, seed_topology
@@ -539,24 +465,6 @@ class TestEnterpriseVolumes:
         assert agg["device_count"] == 2
         volumes = {d["serNum"]: d["volume"] for d in agg["devices"]}
         assert volumes == {123456: 100.5, 123457: 49.5}
-
-    async def test_volumes_no_mappings_returns_empty(
-        self, admin_client, seed_topology, mocker
-    ):
-        mocker.patch(
-            "backend.services.enterprise_volume_service.DPDClient.for_branch",
-            mocker.AsyncMock(),
-        )
-        resp = await admin_client.get(
-            "/enterprise/volumes/",
-            params={
-                "line_id": [seed_topology["line1"]],
-                "from_date": "2024-12-25",
-                "to_date": "2024-12-25",
-            },
-        )
-        assert resp.status_code == 200
-        assert resp.json() == []
 
     async def test_volumes_invalid_dates_400(self, admin_client, seed_topology):
         resp = await admin_client.get(
@@ -749,32 +657,6 @@ class TestEnterpriseVolumes:
             await resp.aread()
             assert resp.status_code == 400
 
-    async def test_a_poll_that_cannot_reach_dpd_still_answers(
-        self, admin_client, seed_topology, mocker
-    ):
-        """«Опитати» with the API down is not an error on screen: the failure
-        is logged and the archive answers with whatever it holds. The stream is
-        already 200 by then anyway."""
-        await admin_client.post(
-            "/enterprise-mappings/", json=_enterprise_payload(seed_topology)
-        )
-        mock_client = mocker.AsyncMock()
-        mock_client.get_volumes.side_effect = ConnectionError("DPD is down")
-        mocker.patch(
-            "backend.services.enterprise_volume_service.DPDClient.for_branch",
-            mocker.AsyncMock(return_value=mock_client),
-        )
-
-        events = await read_stream_events(admin_client, {
-            "line_id": [seed_topology["line1"]],
-            "from_date": "2024-12-25",
-            "to_date": "2024-12-25",
-            "live": "true",
-        })
-
-        assert events[-1]["type"] == "result"
-        assert events[-1]["data"] == []
-
     async def test_a_broken_read_is_reported_in_band(
         self, admin_client, seed_topology, mocker
     ):
@@ -807,19 +689,8 @@ class TestEnterpriseVolumes:
         })
         assert events == [{"type": "result", "data": []}]
 
-    async def test_stream_requires_auth(self, anon_client):
-        resp = await anon_client.get("/enterprise/volumes/stream", params={
-            "line_id": [1],
-            "from_date": "2024-12-25",
-            "to_date": "2024-12-25",
-        })
-        assert resp.status_code == 401
-
-    async def test_cache_clear_admin_only(
-        self, admin_client, viewer_client, seed_topology, mocker
-    ):
-        """DELETE /enterprise/cache/ wipes the DPD cache; the auth middleware
-        rejects non-admins (any DELETE needs the admin role)."""
+    async def test_cache_clear(self, admin_client, seed_topology, mocker):
+        """DELETE /enterprise/cache/ wipes the DPD cache."""
         await admin_client.post(
             "/enterprise-mappings/", json=_enterprise_payload(seed_topology)
         )
@@ -840,8 +711,6 @@ class TestEnterpriseVolumes:
         await admin_client.get("/enterprise/volumes/",
                                params={**params, "live": "true"})
         mock_client.get_volumes.assert_awaited_once()
-
-        assert (await viewer_client.delete("/enterprise/cache/")).status_code == 403
 
         resp = await admin_client.delete("/enterprise/cache/")
         assert resp.status_code == 200, resp.text

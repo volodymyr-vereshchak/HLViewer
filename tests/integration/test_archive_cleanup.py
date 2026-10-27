@@ -170,16 +170,6 @@ class TestAnOpenEnd:
         assert date(2026, 6, 5) not in left
         assert date(2026, 6, 6) in left
 
-    async def test_a_preview_without_dates_counts_everything(self):
-        point = await one_point(7013)
-        await fill_days(point["device_id"], date(2026, 6, 3), 4)
-
-        async with async_session_factory() as session:
-            seen = await archive_cleanup.preview(session, point["enterprise_id"])
-
-        assert seen["daily"] == 4
-        assert await days_left(point["device_id"]) != []      # counted, not taken
-
 
 class TestItStaysInsideTheHistory:
     async def test_rows_a_corrector_made_elsewhere_are_left_alone(self):

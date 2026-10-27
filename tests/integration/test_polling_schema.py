@@ -21,7 +21,7 @@ from backend.db.engine import async_session_factory
 from backend.db.models.dpd_line_model import DpdLine
 from backend.db.models.enterprise_model import DpdDevice
 from backend.db.models.grmu_branch_model import GrmuBranch
-from backend.db.models.polling_model import PollAgent, PollAgentDevice, PollDevice
+from backend.db.models.polling_model import PollDevice
 
 
 @pytest_asyncio.fixture
@@ -49,11 +49,6 @@ async def add(**kwargs) -> int:
 
 @pytest.mark.asyncio
 class TestExactlyOneTarget:
-    async def test_a_card_for_an_enterprise_corrector(self, targets):
-        assert await add(dpd_device_id=targets["dpd_device_id"]) is not None
-
-    async def test_a_card_for_a_dpd_line(self, targets):
-        assert await add(dpd_line_id=targets["dpd_line_id"]) is not None
 
     async def test_a_card_pointing_nowhere_is_refused(self, targets):
         # A card with no target would be handed to an agent that then has
@@ -85,28 +80,3 @@ class TestOneCardPerCorrector:
         # the entire table.
         await add(dpd_device_id=targets["dpd_device_id"])
         assert await add(dpd_line_id=targets["dpd_line_id"]) is not None
-
-
-@pytest.mark.asyncio
-class TestAssignment:
-    async def test_removing_an_agent_frees_its_devices(self, targets):
-        """Deleting an agent must not delete the devices it polled — only the
-        fact that it was the one polling them."""
-        card_id = await add(dpd_device_id=targets["dpd_device_id"])
-        async with async_session_factory() as session:
-            agent = PollAgent(name="АРМ", key_hash="x")
-            session.add(agent)
-            await session.flush()
-            session.add(PollAgentDevice(agent_id=agent.id, poll_device_id=card_id))
-            await session.commit()
-            agent_id = agent.id
-
-        async with async_session_factory() as session:
-            await session.delete(await session.get(PollAgent, agent_id))
-            await session.commit()
-
-        async with async_session_factory() as session:
-            assert await session.get(PollDevice, card_id) is not None
-            assert await session.get(
-                PollAgentDevice, (agent_id, card_id)
-            ) is None

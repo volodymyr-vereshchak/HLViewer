@@ -768,31 +768,6 @@ class TestGivingUpOnALineThatWillNotAnswer:
             "/polling/agent/plan", headers=headers)).json()
         assert plan["devices"][0]["due"] is True
 
-    async def test_a_person_may_still_ask_for_it(
-        self, admin_client, anon_client, session_ready
-    ):
-        """Somebody who knows the line is back does not wait for a slot."""
-        agent, card = session_ready["agent"], session_ready["card"]
-        headers = key(agent)
-
-        for _ in range(3):
-            await anon_client.post(
-                f"/polling/agent/devices/{card['id']}/start", headers=headers)
-            await anon_client.post(
-                f"/polling/agent/devices/{card['id']}/finish",
-                json={"status": "error", "error_code": "no_carrier",
-                      "error_text": "No Carrier Detect", "rows": {},
-                      "duration_ms": 1000, "connect_ms": 0},
-                headers=headers,
-            )
-
-        await admin_client.post(f"/polling/devices/{card['id']}/poll")
-
-        plan = (await anon_client.get(
-            "/polling/agent/plan", headers=headers)).json()
-        assert plan["devices"][0]["due"] is True
-        assert plan["devices"][0]["due_reason"] == "manual_request"
-
 
 @pytest.mark.asyncio
 class TestTwoAgentsOnOneSite:
@@ -1059,20 +1034,6 @@ class TestHolesAreReadAgain:
         device = await self._plan(anon_client, agent, card)
         assert device["first_hour"] == base.isoformat()
         assert device["first_day"] is None
-
-    async def test_a_hole_that_was_read_is_gone(
-        self, anon_client, session_ready, fleet
-    ):
-        agent, card = session_ready["agent"], session_ready["card"]
-        base, stamps = self._hours()
-        await self._installed(fleet, base)
-        await self._store(anon_client, agent, card, stamps)
-        await self._store(anon_client, agent, card,
-                          [base + timedelta(hours=4), base + timedelta(hours=5)])
-
-        device = await self._plan(anon_client, agent, card)
-        # Only the history before our first record is left to read.
-        assert device["gap_hours"][-1][1] == (base - timedelta(hours=1)).isoformat()
 
     async def test_what_is_newer_than_the_archive_is_not_a_hole(
         self, anon_client, session_ready

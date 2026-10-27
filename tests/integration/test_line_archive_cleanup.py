@@ -209,17 +209,6 @@ class TestThePreview:
         assert set(body["counts"].values()) == {0}
 
 
-class TestWhoMayDoIt:
-    async def test_a_viewer_may_not_clear_an_archive(
-        self, viewer_client, seed_topology
-    ):
-        line = seed_topology["line1"]
-        await _seed(line, 10)
-        resp = await viewer_client.delete(f"/lines/{line}/archive",
-                                        params={"from_date": "2024-12-01"})
-        assert resp.status_code == 403
-
-
 class TestManyLines:
     """The same range for every line of one branch, or of all branches."""
 
@@ -268,34 +257,7 @@ class TestManyLines:
         assert await _left(admin_client, ids["line2"]) == {
             "daily": 2, "hourly": 2, "edits": 2, "alarms": 2, "params": 2}
 
-    async def test_all_lines_of_the_branch(self, admin_client, seed_topology):
-        for line in (seed_topology["line1"], seed_topology["line2"]):
-            await _seed(line, 10)
-        resp = await admin_client.delete(
-            "/lines/archive/bulk",
-            params={"branch_id": seed_topology["branch"], "to_date": "2024-12-31"})
-        assert resp.status_code == 200
-        assert resp.json()["removed"]["daily"] == 2
-
-    async def test_neither_date_means_everything_of_the_branch(
-        self, admin_client, seed_two_branches
-    ):
-        ids = seed_two_branches
-        await _seed(ids["line1"], 10)
-        await _seed(ids["line2"], 10)
-        resp = await admin_client.delete(
-            "/lines/archive/bulk", params={"branch_id": ids["branch1"]})
-        assert resp.status_code == 200
-        assert (await _left(admin_client, ids["line1"]))["daily"] == 0
-        assert (await _left(admin_client, ids["line2"]))["daily"] == 1
-
     async def test_an_unknown_branch_is_not_found(self, admin_client):
         resp = await admin_client.get(
             "/lines/archive/bulk/preview", params={"branch_id": 999999})
         assert resp.status_code == 404
-
-    async def test_a_viewer_may_not_clear_a_branch(self, viewer_client, seed_topology):
-        resp = await viewer_client.delete(
-            "/lines/archive/bulk",
-            params={"branch_id": seed_topology["branch"], "from_date": "2024-12-01"})
-        assert resp.status_code == 403

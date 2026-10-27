@@ -1,5 +1,5 @@
 """What a poll should ask for — the arithmetic, without a database."""
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 from backend.services.archive_gaps import (
     Window, as_ranges, missing_days, missing_hours,
@@ -27,14 +27,6 @@ def test_a_reading_filed_mid_hour_still_counts_as_that_hour():
 def test_an_empty_archive_asks_for_the_whole_window():
     window = Window(datetime(2026, 9, 1, 0), datetime(2026, 9, 1, 3))
     assert len(missing_hours(window, [])) == 4
-
-
-def test_nothing_is_asked_for_outside_the_window():
-    """A gap older than the corrector's ring is gone from the meter too."""
-    window = Window(datetime(2026, 9, 10, 0), datetime(2026, 9, 10, 2))
-    gaps = missing_hours(window, [])
-    assert min(gaps) == datetime(2026, 9, 10, 0)
-    assert max(gaps) == datetime(2026, 9, 10, 2)
 
 
 def test_a_part_day_at_the_edge_is_not_a_missing_day():

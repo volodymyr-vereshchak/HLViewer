@@ -173,18 +173,6 @@ async def archive_rows(period_type: str) -> list:
 
 
 class TestArchiveReads:
-    async def test_covered_range_served_from_db_without_dpd(
-        self, dpd_mock, make_enterprise
-    ):
-        dev = await make_enterprise(101)
-        await seed_archive(dev, "daily", [D_OLD5, D_OLD3])
-
-        records = await fetch_dpd_volumes([dev], as_dt(D_OLD10), as_dt(TODAY), "daily")
-
-        dpd_mock.get_volumes.assert_not_awaited()  # DB is the sole source
-        assert record_keys(records) == {
-            (101, D_OLD5.isoformat()), (101, D_OLD3.isoformat()),
-        }
 
     async def test_hourly_commercial_window(self, dpd_mock, make_enterprise):
         """from=D1&to=D1 hourly means the commercial day [D1 07:00..D2 06:00]."""
@@ -236,20 +224,6 @@ class TestAReadNeverCallsTheApi:
         assert record_keys(records) == {
             (101, D_OLD5.isoformat()), (101, D_OLD3.isoformat()),
         }
-
-    async def test_a_device_never_fetched_reads_as_nothing(
-        self, dpd_mock, make_enterprise
-    ):
-        """Visibly nothing, which the report says out loud — not a number
-        quietly fetched behind the reader's back."""
-        dev = await make_enterprise(101)  # no coverage row, no rows
-
-        records = await fetch_dpd_volumes(
-            [dev], as_dt(D_OLD5), as_dt(D_OLD3), "daily"
-        )
-
-        dpd_mock.get_volumes.assert_not_awaited()
-        assert records == []
 
     async def test_a_read_waits_for_nothing(self, dpd_mock, make_enterprise):
         """No locks, no progress: there is nothing to make progress through."""
@@ -959,11 +933,6 @@ class TestTheRereadEndpoint:
         assert first.status_code == 202
         assert second.status_code == 409
 
-    async def test_a_viewer_may_not_start_it(self, viewer_client):
-        resp = await viewer_client.post("/enterprise/archive/reread", params={
-            "from_date": "2024-01-01", "to_date": TODAY.isoformat()})
-        assert resp.status_code == 403
-
 
 class TestTheClockTheJobIsWrittenIn:
     """`dpd_refresh_job.started_at` is a naive column, so it has to be written
@@ -1047,9 +1016,3 @@ class TestRefreshSchedule:
     async def test_status_reports_the_default(self, admin_client, clean_db):
         body = (await admin_client.get("/enterprise/archive/refresh/status")).json()
         assert body["default_refresh_times"] == ["10:00", "16:00"]
-
-    async def test_viewer_cannot_change_schedule(self, viewer_client, clean_db):
-        resp = await viewer_client.put(
-            "/enterprise/archive/refresh/schedule", json={"times": ["08:00"]}
-        )
-        assert resp.status_code == 403

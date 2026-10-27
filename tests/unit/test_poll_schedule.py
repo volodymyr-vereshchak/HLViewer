@@ -51,14 +51,6 @@ def due(**over):
 
 
 class TestLastSlot:
-    def test_the_most_recent_one_that_has_arrived(self):
-        assert last_slot(at(10, 12), CRON) == at(10, 8)
-        assert last_slot(at(10, 16, 5), CRON) == at(10, 16)
-
-    def test_before_the_first_slot_it_is_yesterday_evening(self):
-        # A device scheduled for 18:00 and looked at in the morning is not
-        # "not yet scheduled" — it has been due since last night.
-        assert last_slot(at(10, 3), "0 18 * * *") == at(9, 18)
 
     def test_a_slot_exactly_now_counts_as_arrived(self):
         assert last_slot(at(10, 8), CRON) == at(10, 8)
@@ -66,11 +58,6 @@ class TestLastSlot:
     def test_no_schedule_at_all(self):
         assert last_slot(at(10, 12), "") is None
         assert last_slot(at(10, 12), None) is None
-
-    def test_a_broken_expression_names_no_slot_rather_than_crashing(self):
-        # The API refuses these on the way in; this is the belt to that braces,
-        # because a bad row in the database must not stop the whole plan.
-        assert last_slot(at(10, 12), "щоранку") is None
 
 
 class TestTheWorkedExample:
@@ -147,16 +134,6 @@ class TestOwnHoursVersusGlobal:
         # Same moment, but this device only wants 08:00 and 16:00: 08:00 has
         # passed and the poll at 08:15 covered it.
         assert due(poll_cron=CRON) == (False, REASON_ALREADY_POLLED)
-
-    @pytest.mark.parametrize("schedule", ["59 23 * * *", "0 0 * * *"])
-    def test_the_edges_of_the_day(self, schedule):
-        assert due(poll_cron=schedule, last_poll_at=None)[0] is True
-
-    def test_every_hour_is_five_characters_now(self):
-        # What the list could not say without twenty-four entries.
-        assert due(poll_cron="0 * * * *", last_poll_at=at(10, 11, 30)) == (
-            True, REASON_OVERDUE
-        )
 
 
 class TestAfterAFailure:

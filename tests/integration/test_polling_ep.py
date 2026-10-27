@@ -196,48 +196,27 @@ class TestDeviceCards:
         )
         assert resp.status_code == 422
 
-    async def test_the_schedule_is_validated(self, admin_client, targets):
-        card = await make_card(admin_client, dpd_device_id=targets["dpd_device_id"])
-        ok = await admin_client.put(
-            f"/polling/devices/{card['id']}", json={"poll_cron": " 30 18,6 * * * "}
-        )
-        assert ok.status_code == 200
-        # Tidied on the way in; what it says is what comes back.
-        assert ok.json()["poll_cron"] == "30 18,6 * * *"
-        # "25:00" would be a slot the agent silently never reaches.
-        bad = await admin_client.put(
-            f"/polling/devices/{card['id']}", json={"poll_cron": "0 25 * * *"}
-        )
-        assert bad.status_code == 400
-
-    async def test_the_phone_is_normalised(self, admin_client, targets):
-        # However it was written down, the agent gets one shape to dial.
+    async def test_card_fields_go_through_validation(self, admin_client, targets):
+        """The rules themselves are pinned in test_poll_validation; this is that
+        the card endpoints apply them on both create and update."""
         card = await make_card(
             admin_client,
             dpd_device_id=targets["dpd_device_id"],
             phone=" 050 123-45-67 ",
+            priority=5,
         )
         assert card["phone"] == "+380501234567"
-
-    async def test_a_number_that_cannot_be_dialled_is_refused(
-        self, admin_client, targets
-    ):
-        # Otherwise it surfaces as "no dialtone" on somebody else's machine.
-        resp = await admin_client.post(
-            "/polling/devices",
-            json={"dpd_device_id": targets["dpd_device_id"], "phone": "050123456"},
-        )
-        assert resp.status_code == 400
-
-    async def test_priority_is_a_range(self, admin_client, targets):
-        card = await make_card(
-            admin_client, dpd_device_id=targets["dpd_device_id"], priority=5
-        )
         assert card["priority"] == 5
-        bad = await admin_client.put(
-            f"/polling/devices/{card['id']}", json={"priority": 9}
+
+        ok = await admin_client.put(
+            f"/polling/devices/{card['id']}", json={"poll_cron": " 30 18,6 * * * "}
         )
-        assert bad.status_code == 400
+        assert ok.status_code == 200
+        assert ok.json()["poll_cron"] == "30 18,6 * * *"
+
+        for bad in ({"poll_cron": "0 25 * * *"}, {"priority": 9}, {"phone": "050123456"}):
+            resp = await admin_client.put(f"/polling/devices/{card['id']}", json=bad)
+            assert resp.status_code == 400, bad
 
     async def test_delete(self, admin_client, targets):
         card = await make_card(admin_client, dpd_device_id=targets["dpd_device_id"])
@@ -533,10 +512,6 @@ class TestSchedule:
             "0 7,19 * * *"
         )
 
-    async def test_hourly_is_five_characters_rather_than_a_list_of_24(self, admin_client):
-        resp = await admin_client.put("/polling/schedule", json={"poll_cron": "0 * * * *"})
-        assert resp.json()["poll_cron"] == "0 * * * *"
-
     async def test_a_schedule_that_could_never_fire_is_refused(self, admin_client):
         resp = await admin_client.put(
             "/polling/schedule", json={"poll_cron": "о 7 ранку"}
@@ -573,20 +548,6 @@ class TestWhoMayDoWhat:
     ):
         await make_card(admin_client, dpd_device_id=targets["dpd_device_id"])
         assert (await viewer_client.get("/polling/devices")).status_code == 200
-
-    async def test_a_viewer_may_not_change_settings(
-        self, admin_client, viewer_client, targets
-    ):
-        card = await make_card(admin_client, dpd_device_id=targets["dpd_device_id"])
-        assert (await viewer_client.put(
-            f"/polling/devices/{card['id']}", json={"baud": 2400}
-        )).status_code == 403
-        assert (await viewer_client.post(
-            "/polling/devices", json={"dpd_line_id": targets["dpd_line_id"]}
-        )).status_code == 403
-        assert (await viewer_client.delete(
-            f"/polling/devices/{card['id']}"
-        )).status_code == 403
 
     async def test_a_viewer_may_not_see_the_agent_registry(self, viewer_client):
         # It carries hostnames and key hashes, and the full card behind it
@@ -1306,35 +1267,6 @@ class TestTheLogOfTheLastPoll:
         assert "Завод А" in body["text"]
         assert "Готово: годин 24, діб 1" in body["text"]
         assert body["updated_at"] is not None
-
-    async def test_a_new_session_replaces_the_last_one(
-        self, admin_client, anon_client, targets, tmp_path, monkeypatch
-    ):
-        monkeypatch.setitem(backend_settings, "POLL_LOG_DIR", str(tmp_path))
-        card, headers = await _claimed_card(admin_client, anon_client, targets)
-
-        for message in ("Перший дзвінок", "Другий дзвінок"):
-            await anon_client.post(
-                f"/polling/agent/devices/{card['id']}/start", headers=headers)
-            await anon_client.post(
-                f"/polling/agent/devices/{card['id']}/log",
-                json={"reset": True, "lines": [
-                    {"seq": 1, "level": "info", "message": message},
-                ]},
-                headers=headers,
-            )
-            await anon_client.post(
-                f"/polling/agent/devices/{card['id']}/finish",
-                json={"status": "ok", "error_code": None, "error_text": None,
-                      "rows": {"hour": 1, "day": 0}, "duration_ms": 1000,
-                      "connect_ms": 500},
-                headers=headers,
-            )
-
-        text = (await admin_client.get(
-            f"/polling/devices/{card['id']}/log/last")).json()["text"]
-        assert "Другий дзвінок" in text
-        assert "Перший дзвінок" not in text
 
 
 async def _claimed_card(admin_client, anon_client, targets) -> tuple[dict, dict]:

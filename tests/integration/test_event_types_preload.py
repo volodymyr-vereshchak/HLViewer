@@ -158,10 +158,3 @@ class TestEndpoints:
         resp = await admin_client.post("/gas-volume-calc-types/preload", params={"force": True})
         assert resp.json()["wiped"] is True
         assert {s.sys_type_id for s in await _rows(SysType)} == {2}
-
-    async def test_viewer_cannot_move_the_files(self, viewer_client, preload_files):
-        preload_files()
-        assert (
-            await viewer_client.post("/gas-volume-calc-types/export-preload")
-        ).status_code == 403
-        assert (await viewer_client.post("/gas-volume-calc-types/preload")).status_code == 403

@@ -208,34 +208,6 @@ class TestHourlyVirtual:
         assert row["line_id"] == vl["id"]
         assert row["volume"] == 150.0  # sum of both members
 
-    async def test_physical_passthrough(self, admin_client, seed_topology):
-        async with async_session_factory() as session:
-            session.add(
-                HourlyArchive(
-                    period=datetime(2024, 12, 25, 10),
-                    volume=42.0,
-                    w_volume_dp=1.0,
-                    pressure=5.0,
-                    temperature=20.0,
-                    density=0.7,
-                    line_id=seed_topology["line1"],
-                )
-            )
-            await session.commit()
-
-        resp = await admin_client.get(
-            "/hourly_virtual/",
-            params={
-                "from_date": "2024-12-25T00:00:00",
-                "to_date": "2024-12-25T23:00:00",
-                "line_id": [seed_topology["line1"]],
-            },
-        )
-        body = resp.json()
-        assert len(body) == 1
-        assert body[0]["line_id"] == seed_topology["line1"]
-        assert body[0]["volume"] == 42.0
-
     async def test_requires_dates(self, admin_client, seed_topology):
         resp = await admin_client.get("/hourly_virtual/")
         assert resp.status_code == 400

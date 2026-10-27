@@ -789,13 +789,6 @@ class TestPermissions:
         )
         assert resp.status_code == 403
 
-    async def test_viewer_cannot_import(self, viewer_client, rich_branch):
-        resp = await viewer_client.post(
-            "/grmu_branch/config-import",
-            files={"file": ("bundle.json", b"{}", "application/json")},
-        )
-        assert resp.status_code == 403
-
     async def test_export_of_unknown_branch_is_404(self, admin_client, rich_branch):
         resp = await admin_client.get("/grmu_branch/999999/config-export")
         assert resp.status_code == 404

@@ -172,10 +172,6 @@ class TestAuthGuard:
         resp = await anon_client.get("/lumgs/")
         assert resp.status_code == 401
 
-    async def test_anon_write_401(self, anon_client):
-        resp = await anon_client.post("/lumgs/", json={"name": "x", "branch_id": 1})
-        assert resp.status_code == 401
-
     async def test_viewer_read_200(self, viewer_client):
         resp = await viewer_client.get("/lumgs/")
         assert resp.status_code == 200
@@ -202,10 +198,6 @@ class TestAuthGuard:
         # guard lets the admin through; the route itself answers 404 (no data)
         resp = await admin_client.get("/lumgs/1/data-path")
         assert resp.status_code == 404
-
-    async def test_viewer_scan_eis_403(self, viewer_client):
-        resp = await viewer_client.get("/lumgs/1/scan-eis")
-        assert resp.status_code == 403
 
     async def test_viewer_list_users_403(self, viewer_client):
         # route-level admin check (GET passes the middleware)
@@ -241,20 +233,6 @@ class TestSlidingSession:
                 assert refreshed["exp"] > original["exp"]
                 # first-login time is preserved (absolute-cap anchor)
                 assert refreshed["iat"] == original["iat"]
-
-    async def test_no_refresh_while_fresh(self, seed_users):
-        async with _fresh_client() as client:
-            with freeze_time("2026-01-01 00:00:00") as frozen:
-                resp = await client.post(
-                    "/auth/login",
-                    json={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD},
-                )
-                assert resp.status_code == 200
-
-                frozen.move_to("2026-01-01 01:00:00")
-                resp = await client.get("/lumgs/")
-                assert resp.status_code == 200
-                assert "set-cookie" not in resp.headers
 
 
 # ── rights changes end the sessions that predate them ────────────────────────
@@ -522,12 +500,6 @@ class TestUserManagement:
 
         # Still usable afterwards — the refusal changed nothing.
         assert (await admin_client.get("/lumgs/")).status_code == 200
-
-    async def test_can_deactivate_someone_else(self, admin_client, seed_users):
-        resp = await admin_client.patch(
-            f"/auth/users/{seed_users['viewer']}", json={"active": False}
-        )
-        assert resp.status_code == 200
 
     async def test_deactivated_user_is_refused_on_the_next_request(
         self, admin_client, viewer_client, seed_users

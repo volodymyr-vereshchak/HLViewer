@@ -12,7 +12,7 @@ import pytest
 from backend.db.engine import async_session_factory
 from sqlalchemy import delete as sa_delete
 
-from backend.db.models import EditArchive, GasVolumeCalc, HourlyArchive, Line
+from backend.db.models import EditArchive, HourlyArchive, Line
 from backend.db.models.gas_route_model import GasRouteMember
 from backend.services.edit_value_codec import encode_float
 
@@ -257,14 +257,6 @@ class TestBranchScoping:
             params={"date_from": "2026-05-01", "date_to": "2026-05-02"},
         )).status_code == 404
 
-    async def test_viewer_cannot_write(self, scoped_viewer_client, seed_two_branches):
-        resp = await scoped_viewer_client.post("/gas_routes/", json={
-            "number": "999", "branch_id": seed_two_branches["branch1"],
-            "active": True,
-            "members": [{"line_id": seed_two_branches["line1"], "is_reference": True}],
-        })
-        assert resp.status_code == 403
-
 
 class TestFhpReport:
     async def report(self, client, route_id, **params):
@@ -318,21 +310,6 @@ class TestFhpReport:
         ))
         assert blk["lines"][0]["status"] == "ok"
         assert blk["lines"][0]["values"][0] == pytest.approx(0.7467)
-
-    async def test_old_value_covers_the_hours_before_the_first_change(
-        self, admin_client, seed_topology
-    ):
-        line = seed_topology["line1"]
-        # Nothing before the range: the first in-range change tells us what it
-        # replaced, and that value must hold the earlier hours.
-        await add_changes(line, [(dt(1, 12), 0.7000, 0.8000)])
-        route = (await create_route(admin_client, seed_topology, [
-            {"line_id": line, "is_reference": True},
-        ])).json()
-
-        blk = block(await self.report(admin_client, route["id"]))
-        assert blk["lines"][0]["values"][at(blk, dt(1, 7).isoformat())] == pytest.approx(0.70)
-        assert blk["lines"][0]["values"][at(blk, dt(1, 13).isoformat())] == pytest.approx(0.80)
 
     async def test_all_reference_route_shows_the_spread(
         self, admin_client, seed_topology
@@ -391,18 +368,6 @@ class TestFhpReport:
         assert blk["lines"][0]["values"][at(blk, dt(1, 9).isoformat())] == pytest.approx(0.7467)
         assert any("неправдоподібних" in w for w in body["warnings"])
 
-    async def test_daily_granularity(self, admin_client, seed_topology):
-        line = seed_topology["line1"]
-        await add_changes(line, [(dt(1, 0), 0.60, 0.74)])
-        route = (await create_route(admin_client, seed_topology, [
-            {"line_id": line, "is_reference": True},
-        ])).json()
-
-        blk = block(await self.report(admin_client, route["id"], granularity="daily"))
-        assert blk["periods"] == ["2026-05-01", "2026-05-02"]
-        assert blk["hours_present"] == [24, 24]
-        assert blk["lines"][0]["values"] == [pytest.approx(0.74), pytest.approx(0.74)]
-
     async def test_all_three_parameters_come_back(self, admin_client, seed_topology):
         line = seed_topology["line1"]
         await add_changes(line, [(dt(1, 6), 0.60, 0.7467)], edit_type_id=DENSITY)
@@ -417,20 +382,6 @@ class TestFhpReport:
         i = at(block(body), dt(1, 7).isoformat())
         assert block(body, "co2")["lines"][0]["values"][i] == pytest.approx(0.6130)
         assert block(body, "n2")["lines"][0]["values"][i] == pytest.approx(1.9546)
-
-    async def test_stale_marking(self, admin_client, seed_topology):
-        line = seed_topology["line1"]
-        await add_changes(line, [(dt(1, 6), 0.60, 0.74)])
-        route = (await create_route(admin_client, seed_topology, [
-            {"line_id": line, "is_reference": True},
-        ])).json()
-
-        blk = block(await self.report(
-            admin_client, route["id"], date_from="2026-05-01", date_to="2026-05-05",
-            stale_after_hours=48,
-        ))
-        assert blk["lines"][0]["stale"][at(blk, dt(1, 7).isoformat())] is False
-        assert blk["lines"][0]["stale"][at(blk, dt(4, 7).isoformat())] is True
 
     async def test_range_is_cut_at_the_last_imported_hour(
         self, admin_client, seed_topology

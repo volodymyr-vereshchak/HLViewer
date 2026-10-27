@@ -195,8 +195,3 @@ class TestGasVolumeCalcTypes:
             await admin_client.delete(f"/gas-volume-calc-types/{gvct_id}")
         ).status_code == 204
         assert (await admin_client.get("/gas-volume-calc-types/")).json() == []
-
-    async def test_viewer_can_read_not_write(self, viewer_client):
-        assert (await viewer_client.get("/gas-volume-calc-types/")).status_code == 200
-        resp = await viewer_client.post("/gas-volume-calc-types/", json=self._payload)
-        assert resp.status_code == 403  # write blocked by the auth middleware

@@ -54,13 +54,11 @@ class TestPollSchedule:
     def test_the_expression_comes_back_tidied(self):
         assert validate_poll_cron("  0   8,20  *  *  * ") == "0 8,20 * * *"
 
-    @pytest.mark.parametrize("value", ["0 25 * * *", "0 8 * *", "щоранку",
-                                       "0 8 * * блабла", "0 18-6 * * *"])
-    def test_a_schedule_that_could_never_fire_is_refused(self, value):
-        # One nobody checked is one that silently never fires, and that looks
-        # exactly like a modem that never answers.
+    def test_a_schedule_that_could_never_fire_is_refused(self):
+        # The cron parser's own refusals are pinned in test_cron_schedule;
+        # this is that they come out as a validation error.
         with pytest.raises(PollValidationError):
-            validate_poll_cron(value)
+            validate_poll_cron("0 25 * * *")
 
     def test_nothing_means_follow_the_global_schedule(self):
         assert validate_poll_cron(None) is None

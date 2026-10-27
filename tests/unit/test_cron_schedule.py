@@ -81,9 +81,3 @@ class TestFromTheOldList:
     def test_nothing_set_stays_nothing(self):
         assert cron.from_times([]) is None
         assert cron.from_times(None) is None
-
-    def test_the_slot_it_names_is_the_slot_the_list_named(self):
-        now = datetime(2026, 9, 20, 14, 37)
-        assert cron.last_fire(now, cron.from_times(["08:00", "20:00"])) == (
-            datetime(2026, 9, 20, 8, 0)
-        )

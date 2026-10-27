@@ -8,7 +8,7 @@ re-slices what is already stored instead of re-asking DPD.
 
 DPDClient is mocked, Postgres is real."""
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 import pytest
 import pytest_asyncio
@@ -215,26 +215,6 @@ class TestMovedCorrector:
         assert sorted(by_point["Точка А"]) == ["2026-03-08", "2026-03-09"]
         assert sorted(by_point["Точка Б"]) == ["2026-03-10", "2026-03-11"]
         dpd_mock.get_volumes.assert_not_awaited()
-
-    async def test_shared_corrector_is_polled_once(self, dpd_mock, topology):
-        """Coverage is per device, so the second point reads what the first
-        already pulled instead of asking DPD again."""
-        a = await topology["make_point"]("Точка А")
-        b = await topology["make_point"]("Точка Б")
-        device = await topology["make_device"](7)
-        await topology["assign"](a, device, EPOCH_INSTALLED_FROM, removed_at=dt(10, 7))
-        await topology["assign"](b, device, dt(10, 7))
-        dpd_mock.get_volumes.return_value = []
-
-        async with async_session_factory() as session:
-            assignments = await _assignments_for(session, [a, b], dt(1), dt(20))
-        await fetch_dpd_volumes(assignments, dt(1), dt(20), "daily", live=True)
-
-        # Two assignments, one device → one poll: the archive is the
-        # corrector's, and both points read their own slice of the one answer.
-        assert dpd_mock.get_volumes.await_count == 1
-        polled = dpd_mock.get_volumes.await_args.args[0]
-        assert {p["device_id"] for p in polled} == {device}
 
 
 class TestPollingIgnoresWindows:

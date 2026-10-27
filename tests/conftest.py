@@ -22,8 +22,6 @@ Isolation model
 
 import asyncio
 import os
-import struct
-from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -229,46 +227,3 @@ async def viewer_client(seed_users):
         await _login(client, VIEWER_USERNAME, VIEWER_PASSWORD)
         yield client
 
-
-# ── Shared data fixtures ──────────────────────────────────────────────────────
-@pytest.fixture
-def sample_binary_data() -> bytes:
-    """One HourStruct record (`=5B6f`): month, day, year, hour, minutes,
-    volume, unknown, w_volume_dp, pressure, temperature, density."""
-    return struct.pack(
-        "=5B6f", 12, 25, 24, 14, 30, 1000.5, 0.0, 0.1, 5.2, 20.5, 0.7
-    )
-
-
-@pytest.fixture
-def sample_archive_file(tmp_path, sample_binary_data) -> str:
-    """Binary archive file with 10 identical HourStruct records."""
-    path = tmp_path / "test_archive.bin"
-    path.write_bytes(sample_binary_data * 10)
-    return str(path)
-
-
-@pytest.fixture
-def sample_hourly_data() -> dict:
-    return {
-        "period": datetime(2024, 12, 25, 14, 30),
-        "volume": 1000.5,
-        "w_volume_dp": 0.1,
-        "pressure": 5.2,
-        "temperature": 20.5,
-        "density": 0.7,
-        "line_id": 1,
-    }
-
-
-@pytest.fixture
-def sample_daily_data() -> dict:
-    return {
-        "period": datetime(2024, 12, 25),
-        "volume": 24000.0,
-        "w_volume_dp": 2.4,
-        "pressure": 5.2,
-        "temperature": 20.5,
-        "density": 0.7,
-        "line_id": 1,
-    }

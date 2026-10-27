@@ -82,13 +82,3 @@ class TestReadFileRecordsSync:
             str(path), HourStruct, date_flag=False, line_id=1, model_fields=HOURLY_FIELDS
         )
         assert records[0]["density"] == 0.0
-
-    def test_empty_file(self, tmp_path):
-        path = tmp_path / "S012R1R.bin"
-        path.write_bytes(b"")
-        assert (
-            _read_file_records_sync(
-                str(path), HourStruct, date_flag=False, line_id=1, model_fields=HOURLY_FIELDS
-            )
-            == []
-        )

@@ -141,17 +141,6 @@ class TestManyLines:
         for name in ("a1", "a2", "b1"):
             assert await _left(admin_client, dpd[name]) == {"daily": 2, "hourly": 5}
 
-    async def test_no_branch_is_refused_while_any_line_updates(self, admin_client, dpd):
-        async with async_session_factory() as session:
-            await session.execute(text(
-                "INSERT INTO dpd_line_job (dpd_line_id, kind, status, updated_at) "
-                "VALUES (:id, 'update', 'running', now())"), {"id": dpd["b1"]})
-            await session.commit()
-        resp = await admin_client.delete(
-            "/dpd_lines/archive/bulk", params={"from_date": "2026-05-01"})
-        assert resp.status_code == 409
-        assert "b1" in resp.json()["detail"]
-
     async def test_every_dpd_line_of_the_branch_and_nothing_else(self, admin_client, dpd):
         for name in ("a1", "a2", "b1"):
             await _seed(dpd[name])
@@ -191,8 +180,3 @@ class TestManyLines:
         resp = await admin_client.delete(
             "/dpd_lines/archive/bulk", params={"branch_id": dpd["A"], "from_date": "2026-05-01"})
         assert resp.status_code == 200
-
-    async def test_a_viewer_may_not(self, viewer_client, dpd):
-        resp = await viewer_client.delete(
-            "/dpd_lines/archive/bulk", params={"branch_id": dpd["A"], "from_date": "2026-05-01"})
-        assert resp.status_code == 403

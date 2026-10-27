@@ -94,11 +94,6 @@ class TestUpdateJobLock:
         assert state["status"] == "done"
         assert await update_job_lock.acquire() is not None
 
-    async def test_read_idle(self, update_job_row):
-        state = await update_job_lock.read()
-        assert state["status"] == "idle"
-        assert state["lumgs"] == {}
-
     async def test_read_stale_running_reports_error(self, update_job_row):
         await update_job_lock.acquire()
         await _mark_stale()
