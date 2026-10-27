@@ -16,6 +16,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete as sa_delete
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
@@ -72,6 +73,25 @@ async def _check_corector_types(
         raise HTTPException(
             status_code=400,
             detail=f"Невідомий тип коректора: {sorted(missing)}",
+        )
+
+
+async def _flush_line(line: DpdLine, session: AsyncSession) -> None:
+    """Write the line row, turning a name taken in its branch into a 409.
+
+    Only that constraint is translated: any other integrity error is a real
+    fault and stays a 500 rather than being passed off as a duplicate name.
+    """
+    name = line.name  # read before a rollback expires the instance
+    try:
+        await session.flush()
+    except IntegrityError as e:
+        if "uq_dpd_line_branch_name" not in str(e.orig):
+            raise
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Лінія «{name}» у цій філії вже існує",
         )
 
 
@@ -306,7 +326,7 @@ class DpdLineRouter:
         await _check_corector_types(devices, session)
         line = DpdLine(**data.model_dump(exclude={"devices", "gsm"}))
         session.add(line)
-        await session.flush()
+        await _flush_line(line, session)
         for dev in devices:
             session.add(DpdLineDevice(dpd_line_id=line.id, **dev.model_dump()))
         if data.gsm is not None:
@@ -328,6 +348,7 @@ class DpdLineRouter:
         await _check_corector_types(devices, session)
         for k, v in data.model_dump(exclude={"devices", "gsm"}).items():
             setattr(line, k, v)
+        await _flush_line(line, session)
         await session.execute(
             sa_delete(DpdLineDevice).where(DpdLineDevice.dpd_line_id == dl_id)
         )

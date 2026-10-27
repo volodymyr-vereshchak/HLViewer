@@ -107,3 +107,28 @@ class TestLineModem:
         assert card["target_kind"] == "dpd_line"
         assert card["target_label"] == "Радушне"
         assert card["ser_num"] == 1099
+
+
+@pytest.mark.asyncio
+class TestLineName:
+    """A name is unique within its branch; taking one twice is the
+    operator's mistake to fix, so it is a 409 with a sentence, not a 500."""
+
+    async def test_a_second_line_with_the_same_name_is_a_conflict(
+        self, admin_client, line_target
+    ):
+        assert (await admin_client.post(
+            "/dpd_lines/", json=body(line_target))).status_code == 201
+        again = await admin_client.post("/dpd_lines/", json=body(line_target))
+        assert again.status_code == 409
+        assert "Радушне" in again.json()["detail"]
+
+    async def test_renaming_onto_a_taken_name_is_a_conflict(
+        self, admin_client, line_target
+    ):
+        await admin_client.post("/dpd_lines/", json=body(line_target))
+        other = (await admin_client.post(
+            "/dpd_lines/", json=body(line_target, name="Інша"))).json()
+        resp = await admin_client.patch(
+            f"/dpd_lines/{other['id']}", json=body(line_target))
+        assert resp.status_code == 409
