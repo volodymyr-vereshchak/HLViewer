@@ -40,6 +40,7 @@ from backend.api.endpoints import config_ep
 from backend.api.endpoints import logs_ep
 from backend.api.endpoints import polling_ep
 from backend.api.endpoints import polling_agent_ep
+from backend.api.endpoints import system_update_ep
 from backend.telegram_notifier.telegram_norifier import TelegramBot
 from backend.db.engine import async_session_factory
 from backend.db.models.app_user_model import AppUser
@@ -289,6 +290,8 @@ _ADMIN_PATH_MARKERS = (
     # otherwise pass the read-only check.
     "config-export",
     "scan-eis",
+    # Repository settings and update logs: what runs on this server and how.
+    "system-update",
 )
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
@@ -414,3 +417,4 @@ app.include_router(config_ep.router)
 app.include_router(logs_ep.router)
 app.include_router(polling_ep.router)
 app.include_router(polling_agent_ep.router)
+app.include_router(system_update_ep.router)

@@ -93,3 +93,8 @@ backend/db/preload_db/*_old.json
 
 # Local probe/debug scripts
 /scripts/probe_hostlib/
+
+# Admin updater: its settings (with the git token), job logs and the
+# pre-update database dumps. Server state, never code.
+/update/
+/backups/

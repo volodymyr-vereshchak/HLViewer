@@ -63,6 +63,14 @@ services:
     # Cap so an OOM kills/restarts this container, not the whole box.
     # Sized for ~8 workers on an 8 GB prod (leaves room for Postgres + scheduler + OS).
     mem_limit: 5g
+    # Answering /config = the app is up. The admin updater waits for this after
+    # replacing the container; start_period covers alembic + preload on start.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/config', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 300s
     depends_on:
       - db_v2
     networks:
@@ -121,6 +129,29 @@ services:
     command: >
       sh -c "./wait_for_it.sh db_v2:5432 --
              python -m backend.hl_engine.scheduler_runner"
+    logging: *default-logging
+    restart: always
+
+  # Admin-triggered update («Версія програми»): see docs/deployment-docker.md,
+  # «Оновлення з адмінки». Opt-in through COMPOSE_PROFILES=updater in .env, so
+  # a host that never set it up keeps running exactly what it ran before.
+  # It holds the Docker socket — root on this host — which is why it publishes
+  # no port and takes commands only from the backend (UPDATER_TOKEN).
+  updater:
+    profiles: ["updater"]
+    build:
+      context: ./updater
+    image: hlviewer-updater
+    container_name: hlviewer_updater
+    env_file:
+      - .env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # The directory holding both checkouts, at the SAME path as on the host:
+      # compose, run from in here, hands these paths to the host's daemon.
+      - ${HLV_ROOT:-/opt/hlviewer}:${HLV_ROOT:-/opt/hlviewer}
+    networks:
+      - hostlib_network_v2
     logging: *default-logging
     restart: always
 

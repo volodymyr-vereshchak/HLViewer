@@ -52,3 +52,7 @@ logs/
 *.tmp
 *.temp
 __temp_*__/
+
+# Admin updater state and database dumps
+update/
+backups/
