@@ -104,6 +104,22 @@ def _public_config(config: dict) -> dict:
     return {"repos": config["repos"], "token_set": bool(config.get("token"))}
 
 
+def check_is_current(check: dict, installed: dict, config: dict) -> bool:
+    """A stored check describes what an update WOULD bring, from a given
+    commit and branch. Once either moved — an update installed it, somebody
+    pulled by hand, the branch was switched — its "N new commits" is a claim
+    about a state that no longer exists, and showing it offers an update to
+    what is already running."""
+    for kind, entry in (check.get("repos") or {}).items():
+        head = (entry.get("head") or {}).get("sha")
+        if head and head != (installed.get(kind) or {}).get("sha"):
+            return False
+        repo = config["repos"].get(kind) or {}
+        if (entry.get("url"), entry.get("branch")) != (repo.get("url"), repo.get("branch")):
+            return False
+    return True
+
+
 def require_backend(x_updater_token: str | None = Header(default=None)) -> None:
     if not settings.token:
         raise HTTPException(503, "UPDATER_TOKEN не задано в .env")
@@ -128,10 +144,13 @@ def status():
         except CommandError as exc:
             installed[kind] = {"dir": str(git.dir), "error": str(exc)}
     history = store.history(1)
+    check = store.load_check()
+    if check and not check_is_current(check, installed, config):
+        check = None
     return {
         "installed": installed,
         "config": _public_config(config),
-        "check": store.load_check(),
+        "check": check,
         "busy": runtime.busy(),
         "job": runtime.job.snapshot() if runtime.busy() else None,
         "last_job": history[0] if history else None,
