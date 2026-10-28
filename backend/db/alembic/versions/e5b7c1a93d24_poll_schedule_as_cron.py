@@ -16,6 +16,7 @@ Create Date: 2026-09-20
 """
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 revision = "e5b7c1a93d24"
@@ -63,10 +64,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.add_column("poll_device", sa.Column("poll_times", sa.JSON(), nullable=True))
+    # JSONB, as the polling schema created them: the downgrade of the default-hour
+    # migration below compares poll_times to a literal, which plain JSON lacks.
+    op.add_column("poll_device", sa.Column("poll_times", postgresql.JSONB(), nullable=True))
     op.add_column(
         "poll_settings",
-        sa.Column("poll_times", sa.JSON(), nullable=False,
+        sa.Column("poll_times", postgresql.JSONB(), nullable=False,
                   server_default='["08:00"]'),
     )
     # Back to a list, for the shapes a list can hold: one minute and a set of
