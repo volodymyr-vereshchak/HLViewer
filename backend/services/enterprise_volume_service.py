@@ -246,6 +246,8 @@ async def fetch_dpd_volumes(
             # Rows written before the unit was normalised on ingest may still
             # hold the literal "None" — clean them on the way out too.
             "pressUnit": normalize_press_unit(row["press_unit"]),
+            # Set when the totaliser was set back (backend/db/dao/volume_fix.py).
+            "volumeFix": row.get("volume_fix"),
         })
     return records
 
@@ -463,7 +465,9 @@ def aggregate_volumes(
     device_map = {
         d["assignment_id"]: d for d in devices if d.get("assignment_id") is not None
     }
-    aggregated = defaultdict(lambda: {"total": 0.0, "devices": [], "count": 0})
+    aggregated = defaultdict(
+        lambda: {"total": 0.0, "devices": [], "count": 0, "hours": 0, "zeroed": 0}
+    )
     # One stamp per hour of the range, repeated once per device: a month over
     # a branch is a quarter of a million records over some seven hundred
     # distinct stamps. strptime was the most expensive call in this function
@@ -515,6 +519,7 @@ def aggregate_volumes(
         pressure_unit = (
             normalize_press_unit(record.get("pressUnit")) if include_devices else None
         )
+        volume_fix = record.get("volumeFix")
 
         for line_key in line_keys:
             key = (line_key, record_period)
@@ -522,6 +527,10 @@ def aggregate_volumes(
             if volume is not None:
                 entry["total"] += volume
             entry["count"] += 1
+            if volume_fix == "hours":
+                entry["hours"] += 1
+            elif volume_fix == "zeroed":
+                entry["zeroed"] += 1
             if include_devices:
                 entry["devices"].append(
                     DeviceVolume(
@@ -534,6 +543,7 @@ def aggregate_volumes(
                         temperature=record.get("temper"),
                         pressure=record.get("press"),
                         pressure_unit=pressure_unit,
+                        volume_fix=volume_fix,
                     )
                 )
 
@@ -544,6 +554,8 @@ def aggregate_volumes(
             total_volume=round(data["total"], 2),
             device_count=data["count"],
             devices=data["devices"],
+            volume_fix_hours=data["hours"],
+            volume_fix_zeroed=data["zeroed"],
         )
         for (line_id_val, period_val), data in aggregated.items()
     ]

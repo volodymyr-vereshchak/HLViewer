@@ -531,16 +531,19 @@ async def push_data(
     # A volume below zero is a totaliser that was set back — a corrector
     # installed or its archive cleared — measured across the jump. The agent
     # already skips those (tandem.volumes), but the server is where every
-    # family and every agent version meets, so it refuses them here too
-    # rather than let one old build subtract a thousand cubic metres from a
-    # day. The rest of the batch is stored as usual.
-    rows = [r for r in body.rows
-            if not ((r.volume is not None and r.volume < 0)
-                    or (r.volume_work is not None and r.volume_work < 0))]
-    if len(rows) != len(body.rows):
+    # family and every agent version meets. The archive DAOs store such a
+    # volume as 0, the same rule as for data from the DPD API; the row itself
+    # is kept, since its pressure and temperature are real readings.
+    rows = body.rows
+    negative = sum(
+        1 for r in rows
+        if (r.volume is not None and r.volume < 0)
+        or (r.volume_work is not None and r.volume_work < 0)
+    )
+    if negative:
         logger.warning(
-            "Poll card %s: %s %s rows with a negative volume dropped",
-            card.id, len(body.rows) - len(rows), body.period_type,
+            "Poll card %s: %s %s rows with a negative volume stored as 0",
+            card.id, negative, body.period_type,
         )
     if not rows:
         return {"stored": 0}

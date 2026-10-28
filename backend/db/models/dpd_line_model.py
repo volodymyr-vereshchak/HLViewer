@@ -14,7 +14,7 @@ the old one.
 from datetime import date, datetime
 from typing import List, Optional
 
-from sqlalchemy import BigInteger, Column, ForeignKey, Index, UniqueConstraint
+from sqlalchemy import BigInteger, Column, ForeignKey, Index, UniqueConstraint, text
 from sqlmodel import Field, Relationship, SQLModel
 
 from .base_model import HlBaseModel
@@ -101,6 +101,9 @@ class DpdLineDailyArchive(SQLModel, table=True):
     __table_args__ = (
         UniqueConstraint("dpd_line_id", "day", name="uq_dpd_line_daily"),
         Index("ix_dpd_line_daily_day", "day"),
+        # Set-back days, for the repair after every write (dao/volume_fix.py).
+        Index("ix_dpd_line_daily_volume_fix", "dpd_line_id", "day",
+              postgresql_where=text("volume_fix IS NOT NULL")),
     )
 
     id: Optional[int] = Field(default=None, primary_key=True, sa_type=BigInteger)
@@ -116,6 +119,9 @@ class DpdLineDailyArchive(SQLModel, table=True):
     pressure: Optional[float] = None
     temperature: Optional[float] = None
     press_unit: Optional[str] = Field(default=None, max_length=16)
+    # NULL, or how a set-back totaliser was handled: 'zeroed' / 'hours'.
+    # See backend/db/dao/volume_fix.py.
+    volume_fix: Optional[str] = Field(default=None, max_length=8)
 
 
 class DpdLineHourlyArchive(SQLModel, table=True):
@@ -138,6 +144,9 @@ class DpdLineHourlyArchive(SQLModel, table=True):
     pressure: Optional[float] = None
     temperature: Optional[float] = None
     press_unit: Optional[str] = Field(default=None, max_length=16)
+    # NULL, or how a set-back totaliser was handled: 'zeroed' / 'hours'.
+    # See backend/db/dao/volume_fix.py.
+    volume_fix: Optional[str] = Field(default=None, max_length=8)
 
 
 # ─── DpdLineJob (per-line init/update lock + progress) ────────────────────────

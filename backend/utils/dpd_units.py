@@ -7,6 +7,20 @@ from backend.services.pressure_units import canonical
 _ABSENT = {"", "none", "null", "nan", "n/a", "-", "—", "--"}
 
 
+def volume_not_negative(value):
+    """A period volume, with anything below zero stored as 0.
+
+    A negative day or hour is a totaliser that was set back — a corrector
+    replaced or its archive cleared — measured across the jump: "new reading
+    minus old" is minus everything the old one ever counted. No gas flowed
+    backwards; summed into a line it showed −1.7 million m³ and broke the
+    whole enterprise report. None (no data) stays None.
+    """
+    if value is not None and value < 0:
+        return 0.0
+    return value
+
+
 def normalize_press_unit(raw) -> str | None:
     """Pressure unit as reported by DPD, or None when the API said nothing.
 

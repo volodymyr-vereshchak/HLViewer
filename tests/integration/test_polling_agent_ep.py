@@ -251,10 +251,11 @@ class TestAWholeSession:
         assert {r["source"] for r in rows} == {"gsm"}
         assert rows[0]["dvst_alwrk"] == 12.5
 
-    async def test_a_negative_volume_is_not_stored(self, anon_client, session_ready):
+    async def test_a_negative_volume_is_stored_as_zero(self, anon_client, session_ready):
         """A totaliser set back — installation, a cleared archive — measured
-        across the jump. Not gas; stored, it takes a thousand cubic metres off a
-        day. Refused here whatever the agent's build, the rest of the batch kept.
+        across the jump. Not gas; stored as it is, it takes a thousand cubic
+        metres off a day. Stored as 0 whatever the agent's build; the row and
+        its pressure and temperature are kept.
         """
         agent, card = session_ready["agent"], session_ready["card"]
         resp = await anon_client.post(
@@ -272,10 +273,11 @@ class TestAWholeSession:
             headers=key(agent),
         )
         assert resp.status_code == 200, resp.text
-        assert resp.json()["stored"] == 1
+        assert resp.json()["stored"] == 3
 
         rows = await archive_rows("hourly")
-        assert [r["dvst_alwrk"] for r in rows] == [12.5]
+        assert [r["dvst_alwrk"] for r in rows] == [12.5, 0.0, 3.0]
+        assert rows[2]["dvwrk_alwrk"] == 0.0
 
     async def test_a_success_moves_last_poll_at(self, anon_client, session_ready):
         agent, card = session_ready["agent"], session_ready["card"]

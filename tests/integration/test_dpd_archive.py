@@ -1016,3 +1016,129 @@ class TestRefreshSchedule:
     async def test_status_reports_the_default(self, admin_client, clean_db):
         body = (await admin_client.get("/enterprise/archive/refresh/status")).json()
         assert body["default_refresh_times"] == ["10:00", "16:00"]
+
+class TestNegativeVolumes:
+    """A totaliser set back shows up as a hugely negative day. Stored as it
+    came, one such day made a line's total negative and the whole enterprise
+    report for the range failed (prod, 28.10.2026)."""
+
+    async def test_a_negative_volume_is_stored_as_zero(self, make_enterprise):
+        dev = await make_enterprise(101)
+        async with async_session_factory() as session:
+            async with session.begin():
+                await DpdArchiveDao(session).upsert_records("daily", [
+                    {"device_id": dev["device_id"], "stamp": as_dt(D_OLD5),
+                     "dvst_alwrk": -1771792.28, "dvwrk_alwrk": -5.0,
+                     "press": 101.3, "temper": 15.0, "press_unit": "kPa"},
+                    {"device_id": dev["device_id"], "stamp": as_dt(D_OLD3),
+                     "dvst_alwrk": 10.0, "dvwrk_alwrk": None,
+                     "press": None, "temper": None, "press_unit": None},
+                ])
+        rows = sorted(await archive_rows("daily"), key=lambda r: r["day"])
+        assert [(r["dvst_alwrk"], r["dvwrk_alwrk"]) for r in rows] == [(0.0, 0.0), (10.0, None)]
+        assert [r["volume_fix"] for r in rows] == ["zeroed", None]
+        # The rest of the reading is real and stays.
+        assert rows[0]["press"] == 101.3
+
+# A commercial day D runs D 07:00 .. D+1 06:00 in the hourly archive.
+SET_BACK_DAY = date(2026, 3, 10)
+SPRING_DAY = date(2026, 3, 28)   # its window holds 29.03 03:00, which never happens
+
+
+def day_hours(day: date) -> list[datetime]:
+    start = as_dt(day) + timedelta(hours=7)
+    return [start + timedelta(hours=i) for i in range(24)]
+
+
+async def write(period_type: str, device_id: int, stamps, volume) -> None:
+    async with async_session_factory() as session:
+        async with session.begin():
+            await DpdArchiveDao(session).upsert_records(period_type, [
+                {"device_id": device_id, "stamp": s,
+                 "dvst_alwrk": volume(s) if callable(volume) else volume,
+                 "dvwrk_alwrk": None, "press": None, "temper": None, "press_unit": None}
+                for s in stamps
+            ])
+
+
+async def daily_row(device_id: int, day: date):
+    async with async_session_factory() as session:
+        return (await session.execute(text(
+            "SELECT dvst_alwrk, volume_fix FROM dpd_daily_archive "
+            "WHERE device_id = :d AND day = :day"
+        ), {"d": device_id, "day": day})).one()
+
+
+class TestSetBackDaysFromHours:
+    """A set-back day is 0 until every hour of its commercial day is in the
+    archive, then the sum of those hours — whichever of the two came first."""
+
+    async def test_hours_already_there_sum_the_day(self, make_enterprise):
+        dev = (await make_enterprise(101))["device_id"]
+        await write("hourly", dev, day_hours(SET_BACK_DAY), 2.0)
+        await write("daily", dev, [as_dt(SET_BACK_DAY)], -1771792.28)
+        assert tuple(await daily_row(dev, SET_BACK_DAY)) == (48.0, "hours")
+
+    async def test_the_hour_completing_the_day_sums_it(self, make_enterprise):
+        dev = (await make_enterprise(101))["device_id"]
+        await write("daily", dev, [as_dt(SET_BACK_DAY)], -5.0)
+        hours = day_hours(SET_BACK_DAY)
+        await write("hourly", dev, hours[:23], 1.0)
+        # One hour short: still unknown, still 0.
+        assert tuple(await daily_row(dev, SET_BACK_DAY)) == (0.0, "zeroed")
+        await write("hourly", dev, hours[23:], 1.0)
+        assert tuple(await daily_row(dev, SET_BACK_DAY)) == (24.0, "hours")
+
+    async def test_the_hour_of_the_jump_counts_as_zero(self, make_enterprise):
+        dev = (await make_enterprise(101))["device_id"]
+        hours = day_hours(SET_BACK_DAY)
+        await write("hourly", dev, hours, lambda s: -900.0 if s == hours[5] else 1.0)
+        await write("daily", dev, [as_dt(SET_BACK_DAY)], -900.0)
+        assert tuple(await daily_row(dev, SET_BACK_DAY)) == (23.0, "hours")
+
+    async def test_the_hours_of_the_day_only(self, make_enterprise):
+        dev = (await make_enterprise(101))["device_id"]
+        before = as_dt(SET_BACK_DAY) + timedelta(hours=6)       # previous commercial day
+        after = as_dt(SET_BACK_DAY) + timedelta(days=1, hours=7)  # next one
+        await write("hourly", dev, [before, *day_hours(SET_BACK_DAY), after], 1.0)
+        await write("daily", dev, [as_dt(SET_BACK_DAY)], -5.0)
+        assert tuple(await daily_row(dev, SET_BACK_DAY)) == (24.0, "hours")
+
+    async def test_another_devices_hours_do_not_count(self, make_enterprise):
+        dev = (await make_enterprise(101))["device_id"]
+        other = (await make_enterprise(102))["device_id"]
+        await write("hourly", other, day_hours(SET_BACK_DAY), 1.0)
+        await write("daily", dev, [as_dt(SET_BACK_DAY)], -5.0)
+        assert tuple(await daily_row(dev, SET_BACK_DAY)) == (0.0, "zeroed")
+
+    async def test_the_spring_change_day_is_complete_with_23_hours(self, make_enterprise):
+        dev = (await make_enterprise(101))["device_id"]
+        hours = [h for h in day_hours(SPRING_DAY) if h != datetime(2026, 3, 29, 3)]
+        assert len(hours) == 23
+        await write("hourly", dev, hours, 1.0)
+        await write("daily", dev, [as_dt(SPRING_DAY)], -5.0)
+        assert tuple(await daily_row(dev, SPRING_DAY)) == (23.0, "hours")
+
+    async def test_a_resent_negative_day_is_summed_again(self, make_enterprise):
+        # The nightly refresh asks DPD again and gets the same minus.
+        dev = (await make_enterprise(101))["device_id"]
+        await write("hourly", dev, day_hours(SET_BACK_DAY), 1.0)
+        await write("daily", dev, [as_dt(SET_BACK_DAY)], -5.0)
+        await write("daily", dev, [as_dt(SET_BACK_DAY)], -5.0)
+        assert tuple(await daily_row(dev, SET_BACK_DAY)) == (24.0, "hours")
+
+    async def test_a_corrected_day_drops_the_mark(self, make_enterprise):
+        dev = (await make_enterprise(101))["device_id"]
+        await write("hourly", dev, day_hours(SET_BACK_DAY), 1.0)
+        await write("daily", dev, [as_dt(SET_BACK_DAY)], -5.0)
+        await write("daily", dev, [as_dt(SET_BACK_DAY)], 30.0)
+        assert tuple(await daily_row(dev, SET_BACK_DAY)) == (30.0, None)
+
+    async def test_the_mark_reaches_the_report(self, make_enterprise):
+        dev = await make_enterprise(101)
+        await write("hourly", dev["device_id"], day_hours(SET_BACK_DAY), 1.0)
+        await write("daily", dev["device_id"], [as_dt(SET_BACK_DAY)], -5.0)
+        records = await fetch_dpd_volumes(
+            [dev], as_dt(SET_BACK_DAY), as_dt(SET_BACK_DAY), "daily"
+        )
+        assert [(r["dvstAlwrk"], r["volumeFix"]) for r in records] == [(24.0, "hours")]

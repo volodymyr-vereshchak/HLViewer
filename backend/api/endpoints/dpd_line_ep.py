@@ -535,6 +535,9 @@ class DpdLineRouter:
                 # have to guess (and used to caption everything кгс/см²).
                 "press_unit": normalize_press_unit(r["press_unit"]),
                 "density": None,
+                # 'zeroed' / 'hours' when the totaliser was set back in this
+                # period (backend/db/dao/volume_fix.py), otherwise None.
+                "volume_fix": r.get("volume_fix"),
             }
             for r in rows
         ]

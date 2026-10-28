@@ -9,6 +9,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.dao.basic_dao import BasicDao
+from backend.db.dao.volume_fix import contract_hour, day_of_hour, fix_of, repair_days
+from backend.utils.dpd_units import volume_not_negative
 # Imported for SQLModel.metadata registration (schema creation in tests and
 # anywhere create_all is used) — the DAO itself speaks raw SQL.
 from backend.db.models.dpd_cache_model import (  # noqa: F401
@@ -39,7 +41,8 @@ _TABLES = {
     "hourly": ("dpd_hourly_archive", "stamp"),
 }
 
-_VALUE_COLS = ("dvst_alwrk", "dvwrk_alwrk", "press", "temper", "press_unit")
+_VALUE_COLS = ("dvst_alwrk", "dvwrk_alwrk", "press", "temper", "press_unit", "volume_fix")
+_VOLUME_COLS = ("dvst_alwrk", "dvwrk_alwrk")
 
 
 def _table(period_type: str):
@@ -73,7 +76,7 @@ class DpdArchiveDao(BasicDao):
         rows = (await self.session.execute(
             text(
                 f"SELECT device_id, {stamp_col} AS stamp, dvst_alwrk, "
-                f"dvwrk_alwrk, press, temper, press_unit "
+                f"dvwrk_alwrk, press, temper, press_unit, volume_fix "
                 f"FROM {table} "
                 f"WHERE device_id = ANY(:ids) "
                 f"AND {stamp_col} >= :from AND {stamp_col} <= :to"
@@ -141,7 +144,7 @@ class DpdArchiveDao(BasicDao):
             text(
                 f"WITH w (tag, device_id, wf, wt) AS (VALUES {values}) "
                 f"SELECT w.tag, a.device_id, a.{stamp_col} AS stamp, "
-                f"a.dvst_alwrk, a.dvwrk_alwrk, a.press, a.temper, a.press_unit "
+                f"a.dvst_alwrk, a.dvwrk_alwrk, a.press, a.temper, a.press_unit, a.volume_fix "
                 f"FROM w JOIN {table} a ON a.device_id = w.device_id "
                 f"AND a.{stamp_col} >= w.wf AND a.{stamp_col} <= w.wt "
                 f"{hour_clause}"
@@ -185,8 +188,14 @@ class DpdArchiveDao(BasicDao):
             (
                 r["device_id"],
                 r["stamp"].date() if period_type == "daily" else r["stamp"],
-                r.get("dvst_alwrk"), r.get("dvwrk_alwrk"),
+                # Every writer comes through here — the DPD refresh, the
+                # on-demand backfill and the GSM poll — so this is the one
+                # place a set-back totaliser is turned into 0 and marked
+                # (see volume_fix).
+                volume_not_negative(r.get("dvst_alwrk")),
+                volume_not_negative(r.get("dvwrk_alwrk")),
                 r.get("press"), r.get("temper"), r.get("press_unit"),
+                fix_of(r.get("dvst_alwrk"), r.get("dvwrk_alwrk")),
                 source,
             )
             for r in rows
@@ -219,8 +228,30 @@ class DpdArchiveDao(BasicDao):
             f"RETURNING (xmax = 0) AS inserted"
         ))).scalars().all()
         await self.session.execute(text(f"DROP TABLE {tmp}"))
+        await self._repair_after(period_type, records)
         inserted = sum(1 for new in written if new)
         return {"inserted": inserted, "updated": len(written) - inserted}
+
+    async def _repair_after(self, period_type: str, records: List[tuple]) -> None:
+        """Let the hours stand in for the set-back days this write touched.
+        A daily write only matters when it marked a day; an hourly one may
+        complete a day marked earlier."""
+        hour = contract_hour()
+        if period_type == "daily":
+            # r = (device_id, stamp, dvst, dvwrk, press, temper, unit, fix, source)
+            marked = [r for r in records if r[7] is not None]
+            if not marked:
+                return
+            ids = {r[0] for r in marked}
+            days = [r[1] for r in marked]
+        else:
+            ids = {r[0] for r in records}
+            days = [day_of_hour(r[1], hour) for r in records]
+        await repair_days(
+            self.session, daily="dpd_daily_archive", hourly="dpd_hourly_archive",
+            key="device_id", volume_cols=_VOLUME_COLS,
+            ids=ids, day_from=min(days), day_to=max(days),
+        )
 
     async def last_stamps(
         self, device_ids: List[int], period_type: str

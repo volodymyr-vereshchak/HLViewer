@@ -154,3 +154,48 @@ class TestDpdLineInCompactArchive:
             "hours": [2, 3],
         })
         assert resp.json() == {"stamps": [], "rows": []}
+
+class TestDpdLineNegativeVolumes:
+    """Same rule as the enterprise archive (backend/db/dao/volume_fix.py)."""
+
+    @staticmethod
+    async def _write(period_type, line_id, stamps, volume):
+        from backend.db.dao.dpd_line_dao import DpdLineArchiveDao
+
+        async with async_session_factory() as session:
+            async with session.begin():
+                await DpdLineArchiveDao(session).upsert_records(period_type, [
+                    {"dpd_line_id": line_id, "stamp": s, "volume": volume,
+                     "pressure": 3.1, "temperature": 14.0, "press_unit": None}
+                    for s in stamps
+                ])
+
+    @staticmethod
+    async def _day(line_id, day):
+        from sqlalchemy import text
+
+        async with async_session_factory() as session:
+            return tuple((await session.execute(text(
+                "SELECT volume, volume_fix FROM dpd_line_daily_archive "
+                "WHERE dpd_line_id = :line AND day = :day"
+            ), {"line": line_id, "day": day})).one())
+
+    async def test_a_negative_volume_is_stored_as_zero(self, dpd_line):
+        await self._write("daily", dpd_line, [datetime(2026, 5, 4)], -4970.0)
+        assert await self._day(dpd_line, date(2026, 5, 4)) == (0.0, "zeroed")
+
+    async def test_its_hours_sum_the_day(self, dpd_line):
+        hours = [datetime(2026, 5, 4, 7) + timedelta(hours=i) for i in range(24)]
+        await self._write("daily", dpd_line, [datetime(2026, 5, 4)], -4970.0)
+        await self._write("hourly", dpd_line, hours, 2.5)
+        assert await self._day(dpd_line, date(2026, 5, 4)) == (60.0, "hours")
+
+    async def test_the_mark_reaches_the_archive_endpoint(self, admin_client, dpd_line):
+        await self._write("daily", dpd_line, [datetime(2026, 5, 4)], -4970.0)
+        resp = await admin_client.get("/daily_dpd/", params={
+            "line_id": [dpd_line],
+            "from_date": "2026-05-04T00:00:00",
+            "to_date": "2026-05-04T00:00:00",
+        })
+        assert resp.status_code == 200
+        assert [(r["volume"], r["volume_fix"]) for r in resp.json()] == [(0.0, "zeroed")]

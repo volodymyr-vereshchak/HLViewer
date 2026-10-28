@@ -6,7 +6,7 @@ These models define the structure of data returned by the enterprise volumes end
 
 from pydantic import BaseModel, Field, ConfigDict
 from datetime import date, datetime
-from typing import List, Optional, Union
+from typing import List, Literal, Optional, Union
 
 
 class DeviceVolume(BaseModel):
@@ -36,6 +36,11 @@ class DeviceVolume(BaseModel):
     temperature: Optional[float] = Field(None, description="Temperature reading")
     pressure: Optional[float] = Field(None, description="Pressure reading")
     pressure_unit: Optional[str] = Field(None, description="Pressure unit as reported by the DPD API (e.g. kPa)")
+    volume_fix: Optional[Literal["zeroed", "hours"]] = Field(
+        None,
+        description="Set if the corrector's totaliser was set back in this period: "
+                    "'zeroed' - stored as 0, 'hours' - the day is the sum of its hours",
+    )
 
 
 class EnterpriseVolumeResponse(BaseModel):
@@ -75,6 +80,10 @@ class EnterpriseVolumeResponse(BaseModel):
     total_volume: float = Field(ge=0, description="Total volume for all devices on this line")
     device_count: int = Field(ge=0, description="Number of devices contributing to total")
     devices: List[DeviceVolume] = Field(description="Individual device volumes")
+    # How many of those devices had their totaliser set back in this period —
+    # so a line total can be flagged without its device breakdown.
+    volume_fix_hours: int = Field(0, ge=0, description="Devices whose day is the sum of its hours")
+    volume_fix_zeroed: int = Field(0, ge=0, description="Devices stored as 0 for this period")
 
 
 class EnterpriseVolumeError(BaseModel):

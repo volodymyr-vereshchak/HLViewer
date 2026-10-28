@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import BigInteger, Column, ForeignKey, Index, UniqueConstraint
+from sqlalchemy import BigInteger, Column, ForeignKey, Index, UniqueConstraint, text
 from sqlmodel import Field, SQLModel
 
 
@@ -30,6 +30,10 @@ class DpdDailyArchive(SQLModel, table=True):
     __table_args__ = (
         UniqueConstraint("device_id", "day", name="uq_dpd_daily_dev_day"),
         Index("ix_dpd_daily_day", "day"),
+        # The handful of set-back days the hours are summed into — the repair
+        # after every write looks at these alone (backend/db/dao/volume_fix.py).
+        Index("ix_dpd_daily_volume_fix", "device_id", "day",
+              postgresql_where=text("volume_fix IS NOT NULL")),
     )
 
     id: Optional[int] = Field(default=None, primary_key=True, sa_type=BigInteger)
@@ -46,6 +50,9 @@ class DpdDailyArchive(SQLModel, table=True):
     press: Optional[float] = None
     temper: Optional[float] = None
     press_unit: Optional[str] = Field(default=None, max_length=16)
+    # NULL, or how a set-back totaliser was handled: 'zeroed' / 'hours'.
+    # See backend/db/dao/volume_fix.py.
+    volume_fix: Optional[str] = Field(default=None, max_length=8)
     # "dpd" — came from the DPD API, "gsm" — read off the device by a modem.
     # UNIQUE(device_id, day) leaves room for one row per period, so which
     # source wins is settled here rather than at read time.
@@ -81,6 +88,9 @@ class DpdHourlyArchive(SQLModel, table=True):
     press: Optional[float] = None
     temper: Optional[float] = None
     press_unit: Optional[str] = Field(default=None, max_length=16)
+    # NULL, or how a set-back totaliser was handled: 'zeroed' / 'hours'.
+    # See backend/db/dao/volume_fix.py.
+    volume_fix: Optional[str] = Field(default=None, max_length=8)
     source: str = Field(
         default="dpd", max_length=8,
         sa_column_kwargs={"server_default": "dpd"},

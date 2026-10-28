@@ -10,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from backend.db.dao.basic_dao import BasicDao
+from backend.db.dao.volume_fix import contract_hour, day_of_hour, fix_of, repair_days
+from backend.utils.dpd_units import volume_not_negative
 from backend.services.pressure_units import (
     PRESSURE_UNIT_DEFAULT,
     canonical,
@@ -32,7 +34,7 @@ _TABLES = {
     "hourly": ("dpd_line_hourly_archive", "stamp", "uq_dpd_line_hourly"),
 }
 
-_VALUE_COLS = ("volume", "pressure", "temperature", "press_unit")
+_VALUE_COLS = ("volume", "pressure", "temperature", "press_unit", "volume_fix")
 
 
 def _table(period_type: str):
@@ -150,8 +152,10 @@ class DpdLineArchiveDao(BasicDao):
             (
                 r["dpd_line_id"],
                 r["stamp"].date() if period_type == "daily" else r["stamp"],
-                r.get("volume"), r.get("pressure"),
+                # A set-back totaliser is 0 and marked, as in the device archive.
+                volume_not_negative(r.get("volume")), r.get("pressure"),
                 r.get("temperature"), r.get("press_unit"),
+                fix_of(r.get("volume")),
             )
             for r in rows
         ]
@@ -171,6 +175,26 @@ class DpdLineArchiveDao(BasicDao):
             f"ON CONFLICT ON CONSTRAINT {constraint} DO UPDATE SET {set_clause}"
         ))
         await self.session.execute(text(f"DROP TABLE {tmp}"))
+        await self._repair_after(period_type, records)
+
+    async def _repair_after(self, period_type: str, records: List[tuple]) -> None:
+        """Same as DpdArchiveDao._repair_after, for the line archives."""
+        hour = contract_hour()
+        if period_type == "daily":
+            # r = (dpd_line_id, day, volume, pressure, temperature, unit, fix)
+            marked = [r for r in records if r[6] is not None]
+            if not marked:
+                return
+            ids = {r[0] for r in marked}
+            days = [r[1] for r in marked]
+        else:
+            ids = {r[0] for r in records}
+            days = [day_of_hour(r[1], hour) for r in records]
+        await repair_days(
+            self.session, daily="dpd_line_daily_archive", hourly="dpd_line_hourly_archive",
+            key="dpd_line_id", volume_cols=("volume",),
+            ids=ids, day_from=min(days), day_to=max(days),
+        )
 
     async def delete_line(
         self, dpd_line_id: int, period_type: Optional[str] = None
@@ -205,7 +229,7 @@ class DpdLineArchiveDao(BasicDao):
         rows = (await self.session.execute(
             text(
                 f"SELECT a.dpd_line_id, a.{stamp_col} AS stamp, a.volume, "
-                f"a.pressure, a.temperature, a.press_unit, "
+                f"a.pressure, a.temperature, a.press_unit, a.volume_fix, "
                 f"l.pressure_unit AS line_unit "
                 f"FROM {table} a JOIN dpd_line l ON l.id = a.dpd_line_id "
                 f"WHERE a.dpd_line_id = ANY(:ids) "

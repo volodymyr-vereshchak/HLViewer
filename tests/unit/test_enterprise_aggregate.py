@@ -81,3 +81,23 @@ class TestPressureUnit:
 
     def test_real_unit_survives_trimmed(self):
         assert self._unit(" кПа ") == "кПа"
+
+class TestVolumeFix:
+    """A set-back totaliser is flagged on its device and counted on the line,
+    so a line total can be marked without its device breakdown."""
+
+    def test_marks_reach_devices_and_the_line(self):
+        fixed = {**record(DEVICE_A, 24.0), "volumeFix": "hours"}
+        zeroed = {**record(DEVICE_B, 0.0), "volumeFix": "zeroed"}
+        devices = [DEVICE_A, {**DEVICE_B, "line_id": 10}]
+        (line,) = aggregate_volumes([fixed, zeroed], devices, "daily")
+        assert (line.volume_fix_hours, line.volume_fix_zeroed) == (1, 1)
+        assert [d.volume_fix for d in line.devices] == ["hours", "zeroed"]
+
+        (bare,) = aggregate_volumes([fixed, zeroed], devices, "daily", include_devices=False)
+        assert (bare.volume_fix_hours, bare.volume_fix_zeroed) == (1, 1)
+
+    def test_ordinary_records_are_unmarked(self):
+        (line,) = aggregate_volumes([record(DEVICE_A, 5.0)], [DEVICE_A], "daily")
+        assert (line.volume_fix_hours, line.volume_fix_zeroed) == (0, 0)
+        assert line.devices[0].volume_fix is None
