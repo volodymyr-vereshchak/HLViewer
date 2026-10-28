@@ -18,7 +18,11 @@ from typing import List, Optional
 import bcrypt
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
-from jose import JWTError, jwt
+import jwt
+# PyJWT, not python-jose: jose is unmaintained and has an unpatched
+# algorithm-confusion advisory. Tokens are plain HS256 either way, so sessions
+# issued before the switch stay valid (tests/unit/test_auth_core.py).
+from jwt import PyJWTError as JWTError
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -52,6 +56,15 @@ if not JWT_SECRET or JWT_SECRET == _DEV_JWT_SECRET:
             "unique JWT_SECRET in the environment before starting in production."
         )
 JWT_ALGORITHM = "HS256"
+# `iat` here is the FIRST login, kept across sliding refreshes for the absolute
+# cap, which _maybe_refresh_token checks itself. PyJWT would also refuse an iat
+# in the future — python-jose never did — so a server clock stepping back (NTP)
+# would sign everybody out at once. Off, to keep behaving as before the switch.
+_DECODE_OPTIONS = {"verify_iat": False}
+# iat here is the FIRST login, kept across sliding refreshes for the absolute
+# cap, which _maybe_refresh_token checks itself. PyJWT would also refuse an iat
+# in the future — python-jose never did — so a server clock stepping back (NTP)
+# would sign everybody out at once. Off, to keep behaving as before the switch. = {"verify_iat": False}
 JWT_EXPIRE_HOURS = 12
 JWT_REMEMBER_ME_DAYS = 30
 # Sliding session: any authenticated request whose token has less than this
@@ -133,7 +146,7 @@ def _maybe_refresh_token(token: str) -> Optional[tuple[str, int]]:
     Returns None if the token is invalid, lacks a ttl claim (legacy), or is
     still fresh enough."""
     try:
-        claims = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        claims = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM], options=_DECODE_OPTIONS)
     except JWTError:
         return None
     exp = claims.get("exp")
@@ -215,7 +228,7 @@ def decode_jwt(token: Optional[str]) -> Optional[dict]:
     if not token:
         return None
     try:
-        return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM], options=_DECODE_OPTIONS)
     except JWTError:
         return None
 
@@ -293,7 +306,7 @@ async def get_token_claims(hlviewer_token: Optional[str] = Cookie(default=None))
     if not hlviewer_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     try:
-        return jwt.decode(hlviewer_token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return jwt.decode(hlviewer_token, JWT_SECRET, algorithms=[JWT_ALGORITHM], options=_DECODE_OPTIONS)
     except JWTError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
@@ -482,7 +495,7 @@ async def get_me(
     token = request.cookies.get(COOKIE_NAME)
     if token:
         try:
-            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM], options=_DECODE_OPTIONS)
             user = await dao.get_by_id(int(payload["sub"]))
             refusal = session_refusal(user, payload)
             if user and not refusal:

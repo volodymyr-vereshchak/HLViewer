@@ -7,7 +7,7 @@ sliding-session refresh, absolute cap) is driven with freezegun.
 from datetime import datetime, timedelta, timezone
 
 from freezegun import freeze_time
-from jose import jwt
+import jwt
 
 from backend.api.endpoints.auth_ep import (
     JWT_ALGORITHM,
@@ -146,3 +146,33 @@ class TestMaybeRefreshToken:
 
     def test_invalid_token_not_refreshed(self):
         assert _maybe_refresh_token("garbage") is None
+
+class TestTokensFromBeforePyJWT:
+    """The JWT library moved from python-jose to PyJWT. Sessions in browsers
+    at that moment carry jose-signed cookies; they must keep working."""
+
+    # Minted by python-jose 3.4.0 with the test secret, exp in 2100.
+    JOSE_TOKEN = (
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+        "eyJzdWIiOiI3IiwiZXhwIjo0MTAyNDQ0ODAwLCJ0dGwiOjg2NDAwLCJpYXQiOjE3NjcyMjU2MDAs"
+        "InJvbGUiOiJhZG1pbiIsImJyYW5jaGVzIjpbM10sInB2IjoyfQ."
+        "mB4JHRfCIB_tlalF1XokToazGk2fH5b9o0UXdjt30-Y"
+    )
+
+    def test_jose_token_decodes(self):
+        claims = jwt.decode(
+            self.JOSE_TOKEN, "test-only-secret-not-for-production", algorithms=[JWT_ALGORITHM]
+        )
+        assert claims["sub"] == "7"
+        assert claims["role"] == "admin"
+        assert claims["branches"] == [3]
+        assert claims["pv"] == 2
+
+    def test_clock_stepping_back_keeps_sessions(self):
+        # PyJWT refuses an iat in the future by default; python-jose did not,
+        # and a server clock corrected backwards must not sign everybody out.
+        with freeze_time("2026-11-01 12:00:00"):
+            token = _create_token(1)
+        with freeze_time("2026-11-01 11:55:00"):
+            claims = decode_jwt(token)
+        assert claims is not None and claims["sub"] == "1"
