@@ -50,7 +50,9 @@ services:
       # rslave: a mount the host makes there later reaches the running
       # container. Docker starts at boot without waiting for the share, and a
       # private bind would keep the empty directory it caught until a restart.
-      - ${AS4_HOST_PATH:-/mnt/as4}:/mnt/as4:ro,rslave
+      # It needs a shared host root, which Docker Desktop and some LXC hosts
+      # lack (the container then refuses to start): AS4_PROPAGATION=rprivate.
+      - ${AS4_HOST_PATH:-/mnt/as4}:/mnt/as4:ro,${AS4_PROPAGATION:-rslave}
     working_dir: /app
     env_file:
       - .env
@@ -120,7 +122,9 @@ services:
       # rslave: a mount the host makes there later reaches the running
       # container. Docker starts at boot without waiting for the share, and a
       # private bind would keep the empty directory it caught until a restart.
-      - ${AS4_HOST_PATH:-/mnt/as4}:/mnt/as4:ro,rslave
+      # It needs a shared host root, which Docker Desktop and some LXC hosts
+      # lack (the container then refuses to start): AS4_PROPAGATION=rprivate.
+      - ${AS4_HOST_PATH:-/mnt/as4}:/mnt/as4:ro,${AS4_PROPAGATION:-rslave}
     working_dir: /app
     env_file:
       - .env
