@@ -47,7 +47,10 @@ services:
       # This only hands that host directory to the container, so a share kept
       # somewhere other than /mnt/as4 is a one-line .env change and never an
       # edit to this file (which would conflict on every update).
-      - ${AS4_HOST_PATH:-/mnt/as4}:/mnt/as4:ro
+      # rslave: a mount the host makes there later reaches the running
+      # container. Docker starts at boot without waiting for the share, and a
+      # private bind would keep the empty directory it caught until a restart.
+      - ${AS4_HOST_PATH:-/mnt/as4}:/mnt/as4:ro,rslave
     working_dir: /app
     env_file:
       - .env
@@ -114,7 +117,10 @@ services:
       # This only hands that host directory to the container, so a share kept
       # somewhere other than /mnt/as4 is a one-line .env change and never an
       # edit to this file (which would conflict on every update).
-      - ${AS4_HOST_PATH:-/mnt/as4}:/mnt/as4:ro
+      # rslave: a mount the host makes there later reaches the running
+      # container. Docker starts at boot without waiting for the share, and a
+      # private bind would keep the empty directory it caught until a restart.
+      - ${AS4_HOST_PATH:-/mnt/as4}:/mnt/as4:ro,rslave
     working_dir: /app
     env_file:
       - .env
