@@ -185,6 +185,58 @@ class TestThePlan:
         assert device["due"] is True
         assert device["due_reason"] == "never_polled"
 
+    async def _connect_timeout(self, admin_client, anon_client, fleet,
+                               agent_timeout=None, card_timeout=None) -> int:
+        agent = await make_agent(admin_client)
+        if agent_timeout is not None:
+            resp = await admin_client.put(
+                f"/polling/agents/{agent['id']}",
+                json={"modem_connect_timeout_sec": agent_timeout},
+            )
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["modem_connect_timeout_sec"] == agent_timeout
+        body = {"dpd_device_id": fleet["device_id"]}
+        if card_timeout is not None:
+            body["modem_connect_timeout_sec"] = card_timeout
+        card = await make_card(admin_client, **body)
+        await anon_client.put(
+            "/polling/agent/devices",
+            json={"device_ids": [card["id"]]},
+            headers=key(agent),
+        )
+        return (await anon_client.get(
+            "/polling/agent/plan", headers=key(agent)
+        )).json()["devices"][0]["modem_connect_timeout_sec"]
+
+    async def test_the_connect_timeout_defaults_to_ninety(
+        self, admin_client, anon_client, fleet
+    ):
+        # Forty — the card's own default — hung up on calls that connect
+        # through another operator's modem pool.
+        assert await self._connect_timeout(admin_client, anon_client, fleet) == 90
+
+    async def test_the_connect_timeout_is_the_agents(
+        self, admin_client, anon_client, fleet
+    ):
+        assert await self._connect_timeout(
+            admin_client, anon_client, fleet, agent_timeout=60
+        ) == 60
+
+    async def test_a_card_can_lengthen_the_wait_but_not_cut_it(
+        self, admin_client, anon_client, fleet
+    ):
+        assert await self._connect_timeout(
+            admin_client, anon_client, fleet, agent_timeout=60, card_timeout=120
+        ) == 120
+
+    async def test_an_absurd_connect_timeout_is_refused(self, admin_client):
+        agent = await make_agent(admin_client)
+        resp = await admin_client.put(
+            f"/polling/agents/{agent['id']}",
+            json={"modem_connect_timeout_sec": 3},
+        )
+        assert resp.status_code == 422
+
     async def test_the_server_says_what_time_it_is(
         self, admin_client, anon_client, fleet
     ):

@@ -202,6 +202,8 @@ class PollAgentUpdate(BaseModel):
     name: Optional[str] = None
     branch_id: Optional[int] = None
     active: Optional[bool] = None
+    #: Seconds; null returns the agent to the server's default.
+    modem_connect_timeout_sec: Optional[int] = Field(default=None, ge=10, le=300)
 
 
 class PollAgentBusy(BaseModel):
@@ -223,6 +225,8 @@ class PollAgentRead(BaseModel):
     last_seen_at: Optional[datetime] = None
     version: Optional[str] = None
     host: Optional[str] = None
+    #: As set on the agent; None means DEFAULT_CONNECT_TIMEOUT_SEC.
+    modem_connect_timeout_sec: Optional[int] = None
     device_count: int = 0
     #: Decided here rather than in the browser, and by the same rule that
     #: refuses an immediate poll with "немає вільного модема". Two rules for

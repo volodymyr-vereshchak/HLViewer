@@ -40,6 +40,24 @@ router = APIRouter(prefix="/polling/agent", tags=["polling-agent"])
 # stands in its place.
 AGENT_PATH_PREFIX = "/polling/agent"
 
+#: How long an agent waits for a call to connect when nobody set it on the
+#: agent. Ninety, not the forty Ask2 carried: within one operator a CSD call
+#: connected in 23 s, and one from a SIM of another operator also goes through
+#: a modem pool — forty left the MC35i at Радехівський цукор (02.11.2026) silent
+#: to the end of every attempt, while the vendor's program got through. A long wait
+#: costs only on a call that fails silently — BUSY or NO CARRIER end it at once.
+DEFAULT_CONNECT_TIMEOUT_SEC = 90
+
+
+def connect_timeout(agent: PollAgent, card: PollDevice) -> int:
+    """The agent's wait, or the card's when that is longer.
+
+    The calling side decides how long a connect takes, so the agent sets it;
+    the card can still lengthen it for one slow site, never cut it short.
+    """
+    own = agent.modem_connect_timeout_sec or DEFAULT_CONNECT_TIMEOUT_SEC
+    return max(own, card.modem_connect_timeout_sec or 0)
+
 
 async def current_agent(
     x_agent_key: str = Header(default=""),
@@ -315,7 +333,7 @@ async def get_plan(
             pause_between_ms=card.pause_between_ms,
             repeat_count=card.repeat_count,
             preamble_count=card.preamble_count,
-            modem_connect_timeout_sec=card.modem_connect_timeout_sec,
+            modem_connect_timeout_sec=connect_timeout(agent, card),
             modem_repeat_call_count=card.modem_repeat_call_count,
             modem_pause_after_connect_ms=card.modem_pause_after_connect_ms,
             last_hour=last.get("hourly"),

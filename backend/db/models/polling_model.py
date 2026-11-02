@@ -55,6 +55,13 @@ class PollAgent(HlBaseModel, table=True):
     version: Optional[str] = Field(default=None, max_length=32)
     host: Optional[str] = Field(default=None, max_length=255)
 
+    # How long this machine waits for a dialled call to connect. It belongs to
+    # the agent because it is the calling side that sets it: within one
+    # operator a CSD call answers in about 20 s, from a SIM of another one it
+    # goes through the operator's modem pool and takes 40–60. NULL means the
+    # server's default; the card can only lengthen it, never shorten.
+    modem_connect_timeout_sec: Optional[int] = Field(default=None)
+
 
 class PollDevice(HlBaseModel, table=True):
     """A phone number bound to the corrector it reaches.
