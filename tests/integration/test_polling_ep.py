@@ -8,6 +8,7 @@ worth pinning here is who may do what and what the API refuses to tell:
   * an agent key exists in clear exactly once, in the response that creates it.
 """
 
+import asyncio
 import os
 from datetime import datetime, timedelta
 
@@ -762,6 +763,61 @@ class TestPollingAnEnterpriseNow:
         )).json()
         assert watch["status"] == "waiting"
         assert watch["lines"] == []
+
+    async def test_an_enterprise_never_polled_is_not_waiting_for_anybody(
+        self, admin_client, anon_client, targets
+    ):
+        """A card just set up has no task; «чекаю агента» named one that did
+        not exist."""
+        await make_card(admin_client, enterprise_id=targets["enterprise_id"],
+                        phone="+380501234567")
+        watch = (await admin_client.get(
+            f"/polling/enterprises/{targets['enterprise_id']}/poll"
+        )).json()
+        assert watch["status"] == "idle"
+        assert watch["lines"] == [] and watch["candidates"] == []
+
+    async def test_a_taken_call_does_not_show_the_previous_journal(
+        self, admin_client, anon_client, targets
+    ):
+        """Between the claim and the agent's first log push the file is still
+        the last call. Shown, its lines moved the screen's count past where
+        the new session's own numbering starts, and the new journal stayed
+        hidden until a reload."""
+        card = await make_card(admin_client, enterprise_id=targets["enterprise_id"],
+                               phone="+380501234567")
+        live = await self._live_agent(admin_client, anon_client, card["id"])
+        headers, device = live["headers"], card["id"]
+        path = f"/polling/enterprises/{targets['enterprise_id']}/poll"
+
+        await anon_client.post(f"/polling/agent/devices/{device}/start", headers=headers)
+        await anon_client.post(
+            f"/polling/agent/devices/{device}/log",
+            json={"reset": True, "lines": [{"seq": 1, "message": "минулий дзвінок"}]},
+            headers=headers,
+        )
+        await anon_client.post(f"/polling/agent/devices/{device}/finish",
+                               json={"status": "ok", "rows": {}}, headers=headers)
+        old = (await admin_client.get(path)).json()
+        assert old["lines"] and old["session"]
+
+        await admin_client.post(path)
+        await anon_client.post(f"/polling/agent/devices/{device}/start", headers=headers)
+        taken = (await admin_client.get(path)).json()
+        assert taken["status"] == "polling"
+        assert taken["lines"] == []
+
+        # The new journal begins a second later than the old one at the
+        # least — its key is the first line, stamped to the second.
+        await asyncio.sleep(1.1)
+        await anon_client.post(
+            f"/polling/agent/devices/{device}/log",
+            json={"reset": True, "lines": [{"seq": 1, "message": "новий дзвінок"}]},
+            headers=headers,
+        )
+        fresh = (await admin_client.get(path)).json()
+        assert [line["message"] for line in fresh["lines"]][-1] == "новий дзвінок"
+        assert fresh["session"] != old["session"]
 
     async def test_an_operator_who_is_not_an_admin_can_poll_and_watch(
         self, admin_client, viewer_client, anon_client, targets

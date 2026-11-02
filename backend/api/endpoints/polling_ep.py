@@ -614,7 +614,7 @@ class PollWatch(BaseModel):
     """What the screen shows while a poll runs."""
 
     poll_device_id: int
-    status: str                       # waiting | polling | ok | error
+    status: str                       # idle | waiting | polling | ok | error
     #: Who is on the line now, or — after the call — who made it. Never a
     #: guess: while the request is still queued nobody has taken it yet, and
     #: naming the machine that happened to call last time is how an operator
@@ -636,6 +636,9 @@ class PollWatch(BaseModel):
     phase: Optional[str] = None
     #: Somebody asked this call to stop and the agent has not hung up yet.
     cancelling: bool = False
+    #: Which session `lines` belong to. It changes when a new call starts its
+    #: journal, and the screen then reads the lines again from the first.
+    session: Optional[str] = None
     lines: List[PollLogLine] = Field(default_factory=list)
 
 
@@ -672,7 +675,10 @@ async def watch_enterprise_poll(
     elif card.last_status:
         state = "error"
     else:
-        state = "waiting"
+        # Never polled and nobody asked: nothing is waiting for anybody. This
+        # read «чекаю, поки агент візьме завдання» on every enterprise just
+        # set up, for a task that did not exist.
+        state = "idle"
 
     agents = {row["agent"].id: row["agent"].name for row in await dao.list_agents()}
     # Named only when somebody really is on the line, or when the call is over
@@ -691,6 +697,7 @@ async def watch_enterprise_poll(
         if state == "waiting" else []
     )
     fitted = (await dao.correctors_of_enterprises()).get(enterprise_id)
+    session, lines = _session_lines(card, after_seq)
     return PollWatch(
         poll_device_id=card.id,
         status=state,
@@ -710,28 +717,39 @@ async def watch_enterprise_poll(
         total=card.progress_total if state != "waiting" else None,
         phase=card.progress_phase if state != "waiting" else None,
         cancelling=card.cancel_requested_at is not None,
-        lines=[PollLogLine(**line) for line in _session_lines(card, after_seq)],
+        session=session,
+        lines=[PollLogLine(**line) for line in lines],
     )
 
 
-def _session_lines(card: PollDevice, after_seq: int) -> List[dict]:
-    """The journal of the session the screen is watching — and only that one.
+def _session_lines(card: PollDevice, after_seq: int) -> tuple[Optional[str], List[dict]]:
+    """The journal of the session the screen is watching — and only that one,
+    with the key of that session.
 
     The file holds the last call, which is usually the one being asked about.
-    The exception is a request nobody has picked up yet: the file is then the
-    *previous* call, and showing it would read as this one already running.
+    Two moments it does not: a request nobody has picked up yet, and a call an
+    agent has taken but not yet started its journal for — between the claim
+    and its first log push the file is still the *previous* call. Shown there,
+    the old lines took the screen's count past where the new session's own
+    numbering starts, and the new journal stayed invisible until a reload.
     """
     waiting = (card.polling_agent_id is None
                and card.manual_requested_at is not None
                and (card.last_attempt_at is None
                     or card.last_attempt_at < card.manual_requested_at))
-    if waiting:
-        return []
+    # Nothing has run for this card yet, so no file there is its own — one can
+    # be left over from a card of the same site that was removed.
+    never = card.polling_agent_id is None and card.last_attempt_at is None
+    if waiting or never:
+        return None, []
 
     path = poll_journal.journal_path(
         backend_settings["POLL_LOG_DIR"], card.enterprise_id, card.id
     )
-    return poll_journal.read_lines(path, after_seq)
+    if (card.polling_agent_id is not None and card.polling_since is not None
+            and poll_journal.started_before(path, card.polling_since)):
+        return None, []
+    return poll_journal.session_of(path), poll_journal.read_lines(path, after_seq)
 
 
 class DeviceAgents(BaseModel):

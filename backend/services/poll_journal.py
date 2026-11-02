@@ -158,6 +158,30 @@ LINE_RE = re.compile(
 )
 
 
+def session_of(path: Path) -> Optional[str]:
+    """Which session the file holds: its first line, written by `start`.
+
+    The lines are numbered by their place in the file, so a new session
+    numbers them from one again. A screen that knows only "I have up to 40"
+    would skip the first forty lines of the next call — this is what tells it
+    the file has started over.
+    """
+    try:
+        with path.open(encoding="utf-8") as handle:
+            first = handle.readline().strip()
+    except OSError:
+        return None
+    return first or None
+
+
+def started_before(path: Path, moment: datetime) -> bool:
+    """Was the file last written before `moment` — a previous session's."""
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime) < moment
+    except OSError:
+        return True
+
+
 def read_lines(path: Path, after_seq: int = 0) -> List[dict]:
     """The session's lines, numbered, from `after_seq` on.
 
