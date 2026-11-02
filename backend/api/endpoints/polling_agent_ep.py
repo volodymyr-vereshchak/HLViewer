@@ -130,6 +130,7 @@ class PlanDevice(BaseModel):
 
     #: A Floutek ТМ-2 asks for it in every archive request.
     device_password: Optional[str] = None
+    write_password: Optional[str] = None
 
 
 class Plan(BaseModel):
@@ -347,6 +348,7 @@ async def get_plan(
             # Sent for every card: which corrector answers is found on the
             # call, and only a ТМ-2 uses it.
             device_password=card.device_password,
+            write_password=card.write_password,
         ))
     # Manual requests first, then priority, then oldest poll — the order an
     # agent would have had to work out for itself otherwise.

@@ -1023,3 +1023,16 @@ class TestTheDevicePassword:
             f"/enterprise-mappings/{created['id']}",
             json={"gsm": {**base, "password": "  "}})).json()
         assert cleared["gsm"]["password"] == "11"
+
+        # The write password starts empty and is kept as typed.
+        assert first["gsm"]["write_password"] == ""
+        with_write = (await admin_client.patch(
+            f"/enterprise-mappings/{created['id']}",
+            json={"gsm": {**base, "write_password": "123456"}})).json()
+        assert with_write["gsm"]["write_password"] == "123456"
+
+        # Four bytes on the wire: a longer code is refused, not cut short.
+        too_long = await admin_client.patch(
+            f"/enterprise-mappings/{created['id']}",
+            json={"gsm": {**base, "password": "123456"}})
+        assert too_long.status_code == 422

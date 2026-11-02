@@ -154,6 +154,49 @@ def validate_poll_cron(poll_cron: Optional[str]) -> Optional[str]:
     return text
 
 
+#: The user code goes into four bytes of every Floutek archive request
+#: (BuildReadRequest in the vendor's CalcPKV / calcFloutecBP2): twelve bytes
+#: of write password, then four of user code.
+USER_CODE_MAX = 4
+
+
+def validate_user_code(code: Optional[str]) -> str:
+    """The Floutek user code as it goes on the wire, or a refusal.
+
+    Refused rather than cut: a fifth character would be dropped without a
+    word, and the corrector answers a code it does not know with a refusal
+    that reads like a wrong password typed elsewhere. Checked on the ВР-2 at
+    Радехівський цукор (02.11.2026): "11" reads, "99" and an empty code are
+    refused — and so is a write password the corrector does not have.
+    """
+    text = (code or "").strip() or "11"
+    if len(text) > USER_CODE_MAX:
+        raise PollValidationError(
+            f"Код користувача Флоутека — не більше {USER_CODE_MAX} символів "
+            f"(введено {len(text)})"
+        )
+    if not text.isascii():
+        raise PollValidationError("Код користувача — лише латиниця й цифри")
+    return text
+
+
+#: Twelve bytes before the user code in the same request.
+WRITE_PASSWORD_MAX = 12
+
+
+def validate_write_password(password: Optional[str]) -> str:
+    """The Floutek write password as it goes on the wire; empty means none."""
+    text = (password or "").strip()
+    if len(text) > WRITE_PASSWORD_MAX:
+        raise PollValidationError(
+            f"Пароль на запис Флоутека — не більше {WRITE_PASSWORD_MAX} символів "
+            f"(введено {len(text)})"
+        )
+    if not text.isascii():
+        raise PollValidationError("Пароль на запис — лише латиниця й цифри")
+    return text
+
+
 def validate_priority(priority: Optional[int]) -> Optional[int]:
     if priority is None:
         return None

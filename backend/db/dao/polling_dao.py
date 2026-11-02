@@ -225,15 +225,17 @@ class PollingDao:
 
     async def set_gsm(self, enterprise_id: int, phone: Optional[str],
                       auto_poll: bool, poll_cron: Optional[str],
-                      password: Optional[str] = None) -> None:
+                      password: Optional[str] = None,
+                      write_password: Optional[str] = None) -> None:
         """Create, update or remove the modem settings of one enterprise."""
         await self._set_gsm(await self.gsm_of_enterprise(enterprise_id),
                             {"enterprise_id": enterprise_id},
-                            phone, auto_poll, poll_cron, password)
+                            phone, auto_poll, poll_cron, password, write_password)
 
     async def set_line_gsm(self, dpd_line_id: int, phone: Optional[str],
                            auto_poll: bool, poll_cron: Optional[str],
-                           password: Optional[str] = None) -> None:
+                           password: Optional[str] = None,
+                           write_password: Optional[str] = None) -> None:
         """The same, for a ДПД line: those have modems of their own.
 
         A line's card differs from an enterprise's in one thing only — which
@@ -242,12 +244,13 @@ class PollingDao:
         """
         await self._set_gsm(await self.gsm_of_line(dpd_line_id),
                             {"dpd_line_id": dpd_line_id},
-                            phone, auto_poll, poll_cron, password)
+                            phone, auto_poll, poll_cron, password, write_password)
 
     async def _set_gsm(self, card: Optional[PollDevice], owner: Dict,
                        phone: Optional[str], auto_poll: bool,
                        poll_cron: Optional[str],
-                       password: Optional[str]) -> None:
+                       password: Optional[str],
+                       write_password: Optional[str] = None) -> None:
         """Create, update or remove one modem card.
 
         A phone cleared to empty removes the card altogether rather than
@@ -267,6 +270,7 @@ class PollingDao:
             "poll_cron": poll_cron or None,
             "enabled": True,
             "device_password": (password or "").strip() or "11",
+            "write_password": (write_password or "").strip(),
         }
         if card is None:
             self.session.add(PollDevice(**owner, **values))

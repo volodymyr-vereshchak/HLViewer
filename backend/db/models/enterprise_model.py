@@ -207,6 +207,9 @@ class EnterpriseGsm(SQLModel):
     #: default "11" unless the corrector was set otherwise. Ignored by every
     #: other model.
     password: str = "11"
+    #: Ask2's «Пароль на запис»: sent with every ПК-В and ВР-2 archive request
+    #: as Ask2 sends it. Empty for a corrector that has none set.
+    write_password: str = ""
 
 
 class EnterpriseRead(EnterpriseBase):

@@ -1046,14 +1046,16 @@ async def _save_gsm(session, enterprise_id: int, gsm) -> None:
     """
     from backend.db.dao.polling_dao import PollingDao
     from backend.services.poll_validation import (
-        PollValidationError, validate_poll_cron,
+        PollValidationError, validate_poll_cron, validate_user_code,
+        validate_write_password,
     )
 
     dao = PollingDao(session)
     try:
         schedule = validate_poll_cron(gsm.poll_cron)
         await dao.set_gsm(enterprise_id, gsm.phone, gsm.auto_poll, schedule,
-                          gsm.password)
+                          validate_user_code(gsm.password),
+                          validate_write_password(gsm.write_password))
     except PollValidationError as error:
         raise HTTPException(status_code=422, detail=str(error))
 
@@ -1081,6 +1083,7 @@ async def _read_enterprise(session, dao, ent) -> EnterpriseRead:
             poll_cron=card.poll_cron,
             agent_ids=await PollingDao(session).device_agents(card.id),
             password=card.device_password,
+            write_password=card.write_password,
         ),
     )
 
@@ -1136,6 +1139,7 @@ async def list_enterprises(
                 poll_cron=card.poll_cron,
                 agent_ids=assigned.get(card.id, []),
                 password=card.device_password,
+                write_password=card.write_password,
             ),
         ))
     return result

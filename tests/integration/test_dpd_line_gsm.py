@@ -64,6 +64,7 @@ class TestLineModem:
         assert listed[0]["gsm"] == {
             "phone": "+380671234567", "auto_poll": True,
             "poll_cron": "0 8 * * *", "agent_ids": [], "password": "11",
+            "write_password": "",
         }
 
     async def test_a_line_without_one_says_so(self, admin_client, line_target):

@@ -710,6 +710,8 @@ class TestPollingAnEnterpriseNow:
         mine = next(d for d in plan["devices"] if d["id"] == card["id"])
         assert mine["protocol_id"] == 2002
         assert mine["device_password"] == "11"
+        # The write password travels too, empty for a corrector with none set.
+        assert mine["write_password"] == ""
 
         # A call that reached nobody says nothing about who is there.
         await anon_client.post(f"/polling/agent/devices/{card['id']}/start", headers=headers)

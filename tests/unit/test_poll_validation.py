@@ -15,6 +15,8 @@ from backend.services.poll_validation import (
     normalise_phone,
     validate_poll_cron,
     validate_priority,
+    validate_user_code,
+    validate_write_password,
 )
 
 
@@ -91,3 +93,38 @@ class TestAddressMatters:
         # The address is still sent and still checked in the reply — it is just
         # never anything but 1, so asking for it invites a typo.
         assert address_matters(protocol) is False
+
+
+class TestTheFloutekUserCode:
+    """Four bytes in every archive request; the ВР-2 at Радехівський цукор
+    refused a wrong code and an empty one (02.11.2026)."""
+
+    def test_empty_is_the_vendor_default(self):
+        assert validate_user_code(None) == "11"
+        assert validate_user_code("  ") == "11"
+
+    def test_up_to_four_characters_go_as_typed(self):
+        assert validate_user_code(" 4321 ") == "4321"
+
+    def test_a_fifth_character_is_refused_not_cut(self):
+        with pytest.raises(PollValidationError, match="не більше 4"):
+            validate_user_code("12345")
+
+    def test_it_must_fit_the_ascii_frame(self):
+        with pytest.raises(PollValidationError):
+            validate_user_code("код")
+
+
+class TestTheFloutekWritePassword:
+    """Twelve bytes before the code; empty for a corrector that has none."""
+
+    def test_empty_is_none_set(self):
+        assert validate_write_password(None) == ""
+        assert validate_write_password("  ") == ""
+
+    def test_up_to_twelve_go_as_typed(self):
+        assert validate_write_password("123456789012") == "123456789012"
+
+    def test_a_thirteenth_is_refused(self):
+        with pytest.raises(PollValidationError, match="не більше 12"):
+            validate_write_password("1234567890123")

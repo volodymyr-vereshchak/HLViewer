@@ -183,10 +183,16 @@ class PollDevice(HlBaseModel, table=True):
     # but sending the wrong one looks exactly like a dead meter. Filled in, not
     # asked: for a ЛУМГ corrector it is the number in the hostlib file name.
     device_address: Optional[int] = Field(default=None)
-    #: The password a Floutek ТМ-2 asks for in every archive request. The
-    #: vendor's default is "11" and the whole fleet uses it, but it is a
-    #: setting of the corrector. Other models ignore it.
+    #: The user code a Floutek ПК-В or ВР-2 asks for in every archive request
+    #: (Ask2's «Код користувача»). The vendor's default is "11" and the whole
+    #: fleet uses it, but it is a setting of the corrector. Four bytes on the
+    #: wire; other models ignore it.
     device_password: str = Field(default="11", max_length=16)
+    #: Ask2's «Пароль на запис». Its ПК-В and ВР-2 drivers send it in every
+    #: archive request too, in the twelve bytes before the code, so a
+    #: corrector that has one set is read with it. Empty for one that has
+    #: none: the ВР-2 at Радехівський цукор refused a read with anything there.
+    write_password: str = Field(default="", max_length=12)
 
     #: What answered the last call, in its own words. The protocol is found on
     #: the call — every family read here names itself — and remembered so the
@@ -194,12 +200,6 @@ class PollDevice(HlBaseModel, table=True):
     #: The catalogue's protocol is only a hint for the first call ever made.
     detected_protocol: Optional[int] = Field(default=None)
     detected_model: Optional[str] = Field(default=None, max_length=64)
-    # No access code or password here. In these protocols they buy the right to
-    # WRITE — set the clock, change the contract hour, load an FHP passport —
-    # and this poll only reads archives. Carrying a plaintext device credential
-    # we never send would be a liability with no use: it would be filled in by
-    # the ask2cfg.xml import, backed up and bundled to the offline server for
-    # nothing. The values stay in ask2cfg.xml if writing is ever added.
 
     answer_timeout_sec: int = Field(default=7)
     pause_between_ms: int = Field(default=400)
