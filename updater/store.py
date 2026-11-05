@@ -59,7 +59,7 @@ class Job:
         self._saved_at = 0.0
 
     @classmethod
-    def create(cls, jobs_dir: Path, started_by: str, target: dict) -> "Job":
+    def create(cls, jobs_dir: Path, started_by: str, target: dict, discard_local: bool = False) -> "Job":
         job_id = datetime.now().strftime("%Y%m%d-%H%M%S")
         data = {
             "id": job_id,
@@ -70,6 +70,8 @@ class Job:
             "finished_at": None,
             "started_by": started_by,
             "target": target,
+            # Reset files edited on the server (saved aside first) instead of stopping.
+            "discard_local": discard_local,
             "from": {},
             "warnings": [],
             "steps": [{"id": s, "label": label, "state": "pending", "note": None} for s, label in STEPS],

@@ -29,11 +29,16 @@ class Abort(Exception):
     """Stop before anything was changed."""
 
 
+def _names(paths: list[str], limit: int = 10) -> str:
+    more = f" і ще {len(paths) - limit}" if len(paths) > limit else ""
+    return ", ".join(paths[:limit]) + more
+
+
 def check(repos: dict[str, Git], config: dict) -> dict:
     """Fetch both repositories and describe what an update would bring."""
     token = config.get("token")
     result = {"checked_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-              "repos": {}, "problems": [], "notes": []}
+              "repos": {}, "problems": [], "resolvable": [], "notes": []}
     for kind, git in repos.items():
         rc = config["repos"][kind]
         entry: dict = {"url": rc["url"], "branch": rc["branch"], "error": None}
@@ -47,7 +52,7 @@ def check(repos: dict[str, Git], config: dict) -> dict:
             result["problems"].append(entry["error"])
             continue
         entry["remote"] = git.info(remote)
-        entry["dirty"] = git.dirty()
+        entry["dirty"] = []
         if remote == head or git.is_ancestor(remote, head):
             entry["ahead"] = 0
             entry["commits"] = []
@@ -62,14 +67,22 @@ def check(repos: dict[str, Git], config: dict) -> dict:
             )
         entry["ahead"] = git.count(head, remote)
         entry["commits"] = git.commits(head, remote)
-        if entry["dirty"]:
-            result["problems"].append(
-                f"{LABELS[kind]}: на сервері змінено файли проєкту: {', '.join(entry['dirty'][:10])}"
+        state = git.local_state(remote)
+        entry["dirty"] = state["reset"]
+        entry["unstage"] = state["unstage"]
+        entry["collisions"] = state["collisions"]
+        if state["unstage"]:
+            result["notes"].append(
+                f"{LABELS[kind]}: додані в git на сервері, але не закомічені — буде знято з обліку git, "
+                f"самі файли лишаться: {_names(state['unstage'])}"
             )
-        collisions = git.untracked_collisions(head, remote)
-        if collisions:
-            result["problems"].append(
-                f"{LABELS[kind]}: файли заважатимуть оновленню: {', '.join(collisions[:10])}"
+        if state["reset"]:
+            result["resolvable"].append(
+                f"{LABELS[kind]}: на сервері змінено файли проєкту: {_names(state['reset'])}"
+            )
+        if state["collisions"]:
+            result["resolvable"].append(
+                f"{LABELS[kind]}: файли заважатимуть оновленню: {_names(state['collisions'])}"
             )
         if kind == "backend":
             changed = git.changed_files(head, remote)
@@ -107,6 +120,8 @@ class Update:
         self.new_heads: set[str] = set()
         self.dump_path: Path | None = None
         self.image_rebuild = False
+        self.local: dict[str, dict[str, list[str]]] = {}
+        self.aside: Path | None = None
 
     # ── entry point ───────────────────────────────────────────────────────
     def run(self) -> None:
@@ -119,7 +134,7 @@ class Update:
         except Exception as exc:  # noqa: BLE001 — nothing is changed yet, whatever it was
             log(f"Зупинено до заміни: {exc}")
             self._undo_preparation()
-            self.job.finish(NOT_DONE, f"Не виконано: {exc}")
+            self.job.finish(NOT_DONE, f"Не виконано: {exc}{self._aside_note()}")
             return
 
         try:
@@ -131,7 +146,10 @@ class Update:
             return
 
         self.p.prune()
-        self.job.finish(UPDATED, "Оновлено")
+        self.job.finish(UPDATED, f"Оновлено{self._aside_note()}")
+
+    def _aside_note(self) -> str:
+        return f". Копії скинутих файлів: {self.aside}" if self.aside else ""
 
     # ── before the switch ─────────────────────────────────────────────────
     def _prepare(self) -> bool:
@@ -149,12 +167,13 @@ class Update:
                 raise Abort(f"{LABELS[kind]}: коміт {want[:8]} не знайдено — натисніть «Перевірити» ще раз")
             if not git.is_ancestor(head, want):
                 raise Abort(f"{LABELS[kind]}: {want[:8]} не продовжує встановлену версію")
-            dirty = git.dirty()
-            if dirty:
-                raise Abort(f"{LABELS[kind]}: на сервері змінено файли: {', '.join(dirty[:10])}")
-            collisions = git.untracked_collisions(head, want)
-            if collisions:
-                raise Abort(f"{LABELS[kind]}: файли заважатимуть оновленню: {', '.join(collisions[:10])}")
+            state = git.local_state(want)
+            if not job.data.get("discard_local"):
+                if state["reset"]:
+                    raise Abort(f"{LABELS[kind]}: на сервері змінено файли: {_names(state['reset'])}")
+                if state["collisions"]:
+                    raise Abort(f"{LABELS[kind]}: файли заважатимуть оновленню: {_names(state['collisions'])}")
+            self.local[kind] = state
             self.new[kind] = want
             self.changed.append(kind)
         job.set(**{"from": {k: v for k, v in self.old.items()}})
@@ -181,10 +200,31 @@ class Update:
             # A custom-format dump compresses well; the full size is the margin.
             if free < size:
                 raise Abort(f"мало місця для копії бази: вільно {free >> 20} МБ, база {size >> 20} МБ")
+        self._clean_local()
         notes = ", ".join(f"{LABELS[k]} {self.old[k][:8]} → {self.new[k][:8]}" for k in self.changed)
         job.log(f"Буде оновлено: {notes}")
         job.step("prepare", "done", notes)
         return True
+
+    def _clean_local(self) -> None:
+        """Clear what the checks above found in the way. Done last in the
+        preparation, once nothing else can stop the update before it starts.
+        Index additions are only taken out of the index; edits and files in
+        the way only when the admin asked for it, and saved first."""
+        job = self.job
+        aside = self.p.local_changes_dir() / datetime.now().strftime("%Y%m%d-%H%M%S")
+        for kind in self.changed:
+            state = self.local.get(kind)
+            if not state or not any(state.values()):
+                continue
+            if state["unstage"]:
+                job.log(f"{LABELS[kind]}: знято з обліку git (файли лишились): {_names(state['unstage'])}")
+            saved = self.repos[kind].clean_local(state, aside / kind)
+            if saved:
+                self.aside = aside
+                job.log(f"{LABELS[kind]}: скинуто зміни на сервері, копії → {aside / kind}: {_names(saved)}")
+        if self.aside:
+            job.warn(f"Змінені на сервері файли скинуто, їх копії: {self.aside}")
 
     def _build(self) -> None:
         job = self.job
@@ -315,14 +355,14 @@ class Update:
         except Exception as exc:  # noqa: BLE001
             job.step("rollback", "failed", str(exc))
             where = f" Копія бази: {self.dump_path}" if self.dump_path else ""
-            job.finish(FAILED, f"Збій: {reason}; відкат не вдався: {exc}.{where}")
+            job.finish(FAILED, f"Збій: {reason}; відкат не вдався: {exc}.{where}{self._aside_note()}")
             return
         note = "з відновленням бази з копії" if db_restored else None
         job.step("rollback", "done", note)
         # The failed version's images lost their tag to the restored ones.
         self.p.prune()
         suffix = f" ({note})" if note else ""
-        job.finish(ROLLED_BACK, f"Повернено попередню версію{suffix}. Причина: {reason}")
+        job.finish(ROLLED_BACK, f"Повернено попередню версію{suffix}. Причина: {reason}{self._aside_note()}")
 
     def _rollback_database(self) -> bool:
         """Bring the schema back to what the old code expects. True if that

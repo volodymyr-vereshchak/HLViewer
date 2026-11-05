@@ -171,6 +171,7 @@ def check():
 class StartBody(BaseModel):
     target: dict[str, str]
     started_by: str = ""
+    discard_local: bool = False
 
 
 @app.post("/start", dependencies=[Depends(require_backend)])
@@ -182,7 +183,7 @@ def start(body: StartBody):
     with runtime.lock:
         if runtime.busy():
             raise HTTPException(409, "Оновлення вже виконується")
-        job = Job.create(store.jobs_dir, body.started_by[:100], target)
+        job = Job.create(store.jobs_dir, body.started_by[:100], target, body.discard_local)
         runtime.job = job
     shell = Shell(job.log)
     worker = threading.Thread(

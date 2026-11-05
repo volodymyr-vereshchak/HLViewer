@@ -98,3 +98,5 @@ backend/db/preload_db/*_old.json
 # pre-update database dumps. Server state, never code.
 /update/
 /backups/
+# Hand-made dumps dropped in the project root on a server
+/backup_*.sql.gz

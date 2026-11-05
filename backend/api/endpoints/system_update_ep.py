@@ -97,12 +97,15 @@ async def check(_: AppUser = Depends(require_admin)):
 
 class StartBody(BaseModel):
     target: dict[str, str]
+    # Reset files edited on the server (the updater keeps copies) instead of stopping.
+    discard_local: bool = False
 
 
 @router.post("/start")
 async def start(body: StartBody, user: AppUser = Depends(require_admin)):
     return await _call("POST", "/start", json={
         "target": body.target,
+        "discard_local": body.discard_local,
         "started_by": user.display_name or user.username,
     })
 

@@ -163,8 +163,81 @@ class Git:
             raise
 
     def dirty(self) -> list[str]:
-        out = self._git("status", "--porcelain", "--untracked-files=no")
-        return [line[3:] for line in out.splitlines() if line.strip()]
+        return [path for _code, path in self.status()]
+
+    def status(self) -> list[tuple[str, str]]:
+        """(XY code, path) of every change to tracked files. A rename or copy
+        gives both paths, the source with code '<-' — both have to be put back."""
+        out = self._git("status", "--porcelain=v1", "-z", "--untracked-files=no")
+        parts = out.split("\0")
+        result = []
+        i = 0
+        while i < len(parts):
+            entry = parts[i]
+            i += 1
+            if len(entry) < 4:
+                continue
+            code, path = entry[:2], entry[3:]
+            result.append((code, path))
+            if code[0] in "RC" and i < len(parts):
+                result.append(("<-", parts[i]))
+                i += 1
+        return result
+
+    def exists_in(self, sha: str, path: str) -> bool:
+        try:
+            self._git("cat-file", "-e", f"{sha}:{path}")
+            return True
+        except CommandError:
+            return False
+
+    def local_state(self, target: str) -> dict[str, list[str]]:
+        """What stands between this checkout and a fast-forward to `target`.
+
+        unstage    — added to the index on the server, never committed, and
+                     absent from `target`: dropping them from the index loses
+                     nothing, the files stay on disk as they are;
+        reset      — edits to tracked files (and index additions that `target`
+                     brings itself): putting them back loses the edit, so it is
+                     only done when asked, after a copy is saved;
+        collisions — untracked files where `target` adds its own.
+        """
+        unstage, reset = [], []
+        for code, path in self.status():
+            if code[0] == "A" and not self.exists_in(target, path):
+                unstage.append(path)
+            else:
+                reset.append(path)
+        taken = set(reset) | set(unstage)
+        collisions = [p for p in self.untracked_collisions(self.head(), target) if p not in taken]
+        return {"unstage": unstage, "reset": reset, "collisions": collisions}
+
+    def clean_local(self, state: dict[str, list[str]], aside: Path) -> list[str]:
+        """Bring the checkout to its HEAD, as `local_state` described it.
+        Everything that is reset or moved is first kept under `aside`, by its
+        path in the repository. Returns the paths saved there."""
+        if state["unstage"]:
+            self._git("rm", "--cached", "--quiet", "--", *state["unstage"], quiet=False)
+        saved = []
+        for path in state["reset"]:
+            src = self.dir / path
+            if src.is_file():
+                dest = aside / path
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dest)
+                saved.append(path)
+        for path in state["collisions"]:
+            src = self.dir / path
+            if src.exists():
+                dest = aside / path
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(src), str(dest))
+                saved.append(path)
+        if state["reset"]:
+            # The index additions not in the target were taken out above, so
+            # this deletes nothing that is not already saved.
+            self._git("reset", "--hard", "--quiet", "HEAD", quiet=False)
+        return saved
 
     def commits(self, older: str, newer: str, limit: int = 100) -> list[dict]:
         out = self._git("log", f"--max-count={limit}", "--format=%H%x1f%cI%x1f%an%x1f%s",
@@ -377,6 +450,11 @@ class Platform:
         path = self.project_dir / "backups"
         path.mkdir(exist_ok=True)
         return path
+
+    def local_changes_dir(self) -> Path:
+        """Where server-side edits go when an update resets them. Under
+        /update/, which git ignores — the copies never show up as changes."""
+        return self.project_dir / "update" / "local-changes"
 
     def free_space(self) -> int:
         return shutil.disk_usage(self.backup_dir()).free

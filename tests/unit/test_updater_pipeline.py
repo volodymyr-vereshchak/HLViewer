@@ -24,12 +24,12 @@ SETTINGS = SimpleNamespace(
 
 
 class FakeGit:
-    def __init__(self, head, new, changed=(), heads_by_sha=None, dirty=()):
+    def __init__(self, head, new, changed=(), heads_by_sha=None, dirty=(), unstage=(), collisions=()):
         self._head = head
         self._new = new
         self._changed = list(changed)
         self._heads = heads_by_sha or {}
-        self._dirty = list(dirty)
+        self._state = {"unstage": list(unstage), "reset": list(dirty), "collisions": list(collisions)}
         self.calls = []
 
     def head(self):
@@ -41,11 +41,14 @@ class FakeGit:
     def is_ancestor(self, older, newer):
         return older == newer or (older, newer) == (OLD_B, NEW_B) or (older, newer) == (OLD_F, NEW_F)
 
-    def dirty(self):
-        return self._dirty
+    def local_state(self, target):
+        return {k: list(v) for k, v in self._state.items()}
 
-    def untracked_collisions(self, older, newer):
-        return []
+    def clean_local(self, state, aside):
+        self.calls.append(("clean", aside.name))
+        saved = state["reset"] + state["collisions"]
+        self._state = {"unstage": [], "reset": [], "collisions": []}
+        return saved
 
     def changed_files(self, older, newer, added_only=False):
         return self._changed
@@ -141,6 +144,9 @@ class FakePlatform:
     def backup_dir(self):
         return self.tmp
 
+    def local_changes_dir(self):
+        return self.tmp / "local-changes"
+
     def dump(self, path):
         self._call("dump")
         if not self.dump_ok:
@@ -164,11 +170,11 @@ class FakePlatform:
         pass
 
 
-def _run(tmp_path, *, backend=None, frontend=None, target=None, **platform_kw):
+def _run(tmp_path, *, backend=None, frontend=None, target=None, discard_local=False, **platform_kw):
     backend = backend or FakeGit(OLD_B, NEW_B, heads_by_sha={OLD_B: {"r1"}, NEW_B: {"r2"}})
     frontend = frontend or FakeGit(OLD_F, NEW_F)
     platform = FakePlatform(tmp_path, backend, **platform_kw)
-    job = Job.create(tmp_path, "admin", target or {"backend": NEW_B, "frontend": NEW_F})
+    job = Job.create(tmp_path, "admin", target or {"backend": NEW_B, "frontend": NEW_F}, discard_local)
     pipeline.Update(job, {"backend": backend, "frontend": frontend}, platform, SETTINGS).run()
     return job.data, platform, backend, frontend
 
@@ -228,6 +234,42 @@ def test_modified_files_block_the_update(tmp_path):
     assert data["result"] == pipeline.NOT_DONE
     assert "docker-compose.yml" in data["message"]
     assert p.calls == []
+    assert not any(c[0] == "clean" for c in backend.calls)
+
+
+def test_files_in_the_way_block_without_discard(tmp_path):
+    frontend = FakeGit(OLD_F, NEW_F, collisions=["src/new.ts"])
+    data, p, _, _ = _run(tmp_path, frontend=frontend)
+    assert data["result"] == pipeline.NOT_DONE
+    assert "src/new.ts" in data["message"]
+
+
+def _new_backend(**kw):
+    return FakeGit(OLD_B, NEW_B, heads_by_sha={OLD_B: {"r1"}, NEW_B: {"r2"}}, **kw)
+
+
+def test_index_additions_are_unstaged_without_asking(tmp_path):
+    data, p, backend, _ = _run(tmp_path, backend=_new_backend(unstage=["backup_1.sql.gz"]))
+    assert data["result"] == pipeline.UPDATED
+    assert backend.calls[0][0] == "clean"
+    assert any("backup_1.sql.gz" in line for line in data["log"])
+    # Nothing was reset, so there are no copies to point at.
+    assert "Копії" not in data["message"]
+
+
+def test_discard_resets_edits_before_anything_runs(tmp_path):
+    data, p, backend, _ = _run(tmp_path, backend=_new_backend(dirty=["docker-compose.yml"]), discard_local=True)
+    assert data["result"] == pipeline.UPDATED
+    assert backend.calls[0][0] == "clean"
+    assert backend.calls.index(("merge", NEW_B)) > 0
+    assert "local-changes" in data["message"]
+    assert any("local-changes" in w for w in data["warnings"])
+
+
+def test_discard_then_failed_build_still_points_at_the_copies(tmp_path):
+    data, _, _, _ = _run(tmp_path, backend=_new_backend(dirty=["x.py"]), discard_local=True, build_ok=False)
+    assert data["result"] == pipeline.NOT_DONE
+    assert "local-changes" in data["message"]
 
 
 def test_running_data_update_blocks_the_update(tmp_path):

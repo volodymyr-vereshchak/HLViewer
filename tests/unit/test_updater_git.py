@@ -92,7 +92,9 @@ def test_local_edits_are_reported(repos):
     (server / "requirements.txt").write_text("edited on the server\n")
     result = _check(server, upstream)
     assert result["repos"]["backend"]["dirty"] == ["requirements.txt"]
-    assert any("змінено файли" in p for p in result["problems"])
+    # Something the update can clear when asked, not a dead end.
+    assert any("змінено файли" in p for p in result["resolvable"])
+    assert result["problems"] == []
 
 
 def test_untracked_file_in_the_way_is_reported(repos):
@@ -100,7 +102,66 @@ def test_untracked_file_in_the_way_is_reported(repos):
     _commit(upstream, {"new.txt": "from upstream\n"}, "add new.txt")
     (server / "new.txt").write_text("made by hand\n")
     result = _check(server, upstream)
-    assert any("new.txt" in p for p in result["problems"])
+    assert any("new.txt" in p for p in result["resolvable"])
+    assert result["repos"]["backend"]["collisions"] == ["new.txt"]
+
+
+def test_index_addition_is_only_a_note(repos):
+    """`git add` of a dump on the server: in the index, never committed, and
+    not something the update brings - taken out of the index, kept on disk."""
+    upstream, server = repos
+    _commit(upstream, {"README.md": "v2\n"}, "docs")
+    (server / "backup_1.sql.gz").write_bytes(b"dump")
+    (server / "cfg dir").mkdir()
+    (server / "cfg dir" / "a.CFG").write_text("x\n")
+    _git(server, "add", "backup_1.sql.gz", "cfg dir/a.CFG")
+    result = _check(server, upstream)
+    entry = result["repos"]["backend"]
+    assert sorted(entry["unstage"]) == ["backup_1.sql.gz", "cfg dir/a.CFG"]
+    assert entry["dirty"] == [] and entry["collisions"] == []
+    assert result["problems"] == [] and result["resolvable"] == []
+    assert any("backup_1.sql.gz" in n for n in result["notes"])
+
+
+def test_clean_local_makes_the_fast_forward_possible(repos, tmp_path):
+    upstream, server = repos
+    new = _commit(upstream, {"README.md": "v2\n", "added.txt": "upstream\n"}, "change")
+    (server / "README.md").write_text("edited on the server\n")
+    (server / "added.txt").write_text("made by hand\n")
+    (server / "dump.sql.gz").write_bytes(b"dump")
+    _git(server, "add", "dump.sql.gz")
+
+    git = Git(Shell(), server)
+    git.fetch(str(upstream), "master", None)
+    state = git.local_state(new)
+    assert state == {"unstage": ["dump.sql.gz"], "reset": ["README.md"], "collisions": ["added.txt"]}
+
+    aside = tmp_path / "aside"
+    saved = git.clean_local(state, aside)
+    assert sorted(saved) == ["README.md", "added.txt"]
+    assert (aside / "README.md").read_text() == "edited on the server\n"
+    assert (aside / "added.txt").read_text() == "made by hand\n"
+    # The dump is untracked now, still on disk, and untouched by the reset.
+    assert (server / "dump.sql.gz").read_bytes() == b"dump"
+    assert git.dirty() == []
+    git.merge_ff(new)
+    assert (server / "README.md").read_text() == "v2\n"
+    assert (server / "added.txt").read_text() == "upstream\n"
+
+
+def test_rename_on_the_server_is_reset_by_both_paths(repos, tmp_path):
+    upstream, server = repos
+    new = _commit(upstream, {"README.md": "v2\n"}, "docs")
+    _git(server, "mv", "requirements.txt", "req.txt")
+    git = Git(Shell(), server)
+    git.fetch(str(upstream), "master", None)
+    state = git.local_state(new)
+    assert sorted(state["reset"]) == ["req.txt", "requirements.txt"]
+    git.clean_local(state, tmp_path / "aside")
+    assert (tmp_path / "aside" / "req.txt").exists()
+    assert not (server / "req.txt").exists()
+    assert (server / "requirements.txt").read_text() == "fastapi\n"
+    git.merge_ff(new)
 
 
 def test_local_commit_means_diverged(repos):
