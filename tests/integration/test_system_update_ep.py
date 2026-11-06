@@ -56,7 +56,9 @@ async def test_start_passes_token_and_admin(admin_client, updater):
     assert resp.json()["watch_token"] == "w"
     request = seen[-1]
     assert request.headers["X-Updater-Token"] == "shared-secret"
-    assert json.loads(request.content) == {"target": {"backend": "b" * 40}, "started_by": ADMIN_USERNAME}
+    assert json.loads(request.content) == {
+        "target": {"backend": "b" * 40}, "discard_local": False, "started_by": ADMIN_USERNAME,
+    }
 
 
 async def test_status_adds_the_running_commit(admin_client, updater):

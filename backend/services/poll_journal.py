@@ -20,7 +20,9 @@ more: the readings are the point of the call, the commentary is not.
 from __future__ import annotations
 
 import logging
+import os
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, List, Optional
@@ -75,6 +77,7 @@ def start(path: Path, title: str) -> None:
             target.parent.mkdir(parents=True, exist_ok=True)
             with target.open("w", encoding="utf-8") as handle:
                 handle.write(_line("info", f"── {title}"))
+            _stamp_mtime(target)
         except OSError as error:
             log.warning("Журнал опитування не почався (%s): %s", target, error)
 
@@ -107,6 +110,7 @@ def _write(path: Path, lines: Iterable[dict], cap: int) -> None:
             return
         with path.open("a", encoding="utf-8") as handle:
             handle.writelines(rows)
+        _stamp_mtime(path)
     except OSError as error:
         log.warning("Журнал опитування не дописався (%s): %s", path, error)
 
@@ -127,6 +131,7 @@ def finish(path: Path, status: str, error_text: Optional[str],
         try:
             with target.open("a", encoding="utf-8") as handle:
                 handle.write(text)
+            _stamp_mtime(target)
         except OSError as error:
             log.warning("Журнал опитування не закрився (%s): %s", target, error)
 
@@ -172,6 +177,21 @@ def session_of(path: Path) -> Optional[str]:
     except OSError:
         return None
     return first or None
+
+
+def _stamp_mtime(path: Path) -> None:
+    """Set the file's mtime from the application's clock.
+
+    `started_before` compares the mtime with `polling_since`, which comes from
+    `datetime.now()`. Linux stamps a write with the kernel's coarse clock, one
+    tick (up to ~4 ms) behind it — a journal written a millisecond after the
+    claim looked older than the claim, and the screen hid the new call.
+    """
+    now = time.time()
+    try:
+        os.utime(path, (now, now))
+    except OSError:
+        pass                                         # cosmetic, see module doc
 
 
 def started_before(path: Path, moment: datetime) -> bool:
