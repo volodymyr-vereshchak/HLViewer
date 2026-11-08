@@ -56,7 +56,7 @@ from backend.db.models.lumg_model import LumgDataPath
 from backend.hl_engine.main import update_hostlibs
 from backend.hl_engine.update_job_lock import run_guarded_update
 from backend.logging_config import setup_logging
-from backend.services import dpd_archive_refresh, dpd_line_refresh
+from backend.services import dpd_archive_refresh, dpd_line_refresh, weather_refresh
 from backend.utils.path_utils import resolve_stored_path
 from utils.files_utils import all_zips, zip_is_complete
 
@@ -334,6 +334,26 @@ async def maybe_refresh_dpd() -> None:
         logger.info("DPD refresh already running elsewhere — skipping")
 
 
+async def maybe_refresh_weather() -> None:
+    """Download the missing weather once a day at the admin's chosen time,
+    when the automatic update is on. Settings are re-read every tick, so a
+    change in the panel applies without restarting this process. Switched on
+    after today's slot, it runs at once — that slot is still owed."""
+    st = await weather_refresh.read_status()
+    if not st["auto_enabled"]:
+        return
+    now = datetime.now()
+    due = _last_due_refresh(now, [st["refresh_time"]])
+    started = st["started_at"]
+    if due is None or (started is not None and started >= due):
+        return
+    logger.info("Weather update due (slot %s, last run %s) — starting", due, started)
+    # Detached: a first load can take minutes, and archive ingest shares
+    # this loop.
+    if not await weather_refresh.start_in_background():
+        logger.info("Weather update already running elsewhere — skipping")
+
+
 async def main():
     logger.info(
         "File-arrival poller started (interval=%ss, settle=%ss). Waiting for new files...",
@@ -348,6 +368,10 @@ async def main():
             await maybe_refresh_dpd()
         except Exception:
             logger.exception("maybe_refresh_dpd failed")
+        try:
+            await maybe_refresh_weather()
+        except Exception:
+            logger.exception("maybe_refresh_weather failed")
         await asyncio.sleep(POLL_INTERVAL_SEC)
 
 

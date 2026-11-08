@@ -156,6 +156,7 @@ from .polling_model import (
 # Analytics weather (backend/db/models/weather_model.py). Same reason again.
 from .weather_model import (
     WeatherDaily,
+    WeatherJob,
     WeatherHourly,
     WeatherPoint,
     WeatherPointLine,

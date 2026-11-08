@@ -16,6 +16,7 @@ Times are Europe/Kyiv local, like every other stamp in this database.
 from datetime import date, datetime
 from typing import Optional
 
+from pydantic import field_validator
 from sqlalchemy import BigInteger, Column, ForeignKey, Index, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
@@ -207,3 +208,53 @@ class WeatherPlan(SQLModel):
     archive_first: Optional[date] = None
     archive_last: Optional[date] = None
     points: list[WeatherMissing] = []
+
+
+class WeatherJob(SQLModel, table=True):
+    """Single-row (id=1) settings, lock and status of the automatic weather
+    update: the scheduler downloads the missing days from Open-Meteo itself,
+    once a day at `refresh_time`, when `auto_enabled`. Needs the SERVER to
+    reach the internet; an offline server keeps using the manual paths.
+    Same lock pattern as dpd_refresh_job."""
+
+    __tablename__ = "weather_job"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    auto_enabled: bool = Field(default=False, sa_column_kwargs={"server_default": "false"})
+    refresh_time: str = Field(default="12:00", max_length=5, sa_column_kwargs={"server_default": "12:00"})
+    status: str = Field(default="idle", max_length=16)  # idle | running | done | error
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None  # heartbeat, database clock
+    error: Optional[str] = None
+    # What the last run brought, e.g. "248 / 5952" (daily / hourly rows).
+    result: Optional[str] = Field(default=None, max_length=255)
+
+
+class WeatherAutoRead(SQLModel):
+    auto_enabled: bool
+    refresh_time: str
+    status: str
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    error: Optional[str] = None
+    result: Optional[str] = None
+
+
+class WeatherAutoUpdate(SQLModel):
+    auto_enabled: Optional[bool] = None
+    refresh_time: Optional[str] = None
+
+    # A validator, not Field(regex=…): SQLModel drops that silently, and a
+    # stored "25:00" would break the scheduler's slot arithmetic every tick.
+    @field_validator("refresh_time")
+    @classmethod
+    def _hhmm(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        parts = v.strip().split(":")
+        if len(parts) == 2 and all(p.isdigit() for p in parts):
+            h, m = int(parts[0]), int(parts[1])
+            if 0 <= h <= 23 and 0 <= m <= 59:
+                return f"{h:02d}:{m:02d}"
+        raise ValueError("Час у форматі ГГ:ХХ")

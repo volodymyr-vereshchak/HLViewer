@@ -15,10 +15,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.api.endpoints.auth_ep import get_branch_filter, get_current_user, require_admin
 from backend.db.dao.weather_dao import WeatherDao
 from backend.db.engine import get_session
+from backend.services import weather_refresh
 from backend.db.models.weather_model import (
     LINE_KINDS,
     WeatherDailyRead,
     WeatherHourlyRead,
+    WeatherAutoRead,
+    WeatherAutoUpdate,
     WeatherImport,
     WeatherImportResult,
     WeatherLineRef,
@@ -208,3 +211,24 @@ async def hourly(
     return await dao.hourly(
         ids, datetime.combine(date_from, time.min), datetime.combine(date_to, time(23, 59, 59)),
     )
+
+
+# ── automatic update (the server downloads by itself) ───────────────────────
+
+@router.get("/auto", response_model=WeatherAutoRead, dependencies=[Depends(require_admin)])
+async def auto_status():
+    return await weather_refresh.read_status()
+
+
+@router.put("/auto", response_model=WeatherAutoRead, dependencies=[Depends(require_admin)])
+async def auto_settings(data: WeatherAutoUpdate):
+    return await weather_refresh.write_settings(data.auto_enabled, data.refresh_time)
+
+
+@router.post("/auto/run", response_model=WeatherAutoRead, status_code=202,
+             dependencies=[Depends(require_admin)])
+async def auto_run_now():
+    """Run the update now, on the server, whatever the schedule says."""
+    if not await weather_refresh.start_in_background():
+        raise HTTPException(status_code=409, detail="Оновлення погоди вже виконується")
+    return await weather_refresh.read_status()
