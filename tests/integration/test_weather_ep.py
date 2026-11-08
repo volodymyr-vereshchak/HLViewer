@@ -212,3 +212,23 @@ class TestScope:
             "point_id": p["id"], "date_from": "2020-01-01", "date_to": "2026-01-01",
         })
         assert resp.status_code == 422
+
+
+class TestLargeImport:
+    async def test_a_year_of_hours_in_one_call(self, admin_client, seed_topology):
+        """The server imports a whole year per request: 8760 hourly rows bind
+        70080 parameters, more than asyncpg's 32767 for one statement."""
+        from backend.db.dao.weather_dao import WeatherDao
+        from backend.db.models.weather_model import WeatherHourlyRow
+
+        p = await _point(admin_client, seed_topology["branch"])
+        rows = [
+            WeatherHourlyRow(stamp=datetime(2025, 1, 1) + timedelta(hours=h), temperature=1.0)
+            for h in range(8760)
+        ]
+        async with async_session_factory() as session:
+            nd, nh = await WeatherDao(session).import_rows(p["id"], [], rows)
+            await session.commit()
+        assert (nd, nh) == (0, 8760)
+        got = (await admin_client.get("/weather/points")).json()[0]["hourly"]
+        assert got == {"first": "2025-01-01", "last": "2025-12-31", "count": 8760}

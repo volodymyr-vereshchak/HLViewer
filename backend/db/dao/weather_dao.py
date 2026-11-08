@@ -27,9 +27,11 @@ HOURLY_VALUES = ("temperature", "humidity", "wind_speed", "radiation", "precipit
 # A day counts as covered by the hourly series at 23 hours: the autumn DST day
 # has 25 and the spring one 23, so 24 would leave the spring day forever missing.
 HOURS_PER_DAY_MIN = 23
-# One INSERT ... ON CONFLICT carries this many rows (Postgres caps bind
-# parameters at 65535; 8 columns × 5000 stays far below).
-UPSERT_CHUNK = 5000
+# Bind parameters one INSERT may carry. asyncpg refuses more than 32767 —
+# half of what Postgres itself allows — and an hourly row binds 8 of them, so
+# the old fixed 5000 rows (40000 parameters) failed the first time the server
+# imported a year of hours in one call. Rows per INSERT follow from this.
+MAX_BIND_PARAMS = 32767
 
 
 def collapse_days(days: Iterable[date]) -> list[DateRange]:
@@ -193,8 +195,9 @@ class WeatherDao:
     async def _upsert(self, model, key: tuple[str, str], values: tuple[str, ...], rows: list[dict]) -> int:
         if not rows:
             return 0
-        for i in range(0, len(rows), UPSERT_CHUNK):
-            chunk = rows[i:i + UPSERT_CHUNK]
+        per_insert = MAX_BIND_PARAMS // len(rows[0])
+        for i in range(0, len(rows), per_insert):
+            chunk = rows[i:i + per_insert]
             stmt = insert(model).values(chunk)
             stmt = stmt.on_conflict_do_update(
                 index_elements=list(key), set_={v: stmt.excluded[v] for v in values},
