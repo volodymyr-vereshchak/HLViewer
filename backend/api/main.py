@@ -38,6 +38,7 @@ from backend.api.endpoints import sys_type_ep
 from backend.api.endpoints import edit_type_ep
 from backend.api.endpoints import config_ep
 from backend.api.endpoints import logs_ep
+from backend.api.endpoints import weather_ep
 from backend.api.endpoints import polling_ep
 from backend.api.endpoints import polling_agent_ep
 from backend.api.endpoints import system_update_ep
@@ -418,3 +419,4 @@ app.include_router(logs_ep.router)
 app.include_router(polling_ep.router)
 app.include_router(polling_agent_ep.router)
 app.include_router(system_update_ep.router)
+app.include_router(weather_ep.router)

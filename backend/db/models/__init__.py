@@ -152,3 +152,11 @@ from .polling_model import (
     PollDevice,
     PollSettings,
 )
+
+# Analytics weather (backend/db/models/weather_model.py). Same reason again.
+from .weather_model import (
+    WeatherDaily,
+    WeatherHourly,
+    WeatherPoint,
+    WeatherPointLine,
+)
