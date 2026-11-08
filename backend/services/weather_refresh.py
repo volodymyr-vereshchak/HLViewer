@@ -246,17 +246,58 @@ async def _branch_ids() -> list[int]:
         )).scalars())
 
 
-async def _get(client: httpx.AsyncClient, url: str, params: dict) -> list[dict]:
-    resp = await client.get(url, params=params)
+#: Waits before each retry of a refused request, seconds. Open-Meteo answers
+#: "The service is overloaded" (and 429 when a minute's quota is spent) to a
+#: burst of heavy requests — a first multi-year load is exactly that.
+RETRY_DELAYS_SEC = (10, 30, 60, 120)
+#: Pause between requests, so a run does not itself cause the overload.
+REQUEST_PAUSE_SEC = 1.0
+_TRANSIENT_STATUS = {429, 500, 502, 503, 504}
+_TRANSIENT_WORDS = ("overload", "too many", "limit exceeded", "try again")
+
+# Indirection for tests: they replace it to run without waiting.
+_sleep = asyncio.sleep
+
+
+class _Transient(Exception):
+    """A refusal worth retrying: overload, rate limit, a dropped connection."""
+
+
+async def _get_once(client: httpx.AsyncClient, url: str, params: dict) -> list[dict]:
+    try:
+        resp = await client.get(url, params=params)
+    except (httpx.TimeoutException, httpx.RemoteProtocolError, httpx.ReadError) as e:
+        raise _Transient(f"{e.__class__.__name__}: {e}") from e
     try:
         payload = resp.json()
     except ValueError:
+        if resp.status_code in _TRANSIENT_STATUS:
+            raise _Transient(f"HTTP {resp.status_code}")
         resp.raise_for_status()
         raise
     if resp.status_code != 200:
+        reason = str(payload.get("reason", "")) if isinstance(payload, dict) else ""
+        if resp.status_code in _TRANSIENT_STATUS or any(w in reason.lower() for w in _TRANSIENT_WORDS):
+            raise _Transient(f"Open-Meteo: {reason or f'HTTP {resp.status_code}'}")
         parse_locations(payload)  # raises with Open-Meteo's own reason
         resp.raise_for_status()
     return parse_locations(payload)
+
+
+async def _get(client: httpx.AsyncClient, url: str, params: dict) -> list[dict]:
+    """GET with retries on transient refusals; the last one is raised as is.
+    A permanent refusal (a bad parameter, say) is raised at once."""
+    await _sleep(REQUEST_PAUSE_SEC)
+    for attempt, delay in enumerate((*RETRY_DELAYS_SEC, None)):
+        try:
+            return await _get_once(client, url, params)
+        except _Transient as e:
+            if delay is None:
+                raise RuntimeError(f"{e} (після {attempt + 1} спроб)") from e
+            logger.warning("Open-Meteo refused (%s), retry %d in %ss", e, attempt + 1, delay)
+            await _heartbeat()
+            await _sleep(delay)
+    raise AssertionError("unreachable")
 
 
 async def _store(point_id: int, loc: dict, source: str, today: date) -> tuple[int, int]:

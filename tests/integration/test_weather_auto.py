@@ -145,6 +145,58 @@ class TestRun:
         assert not await weather_refresh.acquire()
 
 
+class TestRetries:
+    async def _setup(self, admin_client, seed_topology, monkeypatch):
+        await _archive(seed_topology["line1"], [TODAY - timedelta(days=15)])
+        await _point(admin_client, seed_topology["branch"], "A")
+        waits: list = []
+
+        async def no_wait(sec):
+            waits.append(sec)
+        monkeypatch.setattr(weather_refresh, "_sleep", no_wait)
+        return waits
+
+    async def test_an_overload_is_retried_until_it_passes(self, admin_client, seed_topology, monkeypatch):
+        waits = await self._setup(admin_client, seed_topology, monkeypatch)
+        calls: list = []
+        good = _fake_open_meteo(calls)
+        refused = {"n": 0}
+
+        def flaky(request):
+            if refused["n"] < 2:
+                refused["n"] += 1
+                return httpx.Response(429, json={"error": True, "reason": "The service is overloaded"})
+            return good.handler(request)
+        assert await weather_refresh.acquire()
+        await weather_refresh.execute_locked(today=TODAY, transport=httpx.MockTransport(flaky))
+        st = (await admin_client.get("/weather/auto")).json()
+        assert st["status"] == "done", st
+        assert weather_refresh.RETRY_DELAYS_SEC[0] in waits and weather_refresh.RETRY_DELAYS_SEC[1] in waits
+
+    async def test_a_lasting_overload_ends_in_an_error_after_the_retries(self, admin_client, seed_topology, monkeypatch):
+        waits = await self._setup(admin_client, seed_topology, monkeypatch)
+
+        def busy(request):
+            return httpx.Response(400, json={"error": True, "reason": "The service is overloaded"})
+        assert await weather_refresh.acquire()
+        await weather_refresh.execute_locked(today=TODAY, transport=httpx.MockTransport(busy))
+        st = (await admin_client.get("/weather/auto")).json()
+        assert st["status"] == "error"
+        assert "overloaded" in st["error"] and "5 спроб" in st["error"]
+        assert [w for w in waits if w > weather_refresh.REQUEST_PAUSE_SEC] == list(weather_refresh.RETRY_DELAYS_SEC)
+
+    async def test_a_bad_request_is_not_retried(self, admin_client, seed_topology, monkeypatch):
+        waits = await self._setup(admin_client, seed_topology, monkeypatch)
+
+        def bad(request):
+            return httpx.Response(400, json={"error": True, "reason": "Parameter 'latitude' is out of range"})
+        assert await weather_refresh.acquire()
+        await weather_refresh.execute_locked(today=TODAY, transport=httpx.MockTransport(bad))
+        st = (await admin_client.get("/weather/auto")).json()
+        assert st["status"] == "error" and "out of range" in st["error"]
+        assert [w for w in waits if w > weather_refresh.REQUEST_PAUSE_SEC] == []
+
+
 class TestSchedule:
     async def _armed(self, admin_client, monkeypatch, time="12:00"):
         await admin_client.put("/weather/auto", json={"auto_enabled": True, "refresh_time": time})
