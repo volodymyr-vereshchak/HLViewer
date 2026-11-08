@@ -27,9 +27,13 @@ def _fake_open_meteo(calls: list):
     every day / hour of the requested span."""
     def handler(request: httpx.Request) -> httpx.Response:
         q = request.url.params
-        calls.append(dict(q))
+        calls.append({"host": request.url.host, **dict(q)})
         lats = q["latitude"].split(",")
-        start, end = date.fromisoformat(q["start_date"]), date.fromisoformat(q["end_date"])
+        if request.url.host.startswith("archive"):
+            start, end = date.fromisoformat(q["start_date"]), date.fromisoformat(q["end_date"])
+        else:  # forecast: the past week and 16 days ahead
+            start = TODAY - timedelta(days=int(q["past_days"]))
+            end = TODAY + timedelta(days=int(q["forecast_days"]) - 1)
         days = [start + timedelta(days=i) for i in range((end - start).days + 1)]
         locs = []
         for i, lat in enumerate(lats):
@@ -88,7 +92,7 @@ class TestRun:
 
         st = (await admin_client.get("/weather/auto")).json()
         assert st["status"] == "done", st
-        daily_calls = [c for c in calls if "daily" in c]
+        daily_calls = [c for c in calls if "daily" in c and c["host"].startswith("archive")]
         # B lacks the whole span, so the group asks from its start.
         assert [(c["start_date"], c["end_date"]) for c in daily_calls] == [("2026-10-19", "2026-10-29")]
         assert daily_calls[0]["latitude"].count(",") == 1  # both points, one request
@@ -102,7 +106,14 @@ class TestRun:
         assert {r["t_mean"] for r in rows if r["point_id"] == p2["id"]} == {1.0}
         plan = (await admin_client.get("/weather/plan", params={"branch_id": b})).json()
         assert all(not m["daily"] and not m["hourly"] for m in plan["points"])
-        assert st["result"] == f"{22} / {2 * 11 * 24}"
+        # 7 past + 16 ahead = 23 forecast days per point, none of them on a
+        # day the archive has (19.10–29.10 is older than the past week).
+        assert st["result"] == f"{22} / {2 * 11 * 24}; прогноз {2 * 23} / {2 * 23 * 24}"
+        fc = [c for c in calls if c["host"] == "api.open-meteo.com"]
+        assert len(fc) == 1 and fc[0]["forecast_days"] == "16"
+        ahead = (await admin_client.get("/weather/daily", params={
+            "point_id": p1["id"], "date_from": TODAY.isoformat(), "date_to": TODAY.isoformat()})).json()
+        assert ahead[0]["source"] == "forecast"
 
     async def test_an_api_refusal_is_reported(self, admin_client, seed_topology):
         await _archive(seed_topology["line1"], [TODAY - timedelta(days=15)])
@@ -167,7 +178,21 @@ def test_plan_requests_groups_by_ten_and_cuts_by_year():
     gaps = [{"daily": [], "hourly": []} for _ in range(12)]
     gaps[11]["daily"] = [r(first=date(2025, 12, 1), last=date(2026, 1, 10))]
     reqs = plan_requests(gaps, date(2026, 1, 5))
+    # Only the point with the gap is asked for.
     assert reqs == [
-        {"kind": "daily", "indexes": [10, 11], "start": date(2025, 12, 1), "end": date(2025, 12, 31)},
-        {"kind": "daily", "indexes": [10, 11], "start": date(2026, 1, 1), "end": date(2026, 1, 5)},
+        {"kind": "daily", "indexes": [11], "start": date(2025, 12, 1), "end": date(2025, 12, 31)},
+        {"kind": "daily", "indexes": [11], "start": date(2026, 1, 1), "end": date(2026, 1, 5)},
+    ]
+
+
+def test_one_old_gap_is_its_own_small_request():
+    r = DateRange
+    gaps = [{"daily": [], "hourly": []} for _ in range(3)]
+    gaps[0]["daily"] = [r(first=date(2025, 3, 10), last=date(2025, 3, 10))]
+    gaps[1]["daily"] = [r(first=date(2026, 10, 30), last=date(2026, 11, 1))]
+    gaps[2]["daily"] = [r(first=date(2026, 10, 31), last=date(2026, 11, 1))]
+    reqs = plan_requests(gaps, date(2026, 11, 1))
+    assert reqs == [
+        {"kind": "daily", "indexes": [0], "start": date(2025, 3, 10), "end": date(2025, 3, 10)},
+        {"kind": "daily", "indexes": [1, 2], "start": date(2026, 10, 30), "end": date(2026, 11, 1)},
     ]

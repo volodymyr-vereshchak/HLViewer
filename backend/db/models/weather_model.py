@@ -85,6 +85,14 @@ class WeatherDaily(SQLModel, table=True):
     precipitation: Optional[float] = None
     wind_max: Optional[float] = None
     radiation: Optional[float] = None
+    # 'archive' — ERA5 reanalysis (what happened), 'forecast' — a forecast
+    # that the archive replaces once the day is published. A forecast never
+    # overwrites an archive row (see WeatherDao._upsert).
+    source: str = Field(default="archive", max_length=8, sa_column_kwargs={"server_default": "archive"})
+    # Application clock (Europe/Kyiv), like every stamp here; updated_at says
+    # when the values were last written — for a forecast, how fresh it is.
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
 
 class WeatherHourly(SQLModel, table=True):
@@ -109,6 +117,14 @@ class WeatherHourly(SQLModel, table=True):
     radiation: Optional[float] = None
     precipitation: Optional[float] = None
     cloud_cover: Optional[float] = None
+    # 'archive' — ERA5 reanalysis (what happened), 'forecast' — a forecast
+    # that the archive replaces once the day is published. A forecast never
+    # overwrites an archive row (see WeatherDao._upsert).
+    source: str = Field(default="archive", max_length=8, sa_column_kwargs={"server_default": "archive"})
+    # Application clock (Europe/Kyiv), like every stamp here; updated_at says
+    # when the values were last written — for a forecast, how fresh it is.
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
 
 # ── API schemas ──────────────────────────────────────────────────────────────
@@ -131,8 +147,12 @@ class WeatherPointRead(SQLModel):
     latitude: float
     longitude: float
     lines: list[WeatherLineRef] = []
+    # Archive coverage only; a forecast does not make a day "have weather".
     daily: WeatherCoverage = WeatherCoverage()
     hourly: WeatherCoverage = WeatherCoverage()
+    # Last day the stored forecast reaches, and when it was fetched.
+    forecast_until: Optional[date] = None
+    forecast_updated_at: Optional[datetime] = None
 
 
 class WeatherPointCreate(SQLModel):
@@ -171,8 +191,12 @@ class WeatherHourlyRow(SQLModel):
     cloud_cover: Optional[float] = None
 
 
+WEATHER_SOURCES = ("archive", "forecast")
+
+
 class WeatherImport(SQLModel):
     point_id: int
+    source: str = "archive"
     daily: list[WeatherDailyRow] = []
     hourly: list[WeatherHourlyRow] = []
 
@@ -184,10 +208,14 @@ class WeatherImportResult(SQLModel):
 
 class WeatherDailyRead(WeatherDailyRow):
     point_id: int
+    source: str
+    updated_at: Optional[datetime] = None
 
 
 class WeatherHourlyRead(WeatherHourlyRow):
     point_id: int
+    source: str
+    updated_at: Optional[datetime] = None
 
 
 class DateRange(SQLModel):

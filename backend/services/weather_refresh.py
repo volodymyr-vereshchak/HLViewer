@@ -2,8 +2,10 @@
 Automatic weather update: the server fetches the missing days from Open-Meteo.
 
 The manual paths (browser download, file import) stay for an offline server;
-this one needs the SERVER to reach archive-api.open-meteo.com — directly or
-through HTTPS_PROXY, which httpx honours. It does exactly what the browser
+this one needs the SERVER to reach archive-api.open-meteo.com and
+api.open-meteo.com — directly or through HTTPS_PROXY, which httpx honours.
+Each run closes the history gaps, then rewrites the forecast (16 days ahead
+and the last week the archive has not published yet). It does exactly what the browser
 does (src/domain/weather/openMeteo.ts): per branch, the gaps from
 /weather/plan, points in fixed groups of POINTS_PER_REQUEST, one request per
 kind and calendar year, stopping ARCHIVE_LAG_DAYS before today.
@@ -33,6 +35,15 @@ from backend.db.models.weather_model import (
 logger = logging.getLogger(__name__)
 
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
+FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+#: Gaps closer than this join one request: a request per missing day of a
+#: long ragged stretch would be worse than re-reading the few days between.
+MERGE_GAP_DAYS = 30
+#: The forecast API's maximum horizon; the first days are the reliable ones.
+FORECAST_DAYS = 16
+#: Past days taken with the forecast: they cover the week the archive has
+#: not published yet, until the archive replaces them.
+FORECAST_PAST_DAYS = 7
 POINTS_PER_REQUEST = 10
 ARCHIVE_LAG_DAYS = 7
 REQUEST_TIMEOUT_SEC = 180
@@ -136,26 +147,40 @@ async def _finalize(status: str, error: Optional[str], result: Optional[str]) ->
 # ── what to ask for ─────────────────────────────────────────────────────────
 
 def plan_requests(gaps: list[dict], last_day: date) -> list[dict]:
-    """Same grouping as the browser's planRequests: points by position in the
-    id-sorted list, POINTS_PER_REQUEST to a request, the span from a group's
-    earliest to latest gap, cut into calendar years and clipped to last_day."""
+    """Requests that close the gaps — the same plan the browser builds
+    (planRequests in src/domain/weather/openMeteo.ts).
+
+    Points go in fixed groups of POINTS_PER_REQUEST by their position in the
+    id-sorted list. Within a group, the gaps of all its points are merged
+    into segments (runs closer than MERGE_GAP_DAYS join one segment), and each
+    segment is asked for only for the points that have a gap in it. One old
+    missing day therefore costs a request for that day, not a re-download of
+    everything since then for the whole group. Segments are cut into
+    calendar years and clipped to last_day."""
     out = []
     for kind in ("daily", "hourly"):
         for g in range(0, len(gaps), POINTS_PER_REQUEST):
-            idx = list(range(g, min(g + POINTS_PER_REQUEST, len(gaps))))
-            runs = [r for i in idx for r in gaps[i][kind]]
-            if not runs:
-                continue
-            start = min(r.first for r in runs)
-            end = min(max(r.last for r in runs), last_day)
-            if start > end:
-                continue
-            for y in range(start.year, end.year + 1):
-                out.append({
-                    "kind": kind, "indexes": idx,
-                    "start": start if y == start.year else date(y, 1, 1),
-                    "end": end if y == end.year else date(y, 12, 31),
-                })
+            runs = []
+            for i in range(g, min(g + POINTS_PER_REQUEST, len(gaps))):
+                for r in gaps[i][kind]:
+                    if r.first <= last_day:
+                        runs.append((r.first, min(r.last, last_day), i))
+            runs.sort()
+            segments: list[list] = []  # [first, last, {indexes}]
+            for first, last, i in runs:
+                if segments and (first - segments[-1][1]).days <= MERGE_GAP_DAYS:
+                    seg = segments[-1]
+                    seg[1] = max(seg[1], last)
+                    seg[2].add(i)
+                else:
+                    segments.append([first, last, {i}])
+            for first, last, idx in segments:
+                for y in range(first.year, last.year + 1):
+                    out.append({
+                        "kind": kind, "indexes": sorted(idx),
+                        "start": first if y == first.year else date(y, 1, 1),
+                        "end": last if y == last.year else date(y, 12, 31),
+                    })
     return out
 
 
@@ -168,6 +193,19 @@ def archive_params(points: list[WeatherPoint], kind: str, start: date, end: date
         kind: ",".join(DAILY_VARS if kind == "daily" else HOURLY_VARS),
         "timezone": "Europe/Kyiv",
         "wind_speed_unit": "ms",
+    }
+
+
+def forecast_params(points: list[WeatherPoint]) -> dict:
+    return {
+        "latitude": ",".join(f"{p.latitude:.5f}" for p in points),
+        "longitude": ",".join(f"{p.longitude:.5f}" for p in points),
+        "daily": ",".join(DAILY_VARS),
+        "hourly": ",".join(HOURLY_VARS),
+        "timezone": "Europe/Kyiv",
+        "wind_speed_unit": "ms",
+        "past_days": FORECAST_PAST_DAYS,
+        "forecast_days": FORECAST_DAYS,
     }
 
 
@@ -208,60 +246,82 @@ async def _branch_ids() -> list[int]:
         )).scalars())
 
 
-async def _refresh_branch(client: httpx.AsyncClient, branch_id: int, today: date) -> tuple[int, int]:
+async def _get(client: httpx.AsyncClient, url: str, params: dict) -> list[dict]:
+    resp = await client.get(url, params=params)
+    try:
+        payload = resp.json()
+    except ValueError:
+        resp.raise_for_status()
+        raise
+    if resp.status_code != 200:
+        parse_locations(payload)  # raises with Open-Meteo's own reason
+        resp.raise_for_status()
+    return parse_locations(payload)
+
+
+async def _store(point_id: int, loc: dict, source: str, today: date) -> tuple[int, int]:
+    async with async_session_factory() as session:
+        d, h = await WeatherDao(session).import_rows(
+            point_id, loc["daily"], loc["hourly"], source=source, today=today,
+        )
+        await session.commit()
+    return d, h
+
+
+async def _refresh_branch(client: httpx.AsyncClient, branch_id: int, today: date) -> dict:
+    """History gaps first, then the forecast. Counts of rows written."""
+    counts = {"ad": 0, "ah": 0, "fd": 0, "fh": 0}
     async with async_session_factory() as session:
         dao = WeatherDao(session)
         points = list((await session.execute(
             select(WeatherPoint).where(WeatherPoint.branch_id == branch_id).order_by(WeatherPoint.id)
         )).scalars())
         first, last = await dao.archive_range(branch_id)
-    if not points or first is None:
-        return 0, 0
-    yesterday = today - timedelta(days=1)
-    last = min(last, yesterday)
-    async with async_session_factory() as session:
-        missing = {m.point_id: m for m in await WeatherDao(session).missing([p.id for p in points], first, last)}
-    gaps = [{"daily": missing[p.id].daily, "hourly": missing[p.id].hourly} for p in points]
+    if not points:
+        return counts
 
-    nd = nh = 0
-    for req in plan_requests(gaps, today - timedelta(days=ARCHIVE_LAG_DAYS)):
-        group = [points[i] for i in req["indexes"]]
-        resp = await client.get(ARCHIVE_URL, params=archive_params(group, req["kind"], req["start"], req["end"]))
-        try:
-            payload = resp.json()
-        except ValueError:
-            resp.raise_for_status()
-            raise
-        if resp.status_code != 200:
-            parse_locations(payload)  # raises with Open-Meteo's own reason
-            resp.raise_for_status()
-        for point, loc in zip(group, parse_locations(payload)):
-            async with async_session_factory() as session:
-                d, h = await WeatherDao(session).import_rows(point.id, loc["daily"], loc["hourly"])
-                await session.commit()
-            nd += d
-            nh += h
+    if first is not None:
+        last = min(last, today - timedelta(days=1))
+        async with async_session_factory() as session:
+            missing = {m.point_id: m for m in await WeatherDao(session).missing(
+                [p.id for p in points], first, last)}
+        gaps = [{"daily": missing[p.id].daily, "hourly": missing[p.id].hourly} for p in points]
+        for req in plan_requests(gaps, today - timedelta(days=ARCHIVE_LAG_DAYS)):
+            group = [points[i] for i in req["indexes"]]
+            locs = await _get(client, ARCHIVE_URL, archive_params(group, req["kind"], req["start"], req["end"]))
+            for point, loc in zip(group, locs):
+                d, h = await _store(point.id, loc, "archive", today)
+                counts["ad"] += d
+                counts["ah"] += h
+            await _heartbeat()
+
+    for g in range(0, len(points), POINTS_PER_REQUEST):
+        group = points[g:g + POINTS_PER_REQUEST]
+        for point, loc in zip(group, await _get(client, FORECAST_URL, forecast_params(group))):
+            d, h = await _store(point.id, loc, "forecast", today)
+            counts["fd"] += d
+            counts["fh"] += h
         await _heartbeat()
-    return nd, nh
+    return counts
 
 
 async def execute_locked(today: Optional[date] = None, transport: Optional[httpx.AsyncBaseTransport] = None) -> None:
     """The run itself; the caller holds the lock (acquire())."""
     today = today or date.today()
     status, error, result = "done", None, None
-    nd = nh = 0
+    total = {"ad": 0, "ah": 0, "fd": 0, "fh": 0}
     failures = []
     try:
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SEC, transport=transport) as client:
             for branch_id in await _branch_ids():
                 try:
-                    d, h = await _refresh_branch(client, branch_id, today)
-                    nd += d
-                    nh += h
+                    for k, v in (await _refresh_branch(client, branch_id, today)).items():
+                        total[k] += v
                 except Exception as e:  # one branch must not stop the others
                     logger.exception("Weather update failed for branch %s", branch_id)
                     failures.append(f"філія {branch_id}: {e.__class__.__name__}: {e}"[:500])
-        result = f"{nd} / {nh}"
+        # History, then forecast: daily / hourly rows written.
+        result = f"{total['ad']} / {total['ah']}; прогноз {total['fd']} / {total['fh']}"
         if failures:
             status, error = "error", "; ".join(failures)[:2000]
     except Exception as e:
@@ -272,7 +332,7 @@ async def execute_locked(today: Optional[date] = None, transport: Optional[httpx
             await _finalize(status, error, result)
         except Exception:
             logger.exception("Failed to persist the weather update state")
-    logger.info("Weather update: %s, rows %s / %s", status, nd, nh)
+    logger.info("Weather update: %s, %s", status, result)
 
 
 async def run_refresh(**kwargs) -> bool:

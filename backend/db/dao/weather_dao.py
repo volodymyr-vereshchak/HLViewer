@@ -32,6 +32,11 @@ HOURS_PER_DAY_MIN = 23
 # the old fixed 5000 rows (40000 parameters) failed the first time the server
 # imported a year of hours in one call. Rows per INSERT follow from this.
 MAX_BIND_PARAMS = 32767
+# An archive day this old that Open-Meteo still returns empty is not "not
+# published yet" — the reanalysis lags days, not weeks. Such a day is stored
+# as an empty archive row so it stops counting as missing and is not asked
+# for again on every run.
+ARCHIVE_FINAL_DAYS = 10
 
 
 def collapse_days(days: Iterable[date]) -> list[DateRange]:
@@ -79,7 +84,11 @@ class WeatherDao:
                     func.min(WeatherDaily.day).label("first"),
                     func.max(WeatherDaily.day).label("last"),
                     func.count().label("n"),
-                ).where(WeatherDaily.point_id.in_(ids)).group_by(WeatherDaily.point_id)
+                ).where(
+                    WeatherDaily.point_id.in_(ids),
+                    WeatherDaily.source == "archive",
+                    WeatherDaily.t_mean.is_not(None),
+                ).group_by(WeatherDaily.point_id)
             )
         }
         hourly = {
@@ -90,7 +99,23 @@ class WeatherDao:
                     func.min(WeatherHourly.stamp).label("first"),
                     func.max(WeatherHourly.stamp).label("last"),
                     func.count().label("n"),
-                ).where(WeatherHourly.point_id.in_(ids)).group_by(WeatherHourly.point_id)
+                ).where(
+                    WeatherHourly.point_id.in_(ids),
+                    WeatherHourly.source == "archive",
+                    WeatherHourly.temperature.is_not(None),
+                ).group_by(WeatherHourly.point_id)
+            )
+        }
+        forecast = {
+            r.point_id: (r.until, r.at)
+            for r in await self.session.execute(
+                select(
+                    WeatherDaily.point_id,
+                    func.max(WeatherDaily.day).label("until"),
+                    func.max(WeatherDaily.updated_at).label("at"),
+                ).where(
+                    WeatherDaily.point_id.in_(ids), WeatherDaily.source == "forecast",
+                ).group_by(WeatherDaily.point_id)
             )
         }
         return [
@@ -100,6 +125,8 @@ class WeatherDao:
                 lines=lines.get(p.id, []),
                 daily=daily.get(p.id, WeatherCoverage()),
                 hourly=hourly.get(p.id, WeatherCoverage()),
+                forecast_until=forecast.get(p.id, (None, None))[0],
+                forecast_updated_at=forecast.get(p.id, (None, None))[1],
             )
             for p in points
         ]
@@ -152,8 +179,11 @@ class WeatherDao:
         return row.first, row.last
 
     async def missing(self, point_ids: list[int], first: date, last: date) -> list[WeatherMissing]:
-        """Days in [first, last] with no daily row, and days with fewer than
-        HOURS_PER_DAY_MIN hours of temperature, per point."""
+        """Days in [first, last] with no archive row, and days with fewer than
+        HOURS_PER_DAY_MIN archive hours, per point. A forecast does not cover
+        a day — the archive still has to replace it. An empty archive row
+        does: it records that the archive has nothing there (see
+        ARCHIVE_FINAL_DAYS)."""
         if not point_ids or first > last:
             return [WeatherMissing(point_id=p) for p in point_ids]
         have_daily: dict[int, set[date]] = defaultdict(set)
@@ -161,7 +191,7 @@ class WeatherDao:
             select(WeatherDaily.point_id, WeatherDaily.day).where(
                 WeatherDaily.point_id.in_(point_ids),
                 WeatherDaily.day.between(first, last),
-                WeatherDaily.t_mean.is_not(None),
+                WeatherDaily.source == "archive",
             )
         ):
             have_daily[r.point_id].add(r.day)
@@ -173,7 +203,7 @@ class WeatherDao:
                 WeatherHourly.point_id.in_(point_ids),
                 WeatherHourly.stamp >= datetime.combine(first, datetime.min.time()),
                 WeatherHourly.stamp < datetime.combine(last + timedelta(days=1), datetime.min.time()),
-                WeatherHourly.temperature.is_not(None),
+                WeatherHourly.source == "archive",
             )
             .group_by(WeatherHourly.point_id, day_col)
             .having(func.count() >= HOURS_PER_DAY_MIN)
@@ -192,40 +222,71 @@ class WeatherDao:
 
     # ── rows ────────────────────────────────────────────────────────────────
 
-    async def _upsert(self, model, key: tuple[str, str], values: tuple[str, ...], rows: list[dict]) -> int:
+    async def _upsert(self, model, key: tuple[str, str], values: tuple[str, ...],
+                      rows: list[dict], source: str, keep_existing: bool = False) -> int:
+        """Rows written (inserted or updated). History overwrites anything; a
+        forecast overwrites only a forecast, so a day the archive already has
+        is left alone. `keep_existing` inserts only — for the empty archive
+        markers, which must never blank out values already stored."""
         if not rows:
             return 0
+        written = 0
         per_insert = MAX_BIND_PARAMS // len(rows[0])
         for i in range(0, len(rows), per_insert):
-            chunk = rows[i:i + per_insert]
-            stmt = insert(model).values(chunk)
-            stmt = stmt.on_conflict_do_update(
-                index_elements=list(key), set_={v: stmt.excluded[v] for v in values},
-            )
-            await self.session.execute(stmt)
-        return len(rows)
+            stmt = insert(model).values(rows[i:i + per_insert])
+            if keep_existing:
+                stmt = stmt.on_conflict_do_nothing(index_elements=list(key))
+            else:
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=list(key),
+                    set_={c: stmt.excluded[c] for c in (*values, "source", "updated_at")},
+                    where=(model.source == "forecast") if source == "forecast" else None,
+                )
+            written += len((await self.session.execute(stmt.returning(model.id))).all())
+        return written
 
     async def import_rows(
         self, point_id: int, daily: list[WeatherDailyRow], hourly: list[WeatherHourlyRow],
+        source: str = "archive", today: Optional[date] = None,
     ) -> tuple[int, int]:
-        """Upsert the rows. Rows with no value at all are dropped (Open-Meteo
-        returns nulls for days the reanalysis has not reached yet — storing
-        them would mark those days covered). Duplicates of one key keep the
-        last: one INSERT cannot touch a row twice, and the autumn DST hour
-        comes twice in a local-time series."""
-        d_rows: dict[date, dict] = {}
-        for r in daily:
-            vals = {k: getattr(r, k) for k in DAILY_VALUES}
-            if any(v is not None for v in vals.values()):
-                d_rows[r.day] = {"point_id": point_id, "day": r.day, **vals}
-        h_rows: dict[datetime, dict] = {}
+        """Upsert the rows; returns how many were written.
+
+        A row with no value at all is dropped while it may still fill in
+        (Open-Meteo returns nulls for days the reanalysis has not reached, and
+        a forecast with nothing in it says nothing). An ARCHIVE day older
+        than ARCHIVE_FINAL_DAYS that is still empty is kept, as a marker that
+        the archive has nothing there. Duplicates of one key keep the last:
+        one INSERT cannot touch a row twice, and the autumn DST hour comes
+        twice in a local-time series."""
+        now = datetime.now()
+        final_before = (today or date.today()) - timedelta(days=ARCHIVE_FINAL_DAYS)
+
+        def split(items, key_of, values):
+            full: dict = {}
+            empty: dict = {}
+            for r, k, day in items:
+                vals = {c: getattr(r, c) for c in values}
+                row = {"point_id": point_id, **k, **vals, "source": source,
+                       "created_at": now, "updated_at": now}
+                if any(v is not None for v in vals.values()):
+                    full[key_of(k)] = row
+                elif source == "archive" and day < final_before:
+                    empty[key_of(k)] = row
+            return list(full.values()), [v for kk, v in empty.items() if kk not in full]
+
+        d_full, d_empty = split(
+            ((r, {"day": r.day}, r.day) for r in daily), lambda k: k["day"], DAILY_VALUES,
+        )
+        h_items = []
         for r in hourly:
-            vals = {k: getattr(r, k) for k in HOURLY_VALUES}
-            if any(v is not None for v in vals.values()):
-                stamp = r.stamp.replace(tzinfo=None, minute=0, second=0, microsecond=0)
-                h_rows[stamp] = {"point_id": point_id, "stamp": stamp, **vals}
-        nd = await self._upsert(WeatherDaily, ("point_id", "day"), DAILY_VALUES, list(d_rows.values()))
-        nh = await self._upsert(WeatherHourly, ("point_id", "stamp"), HOURLY_VALUES, list(h_rows.values()))
+            stamp = r.stamp.replace(tzinfo=None, minute=0, second=0, microsecond=0)
+            h_items.append((r, {"stamp": stamp}, stamp.date()))
+        h_full, h_empty = split(h_items, lambda k: k["stamp"], HOURLY_VALUES)
+
+        nd = await self._upsert(WeatherDaily, ("point_id", "day"), DAILY_VALUES, d_full, source)
+        nh = await self._upsert(WeatherHourly, ("point_id", "stamp"), HOURLY_VALUES, h_full, source)
+        await self._upsert(WeatherDaily, ("point_id", "day"), DAILY_VALUES, d_empty, source, keep_existing=True)
+        await self._upsert(WeatherHourly, ("point_id", "stamp"), HOURLY_VALUES, h_empty, source, keep_existing=True)
         return nd, nh
 
     async def daily(self, point_ids: list[int], first: date, last: date) -> list[WeatherDaily]:

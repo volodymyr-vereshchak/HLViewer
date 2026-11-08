@@ -91,7 +91,8 @@ class TestImport:
             "point_id": p["id"],
             "daily": [
                 {"day": "2026-01-01", "t_mean": -3, "t_min": -6, "t_max": 0},
-                {"day": "2026-01-02"},  # reanalysis not there yet: all nulls
+                # Yesterday, all nulls: the reanalysis has not reached it yet.
+                {"day": (date.today() - timedelta(days=1)).isoformat()},
             ],
         })).json()
         assert first == {"daily": 1, "hourly": 0}
@@ -99,10 +100,11 @@ class TestImport:
             "point_id": p["id"], "daily": [{"day": "2026-01-01", "t_mean": -4}],
         })
         rows = (await admin_client.get("/weather/daily", params={
-            "point_id": p["id"], "date_from": "2026-01-01", "date_to": "2026-01-31",
+            "point_id": p["id"], "date_from": "2026-01-01", "date_to": date.today().isoformat(),
         })).json()
         assert len(rows) == 1
         assert rows[0]["t_mean"] == -4
+        assert rows[0]["source"] == "archive"
         assert rows[0]["t_min"] is None  # the second import said nothing about it
 
     async def test_a_repeated_hour_keeps_the_last(self, admin_client, seed_topology):
@@ -232,3 +234,64 @@ class TestLargeImport:
         assert (nd, nh) == (0, 8760)
         got = (await admin_client.get("/weather/points")).json()[0]["hourly"]
         assert got == {"first": "2025-01-01", "last": "2025-12-31", "count": 8760}
+
+
+class TestSources:
+    """History overwrites anything; a forecast only a forecast."""
+
+    async def _imp(self, client, pid, source, day, t):
+        return (await client.post("/weather/import", json={
+            "point_id": pid, "source": source, "daily": [{"day": day, "t_mean": t}],
+        })).json()
+
+    async def _row(self, client, pid, day):
+        rows = (await client.get("/weather/daily", params={
+            "point_id": pid, "date_from": day, "date_to": day})).json()
+        return rows[0] if rows else None
+
+    async def test_forecast_never_overwrites_history(self, admin_client, seed_topology):
+        p = await _point(admin_client, seed_topology["branch"])
+        await self._imp(admin_client, p["id"], "archive", "2026-11-01", 5)
+        res = await self._imp(admin_client, p["id"], "forecast", "2026-11-01", 9)
+        assert res["daily"] == 0
+        row = await self._row(admin_client, p["id"], "2026-11-01")
+        assert (row["source"], row["t_mean"]) == ("archive", 5)
+
+    async def test_history_replaces_forecast_and_fresh_forecast_replaces_old(self, admin_client, seed_topology):
+        p = await _point(admin_client, seed_topology["branch"])
+        await self._imp(admin_client, p["id"], "forecast", "2026-11-20", 1)
+        await self._imp(admin_client, p["id"], "forecast", "2026-11-20", 2)
+        row = await self._row(admin_client, p["id"], "2026-11-20")
+        assert (row["source"], row["t_mean"]) == ("forecast", 2)
+        await self._imp(admin_client, p["id"], "archive", "2026-11-20", 3)
+        row = await self._row(admin_client, p["id"], "2026-11-20")
+        assert (row["source"], row["t_mean"]) == ("archive", 3)
+
+    async def test_unknown_source_is_rejected(self, admin_client, seed_topology):
+        p = await _point(admin_client, seed_topology["branch"])
+        resp = await admin_client.post("/weather/import", json={"point_id": p["id"], "source": "guess"})
+        assert resp.status_code == 422
+
+    async def test_a_forecast_does_not_count_as_covered(self, admin_client, seed_topology):
+        p = await _point(admin_client, seed_topology["branch"])
+        await self._imp(admin_client, p["id"], "forecast", "2026-01-05", 1)
+        plan = (await admin_client.get("/weather/plan", params={
+            "branch_id": seed_topology["branch"], "date_from": "2026-01-05", "date_to": "2026-01-05"})).json()
+        assert plan["points"][0]["daily"] == [{"first": "2026-01-05", "last": "2026-01-05"}]
+        got = (await admin_client.get("/weather/points")).json()[0]
+        assert got["daily"]["count"] == 0
+        assert got["forecast_until"] == "2026-01-05"
+
+    async def test_an_old_empty_archive_day_stops_being_missing(self, admin_client, seed_topology):
+        p = await _point(admin_client, seed_topology["branch"])
+        await admin_client.post("/weather/import", json={"point_id": p["id"], "daily": [{"day": "2026-01-05"}]})
+        plan = (await admin_client.get("/weather/plan", params={
+            "branch_id": seed_topology["branch"], "date_from": "2026-01-05", "date_to": "2026-01-05"})).json()
+        assert plan["points"][0]["daily"] == []
+
+    async def test_an_empty_answer_never_blanks_stored_values(self, admin_client, seed_topology):
+        p = await _point(admin_client, seed_topology["branch"])
+        await self._imp(admin_client, p["id"], "archive", "2026-01-05", 7)
+        await admin_client.post("/weather/import", json={"point_id": p["id"], "daily": [{"day": "2026-01-05"}]})
+        row = await self._row(admin_client, p["id"], "2026-01-05")
+        assert row["t_mean"] == 7

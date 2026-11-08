@@ -18,6 +18,7 @@ from backend.db.engine import get_session
 from backend.services import weather_refresh
 from backend.db.models.weather_model import (
     LINE_KINDS,
+    WEATHER_SOURCES,
     WeatherDailyRead,
     WeatherHourlyRead,
     WeatherAutoRead,
@@ -160,7 +161,9 @@ async def plan(
 async def import_weather(data: WeatherImport, session: AsyncSession = Depends(get_session)):
     dao = WeatherDao(session)
     await _point_or_404(dao, data.point_id, None)
-    nd, nh = await dao.import_rows(data.point_id, data.daily, data.hourly)
+    if data.source not in WEATHER_SOURCES:
+        raise HTTPException(status_code=422, detail=f"Невідоме джерело: {data.source}")
+    nd, nh = await dao.import_rows(data.point_id, data.daily, data.hourly, source=data.source)
     await session.commit()
     return WeatherImportResult(daily=nd, hourly=nh)
 
