@@ -159,6 +159,8 @@ def _sync_message(report: CatalogSync) -> str:
         parts.append(f"перейменовано виробників: {report.renamed_manufacturers}")
     if report.added_models:
         parts.append(f"додано моделей: {report.added_models}")
+    if report.renamed_models:
+        parts.append(f"перейменовано моделей: {report.renamed_models}")
     return "Каталог оновлено — " + ", ".join(parts)
 
 
@@ -188,8 +190,8 @@ async def preload_device_catalog(force: bool = False, session: AsyncSession = De
                 detail=(
                     "Каталог не можна перезаписати: на його моделі посилаються "
                     "прилади підприємств або ліній ДПД. Зніміть позначку "
-                    "«перезаписати» — злиття оновить назви виробників за кодом "
-                    "mf_dev і додасть відсутні моделі"
+                    "«перезаписати» — злиття оновить назви виробників і моделей "
+                    "та додасть відсутні"
                 ),
             )
     report = await _preload_catalog(session)
@@ -199,5 +201,6 @@ async def preload_device_catalog(force: bool = False, session: AsyncSession = De
         "added_manufacturers": report.added_manufacturers,
         "renamed_manufacturers": report.renamed_manufacturers,
         "added_models": report.added_models,
+        "renamed_models": report.renamed_models,
         "warnings": report.warnings,
     }

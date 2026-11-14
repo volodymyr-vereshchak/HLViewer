@@ -25,7 +25,8 @@ CATALOG_PATH = Path(__file__).parent / "device_catalog.json"
 
 async def export(session: AsyncSession) -> None:
     manufacturers = (
-        await session.execute(select(Manufacturer).order_by(asc(Manufacturer.mf_dev)))
+        await session.execute(select(Manufacturer).order_by(
+            asc(Manufacturer.mf_dev).nulls_last(), asc(Manufacturer.id)))
     ).scalars().all()
 
     result = {"manufacturers": []}
@@ -39,12 +40,16 @@ async def export(session: AsyncSession) -> None:
             )
         ).scalars().all()
 
+        # `uid` is what another installation knows the entry by: with it a
+        # rename made here arrives there as a rename, not as a second entry.
         result["manufacturers"].append({
+            "uid":        str(mfr.export_uid),
             "short_name": mfr.short_name,
             "full_name":  mfr.full_name,
             "mf_dev":     mfr.mf_dev,
             "models": [
-                {"model_name": m.model_name, "type_dev": m.type_dev}
+                {"uid": str(m.export_uid), "model_name": m.model_name,
+                 "type_dev": m.type_dev}
                 for m in models
             ],
         })

@@ -233,6 +233,7 @@ def _device_payload(dev: DpdDevice, ct_info: dict) -> dict:
             "mf_dev": info["mf_dev"],
             "model_name": info["model_name"],
             "type_dev": info["type_dev"],
+            "model_uid": info["uid"],
         }
     return {
         "ser_num": dev.ser_num,
@@ -252,7 +253,8 @@ async def _catalog_by_id(session: AsyncSession) -> dict[int, dict]:
         )
     ).all()
     return {
-        ct.id: {"mf_dev": mfr.mf_dev, "model_name": ct.model_name, "type_dev": ct.type_dev}
+        ct.id: {"mf_dev": mfr.mf_dev, "model_name": ct.model_name,
+                "type_dev": ct.type_dev, "uid": str(ct.export_uid)}
         for ct, mfr in rows
     }
 
@@ -267,6 +269,9 @@ async def _catalog_by_name(session: AsyncSession) -> dict[tuple, int]:
         )
     ).all()
     catalog: dict[tuple, int] = {(mfr.mf_dev, ct.model_name): ct.id for ct, mfr in rows}
+    # First of all by the model's own uid: the same on every installation, and
+    # the only key that survives a rename or a model ДПД has no codes for.
+    catalog.update({("uid", str(ct.export_uid)): ct.id for ct, _ in rows})
     # And by the pair ДПД addresses a corrector with — (mf_dev, type_dev) —
     # for a name spelt differently on the other server: the Дніпро export
     # carries "Універсал-МT" with a Latin T, this catalogue "Універсал-МТ"
@@ -402,6 +407,7 @@ async def export_branch(
                 "mf_dev": info.get("mf_dev"),
                 "model_name": info.get("model_name"),
                 "type_dev": info.get("type_dev"),
+                "model_uid": info.get("uid"),
                 "installed_from": _iso(dev.installed_from),
             }
         )
@@ -631,13 +637,22 @@ def _resolve_corrector(
     """
     mf_dev = dev.get("mf_dev")
     model = dev.get("model_name")
-    if model and mf_dev is not None:
-        ct_id = ct_by_name.get((int(mf_dev), model))
-        if ct_id is None and dev.get("type_dev") is not None:
+    if dev.get("model_uid"):
+        ct_id = ct_by_name.get(("uid", str(dev["model_uid"])))
+        if ct_id is not None:
+            return ct_id, None
+    if model:
+        # A bundle written before uids, or a catalog here that has not been
+        # given this entry's uid yet: by name, then by the pair of codes. A
+        # model ДПД does not know has no code — its key is (None, name).
+        ct_id = ct_by_name.get((int(mf_dev) if mf_dev is not None else None, model))
+        if ct_id is None and mf_dev is not None and dev.get("type_dev") is not None:
             ct_id = ct_by_name.get(("codes", int(mf_dev), int(dev["type_dev"])))
         if ct_id is None:
+            whose = (f"виробника з кодом mf_dev={mf_dev}" if mf_dev is not None
+                     else "виробника без коду ДПД")
             return None, (
-                f"моделі «{model}» виробника з кодом mf_dev={mf_dev} немає в довіднику "
+                f"моделі «{model}» {whose} немає в довіднику "
                 "коректорів цього сервера"
             )
         return ct_id, None

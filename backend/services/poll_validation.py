@@ -50,6 +50,7 @@ VEGA = 1054
 FLOUTEK = 2002
 TANDEM = 2003
 UNIVERSAL = 2004
+IZODROM = 2005
 
 # The model name, as the device catalogue spells it, to the family that reads
 # it. Matched on a fragment because the catalogue carries every revision as
@@ -67,6 +68,13 @@ _FAMILY_BY_FRAGMENT = (
     ("УНІВЕРСАЛ", UNIVERSAL),
     ("УНИВЕРСАЛ", UNIVERSAL),
     ("UNIVERSAL", UNIVERSAL),
+    ("ИЗОДРОМ", IZODROM),
+    ("ІЗОДРОМ", IZODROM),
+    ("IZODROM", IZODROM),
+    # Its models carry no family name of their own — ОЕ-22ДМ, ОЕ-22ЛА — and
+    # the letters get typed in either alphabet.
+    ("ОЕ-22", IZODROM),
+    ("OE-22", IZODROM),
 )
 
 

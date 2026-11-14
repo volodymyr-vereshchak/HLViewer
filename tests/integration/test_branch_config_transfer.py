@@ -566,8 +566,10 @@ class TestRefusals:
         assert any("у файлі немає лінії" in e for e in report["errors"])
 
     async def test_unknown_corrector_model(self, admin_client, rich_branch):
-        """Unknown by name AND by the codes ДПД addresses it with."""
+        """Unknown by its uid, by name AND by the codes ДПД addresses it with."""
         bundle = _retarget(await _export(admin_client, rich_branch["branch"]))
+        bundle["dpd_lines"][0]["devices"][0]["model_uid"] = (
+            "99999999-9999-4999-8999-999999999999")
         bundle["dpd_lines"][0]["devices"][0]["model_name"] = "НЕВІДОМА-9"
         bundle["dpd_lines"][0]["devices"][0]["type_dev"] = 999
         report = await _import(admin_client, bundle)
@@ -586,6 +588,41 @@ class TestRefusals:
         dev["model_name"] = dev["model_name"].replace("А", "A")   # Latin A
         report = await _import(admin_client, bundle)
         assert not any("довіднику коректорів" in e for e in report["errors"])
+
+    async def test_a_renamed_model_is_found_by_its_uid(self, admin_client, rich_branch):
+        """The model was renamed at the source after this server got its
+        catalog, and its codes say nothing either. The uid the bundle carries
+        is the same entry on both sides, so the corrector is still placed."""
+        bundle = _retarget(await _export(admin_client, rich_branch["branch"]))
+        for dev in (bundle["dpd_lines"][0]["devices"][0],
+                    bundle["enterprises"][0]["devices"][0]):
+            assert dev["model_uid"]
+            dev["model_name"] = "ЗОВСІМ-ІНША-НАЗВА"
+            dev["type_dev"] = 999
+        report = await _import(admin_client, bundle)
+        assert not any("довіднику коректорів" in e for e in report["errors"])
+
+    async def test_a_model_without_dpd_codes_travels(self, admin_client, rich_branch):
+        """Изодром: ДПД has no code for the manufacturer or the model, so the
+        pair of codes a corrector used to travel by is empty. It travels by
+        the uid — and, from a bundle written before uids, by its name."""
+        async with async_session_factory() as session:
+            for mfr in (await session.execute(select(Manufacturer))).scalars().all():
+                mfr.mf_dev = None
+            for ct in (await session.execute(select(CorectorType))).scalars().all():
+                ct.type_dev = None
+            await session.commit()
+
+        bundle = _retarget(await _export(admin_client, rich_branch["branch"]))
+        dev = bundle["enterprises"][0]["devices"][0]
+        assert dev["mf_dev"] is None and dev["type_dev"] is None and dev["model_uid"]
+        report = await _import(admin_client, bundle)
+        assert not any("коректор" in e for e in report["errors"]), report["errors"]
+
+        for device in bundle["enterprises"][0]["devices"] + bundle["dpd_lines"][0]["devices"]:
+            device.pop("model_uid")
+        report = await _import(admin_client, bundle)
+        assert not any("коректор" in e for e in report["errors"]), report["errors"]
 
     async def test_unknown_calc_type(self, admin_client, rich_branch):
         bundle = _retarget(await _export(admin_client, rich_branch["branch"]))

@@ -171,9 +171,14 @@ class TestCatalogTransfer:
 
         written = json.loads(target.read_text(encoding="utf-8"))
         assert [m["short_name"] for m in written["manufacturers"]] == ["РадмирТех"]
-        assert written["manufacturers"][0]["models"] == [
-            {"model_name": "ВЕГА-1.01", "type_dev": 3}
-        ]
+        models = written["manufacturers"][0]["models"]
+        assert [(m["model_name"], m["type_dev"]) for m in models] == [("ВЕГА-1.01", 3)]
+        # Every entry leaves with the uid another installation will know it by.
+        async with async_session_factory() as session:
+            mfr = await session.get(Manufacturer, catalog["manufacturer"])
+            ct = await session.get(CorectorType, catalog["corector_type"])
+        assert written["manufacturers"][0]["uid"] == str(mfr.export_uid)
+        assert models[0]["uid"] == str(ct.export_uid)
 
     async def test_preload_adds_missing_entries_without_touching_existing(
         self, admin_client, catalog
@@ -290,8 +295,138 @@ class TestCatalogRename:
         catalog_file([])
         resp = await admin_client.post("/device-catalog/preload?force=true")
         assert resp.status_code == 409, resp.text
-        assert "mf_dev" in resp.json()["detail"]
+        assert "перезаписати" in resp.json()["detail"]
 
         # Nothing was lost on the way out.
         listed = (await admin_client.get("/device-catalog/corector-types/")).json()
         assert [c["id"] for c in listed] == [catalog["corector_type"]]
+
+
+async def _uids(catalog: dict) -> tuple[str, str]:
+    async with async_session_factory() as session:
+        mfr = await session.get(Manufacturer, catalog["manufacturer"])
+        ct = await session.get(CorectorType, catalog["corector_type"])
+        return str(mfr.export_uid), str(ct.export_uid)
+
+
+class TestCatalogIdentity:
+    """Entries are told apart by a uid that travels in the file.
+
+    Names get corrected and codes are not always there, so neither can say
+    «this same entry» on another server. The uid can: with it a rename is a
+    rename, and an entry ДПД has no code for is still one entry."""
+
+    async def test_a_renamed_model_arrives_as_a_rename(
+        self, admin_client, catalog, catalog_file
+    ):
+        mfr_uid, model_uid = await _uids(catalog)
+        catalog_file([{
+            "uid": mfr_uid, "short_name": "РадмирТех", "full_name": "РадмирТех ТОВ СП",
+            "mf_dev": 1,
+            "models": [{"uid": model_uid, "model_name": "ВЕГА-1.01Н", "type_dev": 3}],
+        }])
+
+        body = (await admin_client.post("/device-catalog/preload")).json()
+        assert body["renamed_models"] == 1
+        assert body["added_models"] == 0
+
+        listed = (await admin_client.get("/device-catalog/corector-types/")).json()
+        # One row, same id: every corrector that points at it still does.
+        assert [(c["id"], c["model_name"]) for c in listed] == [
+            (catalog["corector_type"], "ВЕГА-1.01Н")]
+
+    async def test_a_manufacturer_is_known_by_uid_even_under_another_code(
+        self, admin_client, catalog, catalog_file
+    ):
+        mfr_uid, model_uid = await _uids(catalog)
+        catalog_file([{
+            "uid": mfr_uid, "short_name": "Радміртех", "full_name": "Радміртех ТОВ СП",
+            "mf_dev": 7,
+            "models": [{"uid": model_uid, "model_name": "ВЕГА-1.01", "type_dev": 3}],
+        }])
+
+        body = (await admin_client.post("/device-catalog/preload")).json()
+        assert body["added_manufacturers"] == 0
+        assert body["renamed_manufacturers"] == 1
+        # The code is how ДПД is asked: never rewritten from a file, only said.
+        assert any("mf_dev" in w for w in body["warnings"])
+        listed = (await admin_client.get("/device-catalog/manufacturers/")).json()
+        assert [(m["id"], m["short_name"], m["mf_dev"]) for m in listed] == [
+            (catalog["manufacturer"], "Радміртех", 1)]
+
+    async def test_a_file_without_uids_still_merges_and_a_matched_row_takes_the_uid(
+        self, admin_client, catalog, catalog_file
+    ):
+        """What an installation that has not exported since uids hands over,
+        and what the first file with uids does to rows matched the old way."""
+        theirs = "11111111-2222-4333-8444-555555555555"
+        catalog_file([{
+            "uid": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+            "short_name": "РадмирТех", "full_name": "РадмирТех ТОВ СП", "mf_dev": 1,
+            "models": [{"uid": theirs, "model_name": "ВЕГА-1.01", "type_dev": 3}],
+        }])
+        body = (await admin_client.post("/device-catalog/preload")).json()
+        assert (body["added_manufacturers"], body["added_models"]) == (0, 0)
+        assert await _uids(catalog) == ("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", theirs)
+
+    async def test_entries_without_dpd_codes_are_added_once(
+        self, admin_client, catalog, catalog_file
+    ):
+        """Изодром: read over a modem only, so ДПД has no code for the
+        manufacturer or for its models."""
+        entry = {
+            "uid": "0f0f0f0f-1111-4222-8333-444444444444",
+            "short_name": "Ізодром", "full_name": 'ТОВ "Ізодром"', "mf_dev": None,
+            "models": [
+                {"uid": "0f0f0f0f-1111-4222-8333-555555555555",
+                 "model_name": "ОЕ-22ДМ", "type_dev": None},
+                {"uid": "0f0f0f0f-1111-4222-8333-666666666666",
+                 "model_name": "ОЕ-22ЛА", "type_dev": None},
+            ],
+        }
+        catalog_file([entry])
+        first = (await admin_client.post("/device-catalog/preload")).json()
+        assert (first["added_manufacturers"], first["added_models"]) == (1, 2)
+        assert first["warnings"] == []
+
+        # Again, and renamed at the source meanwhile: still the same rows.
+        entry["short_name"] = "Изодром"
+        entry["models"][0]["model_name"] = "ОЕ-22ДМ.iz"
+        catalog_file([entry])
+        second = (await admin_client.post("/device-catalog/preload")).json()
+        assert (second["added_manufacturers"], second["added_models"]) == (0, 0)
+        assert (second["renamed_manufacturers"], second["renamed_models"]) == (1, 1)
+
+        mfrs = (await admin_client.get("/device-catalog/manufacturers/")).json()
+        izodrom = next(m for m in mfrs if m["short_name"] == "Изодром")
+        assert izodrom["mf_dev"] is None
+        models = (await admin_client.get(
+            f"/device-catalog/corector-types/?manufacturer_id={izodrom['id']}")).json()
+        assert sorted((m["model_name"], m["type_dev"]) for m in models) == [
+            ("ОЕ-22ДМ.iz", None), ("ОЕ-22ЛА", None)]
+
+    async def test_a_manufacturer_without_a_code_can_be_typed_in(
+        self, admin_client, clean_db
+    ):
+        resp = await admin_client.post("/device-catalog/manufacturers/", json={
+            "short_name": "Ізодром", "full_name": 'ТОВ "Ізодром"'})
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["mf_dev"] is None
+        # And a second one: the unique code does not make two «none» collide.
+        resp = await admin_client.post("/device-catalog/manufacturers/", json={
+            "short_name": "Інший", "full_name": "Інший виробник"})
+        assert resp.status_code == 201, resp.text
+
+    async def test_the_repo_catalog_carries_a_uid_on_every_entry(self):
+        """The committed file is what the offline server is fed from; an entry
+        without a uid there would be matched by name for ever."""
+        import backend.db.preload_db.preload_device_catalog as preloader
+
+        data = json.loads(preloader.CATALOG_PATH.read_text(encoding="utf-8"))
+        uids = [m["uid"] for m in data["manufacturers"]]
+        uids += [x["uid"] for m in data["manufacturers"] for x in m["models"]]
+        assert all(uids) and len(uids) == len(set(uids))
+        izodrom = next(m for m in data["manufacturers"] if m["short_name"] == "Ізодром")
+        assert izodrom["mf_dev"] is None
+        assert {x["model_name"] for x in izodrom["models"]} == {"ОЕ-22ДМ", "ОЕ-22ЛА"}
+

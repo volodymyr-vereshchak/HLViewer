@@ -342,6 +342,8 @@ class TestTheDriverComesFromTheModel:
         assert family_of_model("ФЛОУТЕК-ТМ-2-3-6") == 2002
         assert family_of_model(" Тандем-Т") == 2003         # as the catalogue has it
         assert family_of_model("Універсал-02") == 2004
+        assert family_of_model("Изодром ОЕ-22ДМ") == 2005
+        assert family_of_model("ОЕ-22ЛА.iz") == 2005           # by its own model
 
     async def test_a_model_nobody_reads_says_nothing(self, admin_client, targets):
         # ТКБ, smart104, КВР: no family of ours. Null is not an error — the
