@@ -152,3 +152,10 @@ class GrsStationUpdate(SQLModel):
     enabled: Optional[bool] = None
     #: 0 clears the mapping (back to the branch mean).
     weather_point_id: Optional[int] = None
+
+
+class GrsStationPoint(SQLModel):
+    """Where a station is: its weather point is made there."""
+    station_id: int
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)

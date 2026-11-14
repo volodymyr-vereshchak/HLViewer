@@ -235,6 +235,11 @@ class WeatherPlan(SQLModel):
 
     archive_first: Optional[date] = None
     archive_last: Optional[date] = None
+    #: The days the 1С figures of the GRS consumption models cover. When
+    #: there are any, the download starts there: the model needs weather for
+    #: every one of them, and they reach back further than the lines.
+    grs_first: Optional[date] = None
+    grs_last: Optional[date] = None
     points: list[WeatherMissing] = []
 
 

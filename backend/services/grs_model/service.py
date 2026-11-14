@@ -74,6 +74,9 @@ class Frames:
     weather: dict[str, pd.DataFrame]   # weather key → continuous daily weather
     weather_key: dict[str, str]        # station name → weather key
     tiny: list[str] = field(default_factory=list)   # left out as negligible
+    #: False: no consumption report was ever uploaded, and the model is of
+    #: the whole inflow.
+    with_consumption: bool = True
 
 
 def weather_frame(rows) -> pd.DataFrame:
@@ -126,8 +129,15 @@ def build_frames(inputs: Inputs) -> Frames:
     heat = table(long["category"] == HEAT_CATEGORY)
 
     # Nothing stored for a day a consumption report covers is a zero; for a
-    # day no report covers it is unknown, and so is the day's remainder.
-    reported = index.isin(pd.to_datetime(inputs.covered.get(CONSUMPTION, [])))
+    # day no report covers it is unknown, and so is the day's remainder. A
+    # branch with no consumption report at all is modelled on its inflow:
+    # what is not households then is in the model too, which is coarser but
+    # still catches a metering shift.
+    with_consumption = bool(inputs.covered.get(CONSUMPTION))
+    if with_consumption:
+        reported = index.isin(pd.to_datetime(inputs.covered[CONSUMPTION]))
+    else:
+        reported = np.ones(len(index), dtype=bool)
     other = other.fillna(0.0).where(pd.Series(reported, index=index), axis=0)
     heat = heat.fillna(0.0).where(pd.Series(reported, index=index), axis=0)
     y = (inflow - other) / 1000
@@ -165,7 +175,8 @@ def build_frames(inputs: Inputs) -> Frames:
             f"Погода є лише за {first:%d.%m.%Y}–{last:%d.%m.%Y}, а дані ГРС — за інший "
             "період. Довантажте погоду за період даних")
     return Frames(index=index, y=y, inflow=inflow, other=other, heat=heat,
-                  weather=weather, weather_key=weather_key, tiny=tiny)
+                  weather=weather, weather_key=weather_key, tiny=tiny,
+                  with_consumption=with_consumption)
 
 
 def _heating(frames: Frames, name: str, index: pd.DatetimeIndex,
@@ -236,6 +247,7 @@ def train(inputs: Inputs) -> tuple[dict, dict]:
         "first_day": frames.index[0].date().isoformat(),
         "last_day": frames.index[-1].date().isoformat(),
         "days": int(len(frames.index)),
+        "with_consumption": frames.with_consumption,
         "weather_first": frames.weather[BRANCH_WEATHER].index[0].date().isoformat(),
         "weather_last": frames.weather[BRANCH_WEATHER].index[-1].date().isoformat(),
     }

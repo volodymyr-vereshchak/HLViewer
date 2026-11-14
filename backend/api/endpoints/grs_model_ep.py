@@ -22,6 +22,7 @@ from backend.db.models.app_user_model import AppUser
 from backend.db.models.grs_model_model import (
     GrsFit,
     GrsStation,
+    GrsStationPoint,
     GrsStationUpdate,
     GrsUpload,
     GrsVolume,
@@ -266,6 +267,39 @@ async def analysis(
 
 
 # ── stations ───────────────────────────────────────────────────────────────
+
+@router.post("/stations/weather-points")
+async def create_station_points(
+    items: list[GrsStationPoint],
+    _: AppUser = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """A weather point for each station, named after it, where it is — and
+    the station tied to it. The weather points of a branch come from its GRS
+    this way, not from lines. A point of that name already in the branch is
+    taken as it is, so pressing twice makes nothing twice."""
+    dao = GrsModelDao(session)
+    out = []
+    for item in items:
+        station = await dao.station(item.station_id)
+        if station is None:
+            raise HTTPException(status_code=404, detail="ГРС не знайдено")
+        point = (await session.execute(
+            select(WeatherPoint).where(WeatherPoint.branch_id == station.branch_id,
+                                       WeatherPoint.name == station.name)
+        )).scalars().first()
+        created = point is None
+        if created:
+            point = WeatherPoint(branch_id=station.branch_id, name=station.name,
+                                 latitude=item.latitude, longitude=item.longitude)
+            session.add(point)
+            await session.flush()
+        station.weather_point_id = point.id
+        station.updated_at = datetime.now()
+        out.append({"station_id": station.id, "weather_point_id": point.id, "created": created})
+    await session.commit()
+    return out
+
 
 @router.patch("/stations/{station_id}")
 async def update_station(

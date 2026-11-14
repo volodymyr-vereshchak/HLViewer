@@ -9,12 +9,14 @@ from datetime import date, datetime, time, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.endpoints.auth_ep import get_branch_filter, get_current_user, require_admin
 from backend.db.dao.weather_dao import WeatherDao
 from backend.db.engine import get_session
+from backend.db.models.grs_model_model import GrsStation, GrsVolume
 from backend.services import weather_refresh
 from backend.db.models.weather_model import (
     LINE_KINDS,
@@ -145,16 +147,25 @@ async def plan(
         raise HTTPException(status_code=404, detail="Філію не знайдено")
     dao = WeatherDao(session)
     first, last = await dao.archive_range(branch_id)
+    grs_first, grs_last = (await session.execute(
+        select(func.min(GrsVolume.day), func.max(GrsVolume.day))
+        .join(GrsStation, GrsStation.id == GrsVolume.station_id)
+        .where(GrsStation.branch_id == branch_id)
+    )).one()
     points = [p.id for p in await dao.list_points([branch_id])]
-    lo = date_from or first
-    hi = date_to or last
     # Weather for today cannot exist yet; the reanalysis lags a few days more,
     # which the frontend reports rather than hides.
     yesterday = date.today() - timedelta(days=1)
+    # With GRS figures the default is from their first day up to now: the
+    # model needs the weather of every day it has, and the days after the
+    # last report are the ones it forecasts.
+    lo = date_from or grs_first or first
+    hi = date_to or (yesterday if grs_first else last)
     if hi is not None and hi > yesterday:
         hi = yesterday
     missing = await dao.missing(points, lo, hi) if lo and hi else []
-    return WeatherPlan(archive_first=first, archive_last=last, points=missing)
+    return WeatherPlan(archive_first=first, archive_last=last,
+                       grs_first=grs_first, grs_last=grs_last, points=missing)
 
 
 @router.post("/import", response_model=WeatherImportResult, dependencies=[Depends(require_admin)])

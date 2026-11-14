@@ -153,3 +153,19 @@ class TestModel:
         inputs = _inputs(last=data.FIRST + timedelta(days=60))
         with pytest.raises(service.ModelError, match="чистих днів"):
             service.train(inputs)
+
+
+class TestWithoutConsumption:
+    def test_inflow_alone_is_modelled(self):
+        inputs = _inputs()
+        inputs.volumes = [v for v in inputs.volumes if v[2] == parse.INFLOW_CATEGORY]
+        inputs.covered = {parse.INFLOW: inputs.covered[parse.INFLOW]}
+        summary, payload = service.train(inputs)
+        assert summary["with_consumption"] is False
+        assert [s["status"] for s in summary["stations"]] == ["ok"] * 4
+        result = service.analyse(inputs, payload)
+        assert any(e["grs"] == data.FAULTY for e in result["episodes"])
+
+    def test_with_consumption_is_said(self):
+        summary, _ = service.train(_inputs())
+        assert summary["with_consumption"] is True

@@ -179,3 +179,43 @@ class TestScope:
         for path in ("/grs-model/status", "/grs-model/analysis"):
             resp = await scoped_viewer_client.get(path, params={"branch_id": seed_two_branches["branch2"]})
             assert resp.status_code == 404, path
+
+
+class TestWeatherPoints:
+    async def test_points_are_made_from_stations_and_tied_to_them(self, admin_client, seed_topology):
+        branch = seed_topology["branch"]
+        inflow, _ = data.reports(date(2026, 1, 1), date(2026, 1, 5))
+        await _upload(admin_client, branch, ("grs.xlsx", inflow))
+        stations = (await _status(admin_client, branch))["stations"]
+        items = [{"station_id": s["id"], "latitude": 47.8, "longitude": 35.1} for s in stations[:2]]
+
+        made = (await admin_client.post("/grs-model/stations/weather-points", json=items)).json()
+        assert [m["created"] for m in made] == [True, True]
+        points = (await admin_client.get("/weather/points", params={"branch_id": branch})).json()
+        assert sorted(p["name"] for p in points) == sorted(s["name"] for s in stations[:2])
+        status = await _status(admin_client, branch)
+        tied = {s["name"]: s["weather_point_id"] for s in status["stations"]}
+        assert {p["name"]: p["id"] for p in points} == {n: tied[n] for n in tied if tied[n]}
+
+        again = (await admin_client.post("/grs-model/stations/weather-points", json=items)).json()
+        assert [m["created"] for m in again] == [False, False]
+        assert len((await admin_client.get("/weather/points", params={"branch_id": branch})).json()) == 2
+
+    async def test_viewer_may_not_make_points(self, viewer_client, seed_topology):
+        resp = await viewer_client.post("/grs-model/stations/weather-points",
+                                        json=[{"station_id": 1, "latitude": 47, "longitude": 35}])
+        assert resp.status_code == 403
+
+    async def test_download_period_starts_at_the_grs_data(self, admin_client, seed_topology):
+        branch = seed_topology["branch"]
+        plan = (await admin_client.get("/weather/plan", params={"branch_id": branch})).json()
+        assert plan["grs_first"] is None
+        inflow, _ = data.reports(date(2025, 3, 1), date(2025, 3, 10))
+        await _upload(admin_client, branch, ("grs.xlsx", inflow))
+        await _weather(admin_client, branch, date(2025, 3, 5))
+        plan = (await admin_client.get("/weather/plan", params={"branch_id": branch})).json()
+        assert (plan["grs_first"], plan["grs_last"]) == ("2025-03-01", "2025-03-10")
+        missing = plan["points"][0]["daily"]
+        # Weather is there up to 05.03; the rest is asked for up to yesterday.
+        assert missing[0]["first"] == "2025-03-06"
+        assert missing[-1]["last"] == (date.today() - timedelta(days=1)).isoformat()
