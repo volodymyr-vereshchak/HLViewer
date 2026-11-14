@@ -161,3 +161,12 @@ from .weather_model import (
     WeatherPoint,
     WeatherPointLine,
 )
+
+# GRS consumption models (backend/db/models/grs_model_model.py). Same reason.
+from .grs_model_model import (
+    GrsCoveredDay,
+    GrsFit,
+    GrsStation,
+    GrsUpload,
+    GrsVolume,
+)
