@@ -289,6 +289,9 @@ async def create_station_points(
                                        WeatherPoint.name == station.name)
         )).scalars().first()
         created = point is None
+        if created and (item.latitude is None or item.longitude is None):
+            raise HTTPException(
+                status_code=422, detail=f"Вкажіть координати для «{station.name}»")
         if created:
             point = WeatherPoint(branch_id=station.branch_id, name=station.name,
                                  latitude=item.latitude, longitude=item.longitude)

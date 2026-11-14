@@ -155,7 +155,8 @@ class GrsStationUpdate(SQLModel):
 
 
 class GrsStationPoint(SQLModel):
-    """Where a station is: its weather point is made there."""
+    """Where a station is: its weather point is made there. Not needed when
+    a point of the station's name already exists — it is tied to that one."""
     station_id: int
-    latitude: float = Field(ge=-90, le=90)
-    longitude: float = Field(ge=-180, le=180)
+    latitude: Optional[float] = Field(default=None, ge=-90, le=90)
+    longitude: Optional[float] = Field(default=None, ge=-180, le=180)

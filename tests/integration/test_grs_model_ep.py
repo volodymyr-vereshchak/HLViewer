@@ -219,3 +219,25 @@ class TestWeatherPoints:
         # Weather is there up to 05.03; the rest is asked for up to yesterday.
         assert missing[0]["first"] == "2025-03-06"
         assert missing[-1]["last"] == (date.today() - timedelta(days=1)).isoformat()
+
+    async def test_station_is_tied_to_a_point_of_its_name(self, admin_client, seed_topology):
+        branch = seed_topology["branch"]
+        inflow, _ = data.reports(date(2026, 1, 1), date(2026, 1, 5))
+        await _upload(admin_client, branch, ("grs.xlsx", inflow))
+        station = (await _status(admin_client, branch))["stations"][0]
+        point = (await admin_client.post("/weather/points", json={
+            "branch_id": branch, "name": station["name"], "latitude": 47, "longitude": 35, "lines": [],
+        })).json()
+        made = (await admin_client.post("/grs-model/stations/weather-points",
+                                        json=[{"station_id": station["id"]}])).json()
+        assert made == [{"station_id": station["id"], "weather_point_id": point["id"], "created": False}]
+
+    async def test_a_new_point_needs_coordinates(self, admin_client, seed_topology):
+        branch = seed_topology["branch"]
+        inflow, _ = data.reports(date(2026, 1, 1), date(2026, 1, 5))
+        await _upload(admin_client, branch, ("grs.xlsx", inflow))
+        station = (await _status(admin_client, branch))["stations"][0]
+        resp = await admin_client.post("/grs-model/stations/weather-points",
+                                       json=[{"station_id": station["id"]}])
+        assert resp.status_code == 422
+        assert station["name"] in resp.json()["detail"]
