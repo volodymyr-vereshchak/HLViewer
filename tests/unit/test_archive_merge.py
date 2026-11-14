@@ -36,6 +36,40 @@ def test_clock_back_hour_is_summed_and_averaged():
     assert merged["period"] == H3
 
 
+def test_the_same_record_written_twice_is_one_record():
+    """ГРС Сергіївка, 04.11.2026, after its corrector was replaced: the 14:25
+    record twice in one file. Summed it was 942.13 m³; the act on the
+    replacement counts 471.07."""
+    period = datetime(2026, 11, 4, 14, 25)
+    copy = dict(volume=471.0665, w_volume_dp=1224.05, pressure=3.148,
+                temperature=3.34, period=period)
+    [merged] = merge_same_period([rec(**copy), rec(**copy)])
+    assert merged["volume"] == pytest.approx(471.0665)
+    assert merged["w_volume_dp"] == pytest.approx(1224.05)
+    assert merged["pressure"] == pytest.approx(3.148)
+    assert merged["period"] == period
+
+
+def test_copies_are_dropped_before_two_real_hours_are_summed():
+    """A clock-back night whose second 03:00 also came twice: two hours of
+    gas, not three."""
+    first = dict(volume=256.6, pressure=2.784, temperature=10.22)
+    second = dict(volume=254.8, pressure=2.785, temperature=10.07)
+    [merged] = merge_same_period([rec(**first), rec(**second), rec(**second)])
+    assert merged["volume"] == pytest.approx(511.4)
+    assert merged["pressure"] == pytest.approx(2.7845)
+
+
+def test_records_that_differ_in_one_value_are_both_kept():
+    """Agreement in volume alone is not a copy: two real hours can carry the
+    same volume, and they differ in what else was measured."""
+    [merged] = merge_same_period([
+        rec(300.0, pressure=2.78, temperature=10.0),
+        rec(300.0, pressure=2.78, temperature=9.9),
+    ])
+    assert merged["volume"] == pytest.approx(600.0)
+
+
 def test_empty_record_next_to_a_real_one_is_dropped():
     """«ВП ДЕЛЬТА», 06.12.2024 after a power failure: averaging the empty
     record in would have halved the pressure."""

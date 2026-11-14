@@ -8,9 +8,17 @@ And after a power failure a meter may leave an empty record next to the real
 one: volume 0, pressure and temperature holding the integer 1, which reads as
 the float 1.4e-45 (06.12.2024, «ВП ДЕЛЬТА»).
 
+And a meter can write the very same record twice. On 04.11.2026, after its
+corrector was replaced, ГРС Сергіївка's 14:25 record came in at 942.13 m³,
+while the act on the replacement counts that record as 471.07 — exactly half,
+to the cent: one record written twice into one file and summed with itself.
+
 The archive keeps one row per (line_id, period), so such a group is folded
 into one record here, before it reaches the database:
 
+* identical records are one record — a copy is not another hour of gas.
+  Two genuine records never agree in every measured value: the two 03:00
+  hours of the clock-back night differ in volume, pressure and temperature;
 * records with no volume are dropped while any record has volume — they are
   the empty ones and carry no gas;
 * volumes are summed (both records are real gas that flowed through the
@@ -40,7 +48,21 @@ SUMMED = ("volume", "w_volume_dp")
 AVERAGED = ("pressure", "temperature", "density")
 
 
+def _measured(record: dict) -> tuple:
+    """What a record says, without where it came from."""
+    return tuple(record.get(field) for field in SUMMED + AVERAGED)
+
+
+def _distinct(group: list[dict]) -> list[dict]:
+    """The group without copies, keeping the last of each."""
+    seen: dict = {}
+    for record in group:
+        seen[_measured(record)] = record
+    return list(seen.values())
+
+
 def _fold(group: list[dict]) -> dict:
+    group = _distinct(group)
     flowing = [r for r in group if abs(r["volume"]) > ZERO_VOLUME]
     measured = [
         r for r in group
@@ -71,10 +93,12 @@ def merge_same_period(records: list[dict], source: str = "") -> list[dict]:
             merged.append(group[0])
             continue
         folded = _fold(group)
+        copies = len(group) - len(_distinct(group))
         logger.info(
-            "%s: %d записи на %s склеєно в одну — об'єми %s → %s",
+            "%s: %d записи на %s склеєно в одну — об'єми %s → %s%s",
             source, len(group), period,
             [r["volume"] for r in group], folded["volume"],
+            f" (однакових копій відкинуто: {copies})" if copies else "",
         )
         merged.append(folded)
     return merged
