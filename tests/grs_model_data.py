@@ -17,6 +17,9 @@ LAST = date(2026, 6, 30)
 STATIONS = {"ГРС Альфа": 1.0, "ГРС Бета": 0.6, "ГРС Гамма": 2.5, "ГРС Дельта": 1.4}
 FAULTY = "ГРС Дельта"
 FAULT = (date(2026, 2, 1), date(2026, 2, 21))
+#: A village that empties: from this day on, 8 % fewer households a month.
+EMPTYING = "ГРС Бета"
+EMPTYING_FROM = date(2025, 11, 1)
 INDUSTRY = "Промисловість"
 #: Non-household consumption of every station, m³ a day.
 INDUSTRY_VOLUME = 500.0
@@ -42,8 +45,9 @@ def weather(first: date = FIRST, last: date = LAST) -> list[dict]:
     return rows
 
 
-def remainder(rows: list[dict]) -> dict[str, dict[date, float]]:
-    """What households of each station burn, m³ a day."""
+def remainder(rows: list[dict], emptying: bool = False) -> dict[str, dict[date, float]]:
+    """What households of each station burn, m³ a day. With `emptying`,
+    EMPTYING loses households month by month from EMPTYING_FROM."""
     rng = random.Random(11)
     out: dict[str, dict[date, float]] = {name: {} for name in STATIONS}
     for row in rows:
@@ -52,6 +56,8 @@ def remainder(rows: list[dict]) -> dict[str, dict[date, float]]:
             volume = 1000 * scale * base * (1 + rng.gauss(0, 0.03))
             if name == FAULTY and FAULT[0] <= row["day"] <= FAULT[1]:
                 volume *= 1.6
+            if emptying and name == EMPTYING and row["day"] >= EMPTYING_FROM:
+                volume *= 0.92 ** ((row["day"] - EMPTYING_FROM).days / 30)
             out[name][row["day"]] = round(volume, 2)
     return out
 

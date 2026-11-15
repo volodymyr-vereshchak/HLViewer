@@ -46,6 +46,31 @@ class GrsStation(HlBaseModel, table=True):
     )
 
 
+class GrsStationLine(SQLModel, table=True):
+    """A metering line of this database that measures the station.
+
+    The 1С report comes once a month; the lines are polled every day. Tied
+    to its lines, a station can be compared with its model up to today —
+    the lines' volume, less what industry took, brought to the 1С scale on
+    the days both have. A station may have several lines (they are summed);
+    a line is one of the three kinds the trends report shows.
+    """
+
+    __tablename__ = "grs_model_station_line"
+    __table_args__ = (
+        UniqueConstraint("station_id", "line_kind", "line_id", name="uq_grs_model_station_line"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True, sa_type=BigInteger)
+    station_id: int = Field(
+        sa_column=Column(
+            BigInteger, ForeignKey("grs_model_station.id", ondelete="CASCADE"), nullable=False,
+        )
+    )
+    line_kind: str = Field(max_length=16)      # physical | virtual | dpd
+    line_id: int = Field(sa_type=BigInteger)
+
+
 class GrsVolume(SQLModel, table=True):
     """One figure of a report: a station, a day, a category.
 
@@ -152,6 +177,11 @@ class GrsStationUpdate(SQLModel):
     enabled: Optional[bool] = None
     #: 0 clears the mapping (back to the branch mean).
     weather_point_id: Optional[int] = None
+
+
+class GrsLineRef(SQLModel):
+    kind: str
+    id: int
 
 
 class GrsStationPoint(SQLModel):

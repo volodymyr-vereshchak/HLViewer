@@ -78,9 +78,10 @@ class TestParse:
         assert parse.grs_name(raw) == name
 
 
-def _inputs(last: date = data.LAST, weather_last: date = data.LAST) -> service.Inputs:
+def _inputs(last: date = data.LAST, weather_last: date = data.LAST,
+            emptying: bool = False) -> service.Inputs:
     weather = data.weather(data.FIRST, weather_last)
-    households = data.remainder(data.weather())
+    households = data.remainder(data.weather(), emptying)
     ids = {name: i for i, name in enumerate(data.STATIONS, start=1)}
     period = data.days(data.FIRST, last)
     volumes = []
@@ -112,7 +113,18 @@ class TestModel:
             assert station["month_error"] < 8, station
             assert station["sigma_week_heat"] < 3, station
             assert station["train_days"] >= 400
-        assert set(payload["stations"]) == set(data.STATIONS)
+        assert set(payload["model"]["own"]) == set(data.STATIONS)
+
+    def test_features_and_their_weights_are_listed(self, trained):
+        _, summary, _ = trained
+        for station in summary["stations"]:
+            features = station["features"]
+            assert {f["feature"] for f in features} >= {"HDD_w", "pw", "hol_xmas"}
+            assert abs(sum(f["share"] for f in features) - 100) < 1e-6
+            assert features == sorted(features, key=lambda f: -f["share"])
+            # Households answer the cold: a degree-day term carries the most.
+            assert features[0]["feature"].startswith(("HDD", "h4", "h8", "pw"))
+        assert summary["pooling"]["strength"] in [float(k) for k in summary["pooling"]["tried"]]
 
     def test_fault_does_not_go_into_the_model_and_is_found(self, trained):
         inputs, summary, payload = trained
@@ -169,3 +181,41 @@ class TestWithoutConsumption:
     def test_with_consumption_is_said(self):
         summary, _ = service.train(_inputs())
         assert summary["with_consumption"] is True
+
+
+class TestTrend:
+    """A village emptying month by month is a trend, not a fault; the fault
+    of the same data stays a fault."""
+
+    @pytest.fixture(scope="class")
+    def result(self):
+        inputs = _inputs(emptying=True)
+        summary, payload = service.train(inputs)
+        return summary, service.analyse(inputs, payload)
+
+    def test_emptying_is_a_trend(self, result):
+        summary, analysis = result
+        station = next(s for s in summary["stations"] if s["name"] == data.EMPTYING)
+        # 0.92 a month: −39 % by the end of April. The trend is a median of
+        # the last months, so at the end of a season it lags behind — by
+        # design: a step that came in the last weeks must not count yet.
+        assert station["trend_min"] < -20
+        assert not [e for e in analysis["episodes"] if e["grs"] == data.EMPTYING and e["days"] > 21]
+
+    def test_fault_is_still_found(self, result):
+        _, analysis = result
+        hits = [e for e in analysis["episodes"] if e["grs"] == data.FAULTY]
+        assert any(e["start"] <= data.FAULT[1].isoformat() and e["end"] >= data.FAULT[0].isoformat()
+                   and e["deviation"] > 30 for e in hits), hits
+
+    def test_trend_series_is_returned(self, result):
+        _, analysis = result
+        station = next(s for s in analysis["stations"] if s["name"] == data.EMPTYING)
+        assert len(station["trend"]) == len(analysis["days"])
+        assert min(v for v in station["trend"] if v is not None) < -20
+
+    def test_old_model_must_be_trained_again(self):
+        inputs = _inputs()
+        _, payload = service.train(inputs)
+        with pytest.raises(service.ModelError, match="знову"):
+            service.analyse(inputs, {**payload, "version": 1})

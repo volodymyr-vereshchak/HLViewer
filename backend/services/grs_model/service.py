@@ -21,15 +21,10 @@ import pandas as pd
 from . import core
 from .parse import INFLOW, CONSUMPTION, INFLOW_CATEGORY
 
-#: The district-heating category: what it burns tells when heating is on.
+#: The district-heating category (kept apart in the frames for reference).
 HEAT_CATEGORY = "Тепломережі"
 #: The weather a station falls back to: the mean of the branch's points.
 BRANCH_WEATHER = "branch"
-#: A station is offered the heating terms when heat networks take at least
-#: this share of what it lets through …
-HEATING_SHARE = 0.05
-#: … and keeps them only if they cut its monthly error by this much.
-HEATING_GAIN = 0.05
 #: A station that passes less than this share of what the median station
 #: does is left out — of the models and of the medians the others are judged
 #: against. ГРС Калинівка lets through 0.1 thousand m³ a day where the
@@ -38,7 +33,8 @@ HEATING_GAIN = 0.05
 TINY_SHARE = 0.05
 #: A station's own weather point is used if it covers this share of the days.
 POINT_COVERAGE = 0.9
-PAYLOAD_VERSION = 1
+#: 2: one pooled model for the branch and a trend per station.
+PAYLOAD_VERSION = 2
 
 
 class ModelError(ValueError):
@@ -179,56 +175,73 @@ def build_frames(inputs: Inputs) -> Frames:
                   with_consumption=with_consumption)
 
 
-def _heating(frames: Frames, name: str, index: pd.DatetimeIndex,
-             reference: float | None = None) -> tuple[pd.Series, float]:
-    """District heating on/off over `index`; the last known state carries on
-    where no consumption report reaches yet."""
-    flag, reference = core.heating_flag(frames.heat[name].dropna(), reference)
-    return flag.reindex(index).ffill().bfill().fillna(0).astype(int), reference
-
-
 # ── training ───────────────────────────────────────────────────────────────
 
+def _designs(frames: Frames, index: pd.DatetimeIndex, norms: dict, names) -> dict[str, pd.DataFrame]:
+    return {name: core.features(frames.weather[frames.weather_key[name]], index,
+                                norms[frames.weather_key[name]]) for name in names}
+
+
+def _trends(deviation: pd.DataFrame, usable: pd.DataFrame) -> pd.DataFrame:
+    return pd.DataFrame({name: core.trend(deviation[name], usable[name]) for name in deviation.columns})
+
+
 def train(inputs: Inputs) -> tuple[dict, dict]:
-    """Fit a model per station. Returns (summary for the screen, payload)."""
+    """Fit the branch's model. Returns (summary for the screen, payload).
+
+    Two passes. The first fits every station on its own, as the cleaning
+    leaves it, only to see where each station's level has moved; the second
+    fits all of them together to the volume with that trend taken out.
+    """
     frames = build_frames(inputs)
     y = frames.y.where(frames.y > 0)
+    index, names = frames.index, list(y.columns)
     cleaning = core.clean(frames.y, frames.weather[BRANCH_WEATHER])
-    ok = ~cleaning.excluded
+    usable = ~(cleaning.shape | cleaning.missing)
     norms = {key: core.seasonal_norm_fit(w[~w["forecast"]] if (~w["forecast"]).sum() > 365 else w)
              for key, w in frames.weather.items()}
+    designs = _designs(frames, index, norms, names)
 
-    held_out = pd.DataFrame(np.nan, index=frames.index, columns=y.columns)
-    models: dict[str, dict] = {}
+    # Pass 1: each station alone, for its trend.
+    first_ok = ~cleaning.excluded
+    alone = pd.DataFrame({n: core.fit(designs[n], y[n], first_ok[n], False)[1] for n in names})
+    first_trend = _trends(core.own_deviation(y, alone, usable), usable)
+    learn = usable & ~core.off_trend(core.own_deviation(y, alone, usable), first_trend)
+
+    # Pass 2: the branch together, the trend taken out.
+    model, base, tried = core.fit_pooled(designs, y * np.exp(-first_trend), learn)
+    if model is None:
+        raise ModelError(
+            f"Жодна ГРС не має {core.MIN_TRAIN_DAYS} чистих днів з погодою — "
+            "моделі навчити ні на чому")
+
+    # The trend once more, now against the branch model, and what is judged.
+    deviation = core.own_deviation(y, base, usable)
+    trends = _trends(deviation, usable)
+    ok = usable & ~core.off_trend(deviation, trends)
+    predicted = base * np.exp(trends)
+    detection = core.detect(y, predicted, ok)
+
     listing = []
-    for name in y.columns:
-        key = frames.weather_key[name]
-        weather, norm = frames.weather[key], norms[key]
-        fitted, predicted = core.fit(core.features(weather, frames.index, norm), y[name], ok[name], False)
-        variant = "plain"
-        inflow_total = frames.inflow[name].sum()
-        if fitted and inflow_total and frames.heat[name].sum() / inflow_total >= HEATING_SHARE:
-            flag, reference = _heating(frames, name, frames.index)
-            with_heat, predicted_heat = core.fit(
-                core.features(weather, frames.index, norm, flag), y[name], ok[name], True, reference)
-            if with_heat and _better(with_heat, fitted):
-                fitted, predicted, variant = with_heat, predicted_heat, "heating"
-        held_out[name] = predicted
-        models[name] = {"weather": key, "variant": variant,
-                        "model": _fitted_json(fitted) if fitted else None}
+    for name in names:
+        if name not in model.own:
+            listing.append({"name": name, "status": "few_days"})
+            continue
+        level = np.expm1(trends[name])
+        known = level[y[name].notna()]
         listing.append({
-            "name": name, "status": "ok" if fitted else "few_days",
-            "variant": variant, "weather": key,
-            "train_days": int((ok[name] & y[name].notna()).sum()),
-            "excluded_share": float(cleaning.excluded[name].mean() * 100),
-            "excluded": {"shape": int(cleaning.shape[name].sum()),
-                         "level": int(cleaning.level[name].sum()),
+            "name": name, "status": "ok", "weather": frames.weather_key[name],
+            "train_days": int((learn[name] & y[name].notna()).sum()),
+            "excluded_share": float((~ok[name] & y[name].notna()).sum() / max(y[name].notna().sum(), 1) * 100),
+            "excluded": {"shape": int((cleaning.shape[name] & ~cleaning.missing[name]).sum()),
+                         "level": int((~ok[name] & usable[name]).sum()),
                          "missing": int(cleaning.missing[name].sum())},
-            **(fitted.metrics if fitted else {}),
+            "trend_now": _percent(known.iloc[-1]) if len(known) else None,
+            "trend_min": _percent(known.min()) if len(known) else None,
+            "trend_max": _percent(known.max()) if len(known) else None,
+            "features": model.weights(name, designs[name], learn[name] & y[name].notna()),
+            **core.quality(y[name], predicted[name], ok[name]),
         })
-
-    detection = core.detect(y, held_out, ok)
-    listing.extend({"name": name, "status": "tiny"} for name in frames.tiny)
     for row in listing:
         sigma = detection.sigma.get(row["name"], {})
         row["sigma_week_heat"] = _percent(sigma.get("week_heat"))
@@ -236,54 +249,33 @@ def train(inputs: Inputs) -> tuple[dict, dict]:
         row["sigma_day_heat"] = _percent(sigma.get("day_heat"))
         row["sigma_month"] = _percent(sigma.get("month"))
         row["episodes"] = sum(e["grs"] == row["name"] for e in detection.episodes)
+    listing.extend({"name": name, "status": "tiny"} for name in frames.tiny)
 
-    trained = [r for r in listing if r["status"] == "ok"]
-    if not trained:
-        raise ModelError(
-            f"Жодна ГРС не має {core.MIN_TRAIN_DAYS} чистих днів з погодою — "
-            "моделі навчити ні на чому")
     summary = {
         "stations": listing,
-        "first_day": frames.index[0].date().isoformat(),
-        "last_day": frames.index[-1].date().isoformat(),
-        "days": int(len(frames.index)),
-        "with_consumption": frames.with_consumption,
+        "first_day": index[0].date().isoformat(),
+        "last_day": index[-1].date().isoformat(),
+        "days": int(len(index)),
         "weather_first": frames.weather[BRANCH_WEATHER].index[0].date().isoformat(),
         "weather_last": frames.weather[BRANCH_WEATHER].index[-1].date().isoformat(),
+        "with_consumption": frames.with_consumption,
+        "pooling": {"strength": model.strength,
+                    "tried": {str(k): _round(v, 2) for k, v in tried.items()}},
+        "trend_window": core.TREND_WINDOW,
     }
     payload = {
         "version": PAYLOAD_VERSION,
-        "days": [d.date().isoformat() for d in frames.index],
+        "days": [d.date().isoformat() for d in index],
         "norms": norms,
-        "stations": models,
-        "held_out": {name: _series_json(held_out[name]) for name in y.columns},
+        "weather_key": {n: frames.weather_key[n] for n in model.own},
+        "model": model.to_json(),
+        "held_out": {n: _series_json(base[n]) for n in model.own},
         "sigma": _clean_json(detection.sigma),
     }
     return summary, payload
 
 
-def _better(candidate: core.Fitted, base: core.Fitted) -> bool:
-    new, old = candidate.metrics.get("month_error"), base.metrics.get("month_error")
-    if new is None or old is None:
-        return False
-    return new < old * (1 - HEATING_GAIN)
-
-
-def _fitted_json(model: core.Fitted) -> dict:
-    return {"columns": model.columns, "coef": model.coef, "intercept": model.intercept,
-            "uses_heating": model.uses_heating, "heating_reference": model.heating_reference,
-            "train_days": model.train_days, "metrics": model.metrics}
-
-
-def _fitted(data: dict) -> core.Fitted:
-    return core.Fitted(**data)
-
-
 # ── analysis ───────────────────────────────────────────────────────────────
-
-#: How far past the last figure the forecast is shown.
-FORECAST_DAYS = 16
-
 
 def analyse(inputs: Inputs, payload: dict, first: date | None = None,
             last: date | None = None) -> dict:
@@ -291,36 +283,41 @@ def analyse(inputs: Inputs, payload: dict, first: date | None = None,
     departs from it more than the others do."""
     frames = build_frames(inputs)
     branch_weather = frames.weather[BRANCH_WEATHER]
-    end = min(branch_weather.index[-1], frames.index[-1] + pd.Timedelta(days=FORECAST_DAYS))
+    # Up to where the weather reaches — the forecast ahead of today. The 1С
+    # figures may stop weeks earlier; the model goes on, to be compared with
+    # the lines that are polled every day.
+    end = branch_weather.index[-1]
     index = pd.date_range(frames.index[0], max(end, frames.index[-1]), freq="D")
     y = frames.y.where(frames.y > 0).reindex(index)
 
     cleaning = core.clean(frames.y, branch_weather)
-    ok = (~cleaning.excluded).reindex(index, fill_value=False)
+    if payload.get("version") != PAYLOAD_VERSION:
+        raise ModelError("Модель навчено попередньою версією програми — навчіть її знову")
 
     trained_days = pd.to_datetime(payload["days"])
-    predicted = pd.DataFrame(np.nan, index=index, columns=y.columns)
-    stations = payload["stations"]
+    model = core.Pooled.from_json(payload["model"])
+    base = pd.DataFrame(np.nan, index=index, columns=y.columns)
     for name in y.columns:
-        entry = stations.get(name)
-        if not entry or not entry.get("model"):
+        if name not in model.own:
             continue
-        model = _fitted(entry["model"])
-        key = entry["weather"] if entry["weather"] in frames.weather else BRANCH_WEATHER
+        key = payload["weather_key"].get(name, BRANCH_WEATHER)
+        key = key if key in frames.weather else BRANCH_WEATHER
         weather = frames.weather[key]
-        norm = payload["norms"].get(entry["weather"]) or payload["norms"][BRANCH_WEATHER]
-        flag = None
-        if model.uses_heating:
-            flag, _ = _heating(frames, name, index, model.heating_reference)
-        design = core.features(weather, index, norm, flag)
-        series = model.predict(design)
+        norm = payload["norms"].get(key) or payload["norms"][BRANCH_WEATHER]
+        series = model.predict(name, core.features(weather, index, norm))
         series[(index < weather.index[0]) | (index > weather.index[-1])] = np.nan
         # Inside the period the model was trained on, the figure to compare
         # with is the one made while that month was held out — not the fit,
         # which has already seen the day.
-        held = pd.Series(payload["held_out"].get(name, []), index=trained_days[:len(payload["held_out"].get(name, []))], dtype=float)
-        held = held.reindex(index)
-        predicted[name] = held.where(held.notna(), series)
+        stored = payload["held_out"].get(name, [])
+        held = pd.Series(stored, index=trained_days[:len(stored)], dtype=float).reindex(index)
+        base[name] = held.where(held.notna(), series)
+
+    usable = (~(cleaning.shape | cleaning.missing)).reindex(index, fill_value=False) & y.notna()
+    deviation = core.own_deviation(y, base, usable)
+    trends = _trends(deviation, usable)
+    ok = usable & ~core.off_trend(deviation, trends)
+    predicted = base * np.exp(trends)
 
     detection = core.detect(y, predicted, ok, sigma=_sigma(payload, y.columns))
 
@@ -333,13 +330,14 @@ def analyse(inputs: Inputs, payload: dict, first: date | None = None,
     last_fact_day = last_fact[last_fact].index[-1] if last_fact.any() else None
 
     reason = pd.DataFrame("", index=index, columns=y.columns)
-    for label, flags in (("missing", cleaning.missing), ("level", cleaning.level),
-                         ("shape", cleaning.shape)):
-        reason = reason.mask(flags.reindex(index, fill_value=False), label)
+    for label, flags in (("missing", cleaning.missing.reindex(index, fill_value=False)),
+                         ("level", ~ok & usable),
+                         ("shape", cleaning.shape.reindex(index, fill_value=False))):
+        reason = reason.mask(flags, label)
 
     out_stations = []
     for name in y.columns:
-        has_model = bool(stations.get(name, {}).get("model"))
+        has_model = name in model.own
         out_stations.append({
             "name": name,
             "has_model": has_model,
@@ -350,13 +348,14 @@ def analyse(inputs: Inputs, payload: dict, first: date | None = None,
             "week": _series_json(detection.week.loc[window, name] * 100, 1),
             "week_limit": _series_json(detection.week_limit.loc[window, name] * 100, 1),
             "level": _series_json(detection.level.loc[window, name] * 100, 1),
+            "trend": _series_json(np.expm1(trends.loc[window, name]) * 100, 1),
             "day_alarm": _flags_json(detection.day_alarm.loc[window, name]),
             "week_alarm": _flags_json(detection.week_alarm.loc[window, name]),
             "excluded": [r or None for r in reason.loc[window, name]],
             "month_limit": round(core.month_limit(detection.sigma, name) * 100, 1) if has_model else None,
         })
 
-    modelled = [n for n in y.columns if stations.get(n, {}).get("model")]
+    modelled = [n for n in y.columns if n in model.own]
     both = y[modelled].notna() & detection.expected[modelled].notna()
     total_y = y[modelled].where(both).sum(axis=1, min_count=1)
     total_expected = detection.expected[modelled].where(both).sum(axis=1, min_count=1)

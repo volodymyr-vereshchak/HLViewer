@@ -19,9 +19,17 @@ cold snap moves all of them together and a fault moves one:
   ratio of the median GRS, as a 15-day median; off by more than 15 % (30 %),
   or with fewer than eight readings in those fifteen days to be judged by.
 
-**Model.** Ordinary least squares on about twenty physical features of the
-weather (see `features`). No time trend: a trend hides exactly the slow drift
-the detector is for. Quality is measured leave-one-month-out, on clean days.
+**Model.** About twenty physical features of the weather (see `features`),
+fitted to all stations of the branch at once with each station's own
+corrections (`Pooled`): a station whose clean history is short or lacks a
+season borrows that season's shape from the branch. Quality is measured
+leave-one-month-out, on clean days.
+
+**Trend.** A station's level may move for real — a village emptying month by
+month. That is not a fault: the median of the station's own deviation over
+about four months of the heating season is its trend (`trend`);
+the model is fitted to the volume with the trend taken out and multiplied by
+it again. A change that comes and goes faster stays an episode.
 
 **Detector.** log(actual / expected) minus its median over all GRS that day —
 which removes the error every GRS shares (the weather the model missed, a
@@ -444,3 +452,181 @@ def _nan_to(value: float, default: float) -> float:
 def month_limit(sigma: dict, grs: str) -> float:
     """A month is off when it is beyond 2.5 σ of the GRS's months, or 8 %."""
     return max(2.5 * sigma[grs]["month"], 0.08)
+
+
+# ── the trend of a station's level ─────────────────────────────────────────
+
+#: A station's trend is the median of its own deviation over this many
+#: heating-season days. What lasts longer than about half of it moves the
+#: trend (people leaving a village, step by step); what is shorter stays an
+#: episode (a meter that under-reads for a month or two). Tried on
+#: 45/75/120/180 days: 45 swallowed Лукашеве's six-week fault of 2025,
+#: 180 made Новомиколаївка's emptying an alarm again.
+TREND_WINDOW = 120
+#: A heating season has a level of its own from this many judged days; a
+#: younger one keeps the level the last season ended with. October alone is
+#: no measure: heating starts unevenly and the volumes are still small — with
+#: 30 days ГРС Тернівка got a level of +37 % from October 2026 alone, and the
+#: line bridging the summer to it hid the whole summer.
+TREND_MIN_DAYS = 60
+#: How far a 15-day median may be off the trend before the days are not
+#: learnt from: heating season / summer.
+OFF_TREND_HEAT = 0.15
+OFF_TREND_SUMMER = 0.30
+
+
+def own_deviation(y: pd.DataFrame, predicted: pd.DataFrame, usable: pd.DataFrame) -> pd.DataFrame:
+    """log(actual / model) less what all stations share that day."""
+    log_ratio = np.log((y / predicted).clip(lower=0.05))
+    if y.shape[1] < MIN_PEERS:
+        return log_ratio
+    return log_ratio.sub(log_ratio.where(usable).median(axis=1).fillna(0.0), axis=0)
+
+
+def trend(deviation: pd.Series, usable: pd.Series) -> pd.Series:
+    """The slow level of a station, as a log ratio, for every day.
+
+    Judged on heating-season days only, where a village GRS carries a signal:
+    in summer it passes a few dozen m³ and a 30 % fault there is lost in the
+    noise of its own weather model. Summer is bridged by a straight line from
+    the level the spring ended with to the level the autumn began with; at
+    the end of the data the last level is held.
+    """
+    index = deviation.index
+    heat = pd.Series(is_heat(index), index=index)
+    judged = deviation.where(usable & heat)
+    level = pd.Series(np.nan, index=index)
+    season = (heat != heat.shift()).cumsum()
+    for number in season[heat].unique():
+        days = judged[(season == number).values].dropna()
+        if len(days) < TREND_MIN_DAYS:
+            continue
+        level.loc[days.index] = days.rolling(TREND_WINDOW, center=True,
+                                             min_periods=TREND_MIN_DAYS).median()
+    return level.interpolate(limit_area="inside").ffill().bfill().fillna(0.0)
+
+
+def off_trend(deviation: pd.DataFrame, trends: pd.DataFrame) -> pd.DataFrame:
+    """Days whose 15-day median is off the station's trend — or that have
+    too few readings around them to be judged."""
+    smooth = deviation.rolling(15, center=True, min_periods=8).median()
+    limit = pd.Series(np.where(is_heat(deviation.index), OFF_TREND_HEAT, OFF_TREND_SUMMER),
+                      index=deviation.index)
+    return (smooth - trends).abs().gt(limit, axis=0) | smooth.isna()
+
+
+# ── one model for the branch, with each station's own corrections ─────────
+
+#: How strongly a station's coefficients are pulled to the branch's: tried in
+#: turn, the one with the smallest monthly error on held-out months is kept.
+#: Small — every station mostly its own; large — all alike.
+POOLING_STRENGTHS = (3.0, 10.0, 30.0, 100.0, 300.0, 1000.0)
+
+
+@dataclass
+class Pooled:
+    """The branch's model.
+
+    Every station is put in its own unit first (its mean heating-season day),
+    so a village and the ring are comparable. One set of coefficients is then
+    fitted to all stations together — the branch's way of answering the
+    weather — and each station gets its own corrections to it, held back by a
+    penalty: a station with a long clean history ends up mostly with its own,
+    one without a clean summer takes the summer from the branch.
+    Coefficients are on standardised features, so they compare as weights.
+    """
+
+    columns: list[str]
+    mean: list[float]
+    std: list[float]
+    common: list[float]               # intercept, then one per column
+    own: dict[str, list[float]]
+    scale: dict[str, float]           # thousand m³ a day
+    strength: float
+
+    def matrix(self, design: pd.DataFrame) -> np.ndarray:
+        values = (design[self.columns].values - np.array(self.mean)) / np.array(self.std)
+        return np.c_[np.ones(len(design)), values]
+
+    def predict(self, name: str, design: pd.DataFrame) -> pd.Series:
+        values = self.matrix(design) @ np.array(self.own[name]) * self.scale[name]
+        return pd.Series(values, index=design.index).clip(lower=0.01)
+
+    def weights(self, name: str, design: pd.DataFrame, days: pd.Series) -> list[dict]:
+        """Each feature: the station's coefficient, the branch's, and its
+        share of what the model moves on the station's training days."""
+        chosen = days.reindex(design.index, fill_value=False).values
+        matrix = self.matrix(design[chosen])
+        own = np.array(self.own[name])
+        effect = np.abs(matrix[:, 1:] * own[1:]).mean(axis=0) if len(matrix) else np.zeros(len(self.columns))
+        total = effect.sum() or 1.0
+        rows = [{"feature": column, "own": float(own[i + 1]), "common": float(self.common[i + 1]),
+                 "share": float(effect[i] / total * 100)} for i, column in enumerate(self.columns)]
+        return sorted(rows, key=lambda row: -row["share"])
+
+    def to_json(self) -> dict:
+        return {"columns": self.columns, "mean": self.mean, "std": self.std, "common": self.common,
+                "own": self.own, "scale": self.scale, "strength": self.strength}
+
+    @classmethod
+    def from_json(cls, data: dict) -> "Pooled":
+        return cls(**data)
+
+
+def _ridge_towards(matrix: np.ndarray, target: np.ndarray, base: np.ndarray, strength: float) -> np.ndarray:
+    penalty = np.eye(matrix.shape[1]) * strength
+    penalty[0, 0] = strength * 1e-3           # the station's own level is nearly free
+    return base + np.linalg.solve(matrix.T @ matrix + penalty, matrix.T @ (target - matrix @ base))
+
+
+def fit_pooled(designs: dict[str, pd.DataFrame], target: pd.DataFrame, ok: pd.DataFrame,
+               strengths=POOLING_STRENGTHS) -> tuple[Pooled | None, pd.DataFrame, dict]:
+    """The branch's model, its held-out predictions (thousand m³, each month
+    by a model that never saw it), and the monthly error each strength gave."""
+    index = target.index
+    ok = ok & target.notna()
+    names = [n for n in target.columns if ok[n].sum() >= MIN_TRAIN_DAYS]
+    if not names:
+        return None, pd.DataFrame(np.nan, index=index, columns=target.columns), {}
+    heat = is_heat(index)
+    scale = {n: float(target[n][ok[n] & heat].mean() if (ok[n] & heat).any() else target[n][ok[n]].mean())
+             for n in names}
+    columns = list(designs[names[0]].columns)
+    stacked = pd.concat([designs[n][columns] for n in names])
+    mean, std = stacked.mean(), stacked.std().replace(0, 1).fillna(1)
+    skeleton = Pooled(columns, mean.tolist(), std.tolist(), [], {}, scale, 0.0)
+    matrices = {n: skeleton.matrix(designs[n]) for n in names}
+    units = {n: (target[n] / scale[n]).values for n in names}
+    months = index.to_period("M")
+
+    def solve(train: dict, strength: float):
+        stacked_x = np.vstack([matrices[n][train[n]] for n in names])
+        stacked_y = np.concatenate([units[n][train[n]] for n in names])
+        common = np.linalg.lstsq(stacked_x, stacked_y, rcond=None)[0]
+        own = {n: _ridge_towards(matrices[n][train[n]], units[n][train[n]], common, strength)
+               for n in names if train[n].sum() >= MIN_TRAIN_DAYS}
+        return common, own
+
+    def held_out(strength: float) -> pd.DataFrame:
+        out = pd.DataFrame(np.nan, index=index, columns=target.columns)
+        for month in sorted(set(months)):
+            test = np.asarray(months == month)
+            _, own = solve({n: ok[n].values & ~test for n in names}, strength)
+            for n, beta in own.items():
+                out.loc[test, n] = matrices[n][test] @ beta * scale[n]
+        return out.clip(lower=0.01)
+
+    tried: dict[float, float] = {}
+    best = None
+    for strength in strengths:
+        candidate = held_out(strength)
+        errors = [quality(target[n], candidate[n], ok[n]).get("month_error") for n in names]
+        errors = [e for e in errors if e is not None]
+        tried[strength] = float(np.mean(errors)) if errors else float("inf")
+        if best is None or tried[strength] < tried[best[0]]:
+            best = (strength, candidate)
+    strength, held = best
+    common, own = solve({n: ok[n].values for n in names}, strength)
+    model = Pooled(columns, mean.tolist(), std.tolist(), common.tolist(),
+                   {n: beta.tolist() for n, beta in own.items()}, scale, float(strength))
+    return model, held, tried

@@ -57,6 +57,8 @@ DAILY_VARS = {
     "precipitation_sum": "precipitation",
     "wind_speed_10m_max": "wind_max",
     "shortwave_radiation_sum": "radiation",
+    "relative_humidity_2m_mean": "humidity",
+    "weather_code": "weather_code",
 }
 HOURLY_VARS = {
     "temperature_2m": "temperature",
@@ -65,6 +67,7 @@ HOURLY_VARS = {
     "shortwave_radiation": "radiation",
     "precipitation": "precipitation",
     "cloud_cover": "cloud_cover",
+    "weather_code": "weather_code",
 }
 
 _ENSURE_ROW = "INSERT INTO weather_job (id, status) VALUES (1, 'idle') ON CONFLICT (id) DO NOTHING"

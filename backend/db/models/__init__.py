@@ -167,6 +167,7 @@ from .grs_model_model import (
     GrsCoveredDay,
     GrsFit,
     GrsStation,
+    GrsStationLine,
     GrsUpload,
     GrsVolume,
 )

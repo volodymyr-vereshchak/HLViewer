@@ -17,7 +17,7 @@ from datetime import date, datetime
 from typing import Optional
 
 from pydantic import field_validator
-from sqlalchemy import BigInteger, Column, ForeignKey, Index, UniqueConstraint
+from sqlalchemy import BigInteger, Column, ForeignKey, Index, UniqueConstraint, SmallInteger
 from sqlmodel import Field, SQLModel
 
 from .base_model import HlBaseModel
@@ -85,6 +85,11 @@ class WeatherDaily(SQLModel, table=True):
     precipitation: Optional[float] = None
     wind_max: Optional[float] = None
     radiation: Optional[float] = None
+    #: Mean relative humidity, %.
+    humidity: Optional[float] = None
+    #: WMO weather code of the day (0 clear … 95 thunderstorm), as Open-Meteo
+    #: gives it — what the forecast pictures are drawn from.
+    weather_code: Optional[int] = Field(default=None, sa_type=SmallInteger)
     # 'archive' — ERA5 reanalysis (what happened), 'forecast' — a forecast
     # that the archive replaces once the day is published. A forecast never
     # overwrites an archive row (see WeatherDao._upsert).
@@ -117,6 +122,7 @@ class WeatherHourly(SQLModel, table=True):
     radiation: Optional[float] = None
     precipitation: Optional[float] = None
     cloud_cover: Optional[float] = None
+    weather_code: Optional[int] = Field(default=None, sa_type=SmallInteger)
     # 'archive' — ERA5 reanalysis (what happened), 'forecast' — a forecast
     # that the archive replaces once the day is published. A forecast never
     # overwrites an archive row (see WeatherDao._upsert).
@@ -179,6 +185,8 @@ class WeatherDailyRow(SQLModel):
     precipitation: Optional[float] = None
     wind_max: Optional[float] = None
     radiation: Optional[float] = None
+    humidity: Optional[float] = None
+    weather_code: Optional[int] = None
 
 
 class WeatherHourlyRow(SQLModel):
@@ -189,6 +197,7 @@ class WeatherHourlyRow(SQLModel):
     radiation: Optional[float] = None
     precipitation: Optional[float] = None
     cloud_cover: Optional[float] = None
+    weather_code: Optional[int] = None
 
 
 WEATHER_SOURCES = ("archive", "forecast")

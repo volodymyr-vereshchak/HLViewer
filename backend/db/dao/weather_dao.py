@@ -21,8 +21,10 @@ from backend.db.models.weather_model import (
     WeatherPointRead,
 )
 
-DAILY_VALUES = ("t_mean", "t_min", "t_max", "precipitation", "wind_max", "radiation")
-HOURLY_VALUES = ("temperature", "humidity", "wind_speed", "radiation", "precipitation", "cloud_cover")
+DAILY_VALUES = ("t_mean", "t_min", "t_max", "precipitation", "wind_max", "radiation",
+                "humidity", "weather_code")
+HOURLY_VALUES = ("temperature", "humidity", "wind_speed", "radiation", "precipitation", "cloud_cover",
+                 "weather_code")
 
 # A day counts as covered by the hourly series at 23 hours: the autumn DST day
 # has 25 and the spring one 23, so 24 would leave the spring day forever missing.

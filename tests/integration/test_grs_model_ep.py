@@ -241,3 +241,22 @@ class TestWeatherPoints:
                                        json=[{"station_id": station["id"]}])
         assert resp.status_code == 422
         assert station["name"] in resp.json()["detail"]
+
+
+class TestStationLines:
+    async def test_lines_are_set_listed_and_replaced(self, admin_client, seed_topology):
+        branch = seed_topology["branch"]
+        inflow, _ = data.reports(date(2026, 1, 1), date(2026, 1, 5))
+        await _upload(admin_client, branch, ("grs.xlsx", inflow))
+        station = (await _status(admin_client, branch))["stations"][0]
+        url = "/grs-model/stations/%d/lines" % station["id"]
+        lines = [{"kind": "physical", "id": seed_topology["line1"]}, {"kind": "virtual", "id": 900}]
+        assert (await admin_client.put(url, json=lines)).json()["lines"] == sorted(
+            lines, key=lambda l: (l["kind"], l["id"]))
+        assert (await _status(admin_client, branch))["stations"][0]["lines"] == sorted(
+            lines, key=lambda l: (l["kind"], l["id"]))
+        assert (await admin_client.put(url, json=lines[:1])).json()["lines"] == lines[:1]
+        assert (await admin_client.put(url, json=[{"kind": "nonsense", "id": 1}])).status_code == 422
+
+    async def test_viewer_may_not_set_lines(self, viewer_client, seed_topology):
+        assert (await viewer_client.put("/grs-model/stations/1/lines", json=[])).status_code == 403

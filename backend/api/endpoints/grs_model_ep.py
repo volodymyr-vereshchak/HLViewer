@@ -21,6 +21,7 @@ from backend.db.engine import get_session
 from backend.db.models.app_user_model import AppUser
 from backend.db.models.grs_model_model import (
     GrsFit,
+    GrsLineRef,
     GrsStation,
     GrsStationPoint,
     GrsStationUpdate,
@@ -103,6 +104,7 @@ async def status(
         )).all()
     }
     covered = await dao.covered_days(branch_id)
+    lines = await dao.station_lines(branch_id)
     fit = await dao.latest_fit(branch_id)
     count, changed = await dao.data_stamp(branch_id)
     points = await dao.weather_points(branch_id)
@@ -127,6 +129,7 @@ async def status(
                 "inflow_days": getattr(spans.get(s.id), "inflow_days", 0),
                 "consumption_first": getattr(spans.get(s.id), "cons_first", None),
                 "consumption_last": getattr(spans.get(s.id), "cons_last", None),
+                "lines": lines.get(s.id, []),
             }
             for s in stations
         ],
@@ -302,6 +305,30 @@ async def create_station_points(
         out.append({"station_id": station.id, "weather_point_id": point.id, "created": created})
     await session.commit()
     return out
+
+
+LINE_KINDS = ("physical", "virtual", "dpd")
+
+
+@router.put("/stations/{station_id}/lines")
+async def set_station_lines(
+    station_id: int,
+    lines: list[GrsLineRef],
+    _: AppUser = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Which trend lines measure the station; the list replaces what was."""
+    dao = GrsModelDao(session)
+    station = await dao.station(station_id)
+    if station is None:
+        raise HTTPException(status_code=404, detail="ГРС не знайдено")
+    bad = [line.kind for line in lines if line.kind not in LINE_KINDS]
+    if bad:
+        raise HTTPException(status_code=422, detail=f"Невідомий вид лінії: {bad[0]}")
+    await dao.set_station_lines(station_id, [(line.kind, line.id) for line in lines])
+    await session.commit()
+    return {"station_id": station_id,
+            "lines": (await dao.station_lines(station.branch_id)).get(station_id, [])}
 
 
 @router.patch("/stations/{station_id}")

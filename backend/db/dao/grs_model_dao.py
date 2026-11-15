@@ -10,6 +10,7 @@ from backend.db.models.grs_model_model import (
     GrsCoveredDay,
     GrsFit,
     GrsStation,
+    GrsStationLine,
     GrsUpload,
     GrsVolume,
 )
@@ -44,6 +45,26 @@ class GrsModelDao:
             await self.session.flush()
             known[name] = station.id
         return known
+
+    async def station_lines(self, branch_id: int) -> dict[int, list[dict]]:
+        """station id → its lines, as {kind, id}."""
+        out: dict[int, list[dict]] = {}
+        for row in (await self.session.execute(
+            select(GrsStationLine).join(GrsStation, GrsStation.id == GrsStationLine.station_id)
+            .where(GrsStation.branch_id == branch_id)
+            .order_by(GrsStationLine.line_kind, GrsStationLine.line_id)
+        )).scalars():
+            out.setdefault(row.station_id, []).append({"kind": row.line_kind, "id": row.line_id})
+        return out
+
+    async def set_station_lines(self, station_id: int, lines: list[tuple[str, int]]) -> None:
+        for row in (await self.session.execute(
+            select(GrsStationLine).where(GrsStationLine.station_id == station_id)
+        )).scalars():
+            await self.session.delete(row)
+        await self.session.flush()
+        for kind, line_id in sorted(set(lines)):
+            self.session.add(GrsStationLine(station_id=station_id, line_kind=kind, line_id=line_id))
 
     # ── volumes ─────────────────────────────────────────────────────────────
 
