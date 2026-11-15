@@ -34,7 +34,8 @@ TINY_SHARE = 0.05
 #: A station's own weather point is used if it covers this share of the days.
 POINT_COVERAGE = 0.9
 #: 2: one pooled model for the branch and a trend per station.
-PAYLOAD_VERSION = 2
+#: 3: the analysis compares with the model trained on everything.
+PAYLOAD_VERSION = 3
 
 
 class ModelError(ValueError):
@@ -215,11 +216,25 @@ def train(inputs: Inputs) -> tuple[dict, dict]:
             f"Жодна ГРС не має {core.MIN_TRAIN_DAYS} чистих днів з погодою — "
             "моделі навчити ні на чому")
 
-    # The trend once more, now against the branch model, and what is judged.
-    deviation = core.own_deviation(y, base, usable)
+    # Quality is measured on months the model did not see: an honest figure
+    # of how it does on the days ahead.
+    held_deviation = core.own_deviation(y, base, usable)
+    held_trends = _trends(held_deviation, usable)
+    held_ok = usable & ~core.off_trend(held_deviation, held_trends)
+    held_predicted = base * np.exp(held_trends)
+
+    # What the screen compares with is the model trained on everything —
+    # the one that forecasts too. On history it has seen each month, but a
+    # month is a twentieth of what it learnt from, and the days a fault
+    # spoiled were left out of the training: those still stand out. The
+    # noise behind the alarm limits is taken from the same model, so the
+    # limits match the deviations they judge.
+    full = pd.DataFrame({n: model.predict(n, designs[n]) if n in model.own else np.nan * y[n]
+                         for n in names})
+    deviation = core.own_deviation(y, full, usable)
     trends = _trends(deviation, usable)
     ok = usable & ~core.off_trend(deviation, trends)
-    predicted = base * np.exp(trends)
+    predicted = full * np.exp(trends)
     detection = core.detect(y, predicted, ok)
 
     listing = []
@@ -240,7 +255,7 @@ def train(inputs: Inputs) -> tuple[dict, dict]:
             "trend_min": _percent(known.min()) if len(known) else None,
             "trend_max": _percent(known.max()) if len(known) else None,
             "features": model.weights(name, designs[name], learn[name] & y[name].notna()),
-            **core.quality(y[name], predicted[name], ok[name]),
+            **core.quality(y[name], held_predicted[name], held_ok[name]),
         })
     for row in listing:
         sigma = detection.sigma.get(row["name"], {})
@@ -269,7 +284,6 @@ def train(inputs: Inputs) -> tuple[dict, dict]:
         "norms": norms,
         "weather_key": {n: frames.weather_key[n] for n in model.own},
         "model": model.to_json(),
-        "held_out": {n: _series_json(base[n]) for n in model.own},
         "sigma": _clean_json(detection.sigma),
     }
     return summary, payload
@@ -294,7 +308,6 @@ def analyse(inputs: Inputs, payload: dict, first: date | None = None,
     if payload.get("version") != PAYLOAD_VERSION:
         raise ModelError("Модель навчено попередньою версією програми — навчіть її знову")
 
-    trained_days = pd.to_datetime(payload["days"])
     model = core.Pooled.from_json(payload["model"])
     base = pd.DataFrame(np.nan, index=index, columns=y.columns)
     for name in y.columns:
@@ -306,12 +319,7 @@ def analyse(inputs: Inputs, payload: dict, first: date | None = None,
         norm = payload["norms"].get(key) or payload["norms"][BRANCH_WEATHER]
         series = model.predict(name, core.features(weather, index, norm))
         series[(index < weather.index[0]) | (index > weather.index[-1])] = np.nan
-        # Inside the period the model was trained on, the figure to compare
-        # with is the one made while that month was held out — not the fit,
-        # which has already seen the day.
-        stored = payload["held_out"].get(name, [])
-        held = pd.Series(stored, index=trained_days[:len(stored)], dtype=float).reindex(index)
-        base[name] = held.where(held.notna(), series)
+        base[name] = series
 
     usable = (~(cleaning.shape | cleaning.missing)).reindex(index, fill_value=False) & y.notna()
     deviation = core.own_deviation(y, base, usable)
