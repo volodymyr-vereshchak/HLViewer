@@ -56,6 +56,8 @@ MIN_MONTH_DAYS = 15
 MIN_PEERS = 3
 
 WEATHER_COLUMNS = ("T", "Tmin", "Tmax", "wind", "rad", "prec")
+#: Days of the long-memory temperature term (`HDD_m10`).
+MEMORY_DAYS = 10
 
 
 def is_heat(index: pd.DatetimeIndex) -> np.ndarray:
@@ -247,6 +249,12 @@ def features(weather: pd.DataFrame, index: pd.DatetimeIndex, norm: list[float],
         design["cold_preCO"] = cold12 * ((on == 0) & (index.month >= 9))
     else:
         design["cold_aut"] = cold12 * autumn
+    # Consumption follows the weather of the last week and a half, not only
+    # of the last day or two the other terms remember: the same degree days
+    # on the 10-day mean temperature. Tried 7–30 days and pairs of them on
+    # 2025–2026, held-out months: 10 was the one better in every season.
+    mean10 = weather["T"].rolling(MEMORY_DAYS, min_periods=MEMORY_DAYS // 2).mean()
+    design["HDD_m10"] = np.maximum(15.5 - mean10, 0).reindex(index)
     design["hol_xmas"], design["hol_easter"] = _holidays(index)
     return design.fillna(0.0)
 

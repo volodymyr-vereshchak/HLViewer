@@ -35,7 +35,15 @@ TINY_SHARE = 0.05
 POINT_COVERAGE = 0.9
 #: 2: one pooled model for the branch and a trend per station.
 #: 3: the analysis compares with the model trained on everything.
-PAYLOAD_VERSION = 3
+#: 4: HDD_m10 among the features.
+PAYLOAD_VERSION = 4
+#: The forecast follows what the whole branch has been doing: the mean of
+#: the deviation all stations share over this many last days with facts …
+BRANCH_DAYS = 7
+#: … carried into the days ahead, fading by this much a day. Tried on
+#: 2025–2026 (7/3/14 days, 1.0–0.7): one day ahead 4.7 → 3.4 %, three
+#: 4.7 → 3.6 %, a week 4.7 → 4.3 %; spring about as without it.
+BRANCH_DECAY = 0.8
 
 
 class ModelError(ValueError):
@@ -337,6 +345,23 @@ def analyse(inputs: Inputs, payload: dict, first: date | None = None,
     last_fact = y.notna().any(axis=1)
     last_fact_day = last_fact[last_fact].index[-1] if last_fact.any() else None
 
+    # The days ahead: the model, moved by what the whole branch has been
+    # doing lately — when every station has been running 30 % over its model
+    # for a week (heating switched on in a warm October week), so will the
+    # next days, less and less the further ahead. One branch figure, so no
+    # station's own fault is carried forward.
+    judged = y.notna().sum(axis=1) >= core.MIN_PEERS
+    recent = detection.common[judged & (index <= (last_fact_day or index[0]))].tail(BRANCH_DAYS)
+    branch_level = float(recent.mean()) if len(recent) else 0.0
+    ahead_days = pd.Series(np.nan, index=index)
+    if last_fact_day is not None:
+        after = index > last_fact_day
+        ahead_days[after] = (index[after] - last_fact_day).days
+    correction = (branch_level * BRANCH_DECAY ** ahead_days).fillna(0.0)
+    ahead_mask = pd.DataFrame(np.repeat(ahead_days.notna().values[:, None], len(y.columns), axis=1),
+                              index=index, columns=y.columns)
+    detection.expected = detection.expected.mask(ahead_mask, predicted.mul(np.exp(correction), axis=0))
+
     reason = pd.DataFrame("", index=index, columns=y.columns)
     for label, flags in (("missing", cleaning.missing.reindex(index, fill_value=False)),
                          ("level", ~ok & usable),
@@ -367,7 +392,7 @@ def analyse(inputs: Inputs, payload: dict, first: date | None = None,
     both = y[modelled].notna() & detection.expected[modelled].notna()
     total_y = y[modelled].where(both).sum(axis=1, min_count=1)
     total_expected = detection.expected[modelled].where(both).sum(axis=1, min_count=1)
-    ahead = predicted[modelled].where(~y[modelled].notna())
+    ahead = detection.expected[modelled].where(~y[modelled].notna())
     total_ahead = ahead.sum(axis=1, min_count=len(modelled)) if modelled else pd.Series(np.nan, index=index)
 
     months = detection.month
@@ -394,6 +419,9 @@ def analyse(inputs: Inputs, payload: dict, first: date | None = None,
         "last_fact_day": last_fact_day.date().isoformat() if last_fact_day is not None else None,
         "trained_first": payload["days"][0], "trained_last": payload["days"][-1],
         "common": _series_json(np.expm1(detection.common[window]) * 100, 1),
+        # What the forecast was moved by on each day ahead, % (0 on days with facts).
+        "branch_correction": _series_json(np.expm1(correction[window]) * 100, 1),
+        "branch_level": _round(np.expm1(branch_level) * 100, 1),
         "stations": out_stations,
         "total": {"y": _series_json(total_y[window]), "expected": _series_json(total_expected[window]),
                   "ahead": _series_json(total_ahead[window])},

@@ -219,3 +219,30 @@ class TestTrend:
         _, payload = service.train(inputs)
         with pytest.raises(service.ModelError, match="знову"):
             service.analyse(inputs, {**payload, "version": 1})
+
+
+class TestBranchCorrection:
+    """The days ahead follow what the whole branch has been doing lately."""
+
+    def test_forecast_follows_the_branch_and_fades(self):
+        last = data.LAST - timedelta(days=10)
+        inputs = _inputs(last=last)
+        _, payload = service.train(inputs)
+        # Every station's households 25 % over the usual for the last week
+        # with facts (the inflow is households plus a fixed industry).
+        recent = {last - timedelta(days=n) for n in range(7)}
+        inputs.volumes = [
+            (sid, day, cat, (v - data.INDUSTRY_VOLUME) * 1.25 + data.INDUSTRY_VOLUME
+             if cat == parse.INFLOW_CATEGORY and day in recent else v)
+            for sid, day, cat, v in inputs.volumes]
+        result = service.analyse(inputs, payload)
+        first = result["days"].index((last + timedelta(days=1)).isoformat())
+        assert result["branch_level"] == pytest.approx(25, abs=6)
+        correction = result["branch_correction"]
+        assert correction[first] == pytest.approx(result["branch_level"] * 0.8, rel=0.25)
+        assert correction[first + 6] < correction[first] / 3
+        station = result["stations"][0]
+        assert station["expected"][first] / station["model"][first] == pytest.approx(
+            1 + correction[first] / 100, rel=0.01)
+        # Days with facts are not moved.
+        assert correction[first - 1] == 0
