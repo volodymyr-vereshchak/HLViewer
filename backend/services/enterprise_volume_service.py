@@ -180,11 +180,17 @@ async def fetch_dpd_volumes(
             dao = DpdArchiveDao(session)
 
             if live:
-                # Fresh poll of the full range for every device; the archive
-                # both caches the result and covers devices that failed.
+                # Fresh poll of the full range for every device ДПД can be
+                # asked about; one read by modem only (no codes) is served from
+                # the archive the modem filled. The archive both caches the
+                # result and covers devices that failed.
+                polled = {
+                    k: a for k, a in by_assignment.items()
+                    if a.get("mfDev") is not None and a.get("typeDev") is not None
+                }
                 spans = {
-                    device_id: (requested_from, date_to.date())
-                    for device_id in device_ids
+                    a["device_id"]: (requested_from, date_to.date())
+                    for a in polled.values()
                 }
                 if events_cb is not None:
                     events_cb({"type": "progress", "done": 0,
@@ -192,10 +198,11 @@ async def fetch_dpd_volumes(
                     events_cb({"type": "status", "phase": "waiting"})
                 await _lock_backfill(session, spans, period_type)
                 try:
-                    await _run_backfill(
-                        session, dao, by_assignment, spans, period_type,
-                        date_to, events_cb,
-                    )
+                    if polled:
+                        await _run_backfill(
+                            session, dao, polled, spans, period_type,
+                            date_to, events_cb,
+                        )
                 except MissingCredentials:
                     # Not the API being unreachable — the branch was never set
                     # up. The archive cannot stand in for that: whoever pressed

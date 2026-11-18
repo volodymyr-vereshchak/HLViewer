@@ -28,8 +28,8 @@ class DeviceVolume(BaseModel):
     )
 
     serNum: int = Field(description="Device serial number")
-    mfDev: int = Field(description="Manufacturer device code")
-    typeDev: int = Field(description="Device type code")
+    mfDev: Optional[int] = Field(None, description="Manufacturer device code (None: a corrector ДПД has no codes for, read by modem)")
+    typeDev: Optional[int] = Field(None, description="Device type code (None: as mfDev)")
     chNum: int = Field(description="Channel number")
     enterprise_name: str = Field(description="Enterprise name")
     volume: Optional[float] = Field(None, ge=0, description="Daily standard volume (dvstAlwrk), None if no data")
@@ -132,8 +132,8 @@ class EnterpriseMapping(BaseModel):
 
     line_id: Optional[int] = Field(None, description="Gas line ID (None if enterprise has no line mapping)")
     serNum: int = Field(description="Device serial number")
-    mfDev: int = Field(description="Manufacturer device code")
-    typeDev: int = Field(description="Device type code")
+    mfDev: Optional[int] = Field(None, description="Manufacturer device code (None: a corrector ДПД has no codes for, read by modem)")
+    typeDev: Optional[int] = Field(None, description="Device type code (None: as mfDev)")
     chNum: int = Field(description="Channel number")
     enterprise_name: str = Field(description="Enterprise name")
     active: bool = Field(description="Whether the enterprise is active")

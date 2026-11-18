@@ -3,6 +3,7 @@
 mocked DPDClient — no live DPD API calls."""
 
 import io
+from datetime import date
 import json
 
 import openpyxl
@@ -1036,3 +1037,90 @@ class TestTheDevicePassword:
             f"/enterprise-mappings/{created['id']}",
             json={"gsm": {**base, "password": "123456"}})
         assert too_long.status_code == 422
+
+
+class TestACorrectorReadByModemOnly:
+    """An Ізодром: ДПД has no codes for it, the modem fills its archive.
+
+    Its archive is read like any other — on the poll screen's «Архів», by
+    the device itself, and in the line's totals — and the DPD API is never
+    asked about it."""
+
+    @pytest_asyncio.fixture
+    async def izodrom(self, admin_client, seed_topology):
+        async with async_session_factory() as session:
+            mfr = Manufacturer(short_name="Ізодром", full_name="ТОВ Ізодром", mf_dev=None)
+            session.add(mfr)
+            await session.flush()
+            ct = CorectorType(manufacturer_id=mfr.id, model_name="ОЕ-22ЛА", type_dev=None)
+            session.add(ct)
+            await session.commit()
+            ct_id = ct.id
+        resp = await admin_client.post("/enterprise-mappings/", json=_enterprise_payload(
+            seed_topology, enterprise_name="Океан", ser_num=1103,
+            corector_type_id=ct_id, mf_dev=None, type_dev=None,
+        ))
+        assert resp.status_code in (200, 201), resp.text
+        async with async_session_factory() as session:
+            device_id = (await session.execute(
+                sa.text("SELECT id FROM dpd_device WHERE ser_num = 1103"))).scalar_one()
+            for day, volume in ((date(2026, 11, 1), 80.0), (date(2026, 11, 2), 95.41)):
+                await session.execute(sa.text(
+                    "INSERT INTO dpd_daily_archive (device_id, day, dvst_alwrk, source) "
+                    "VALUES (:d, :day, :v, 'gsm')"), {"d": device_id, "day": day, "v": volume})
+            await session.commit()
+        return device_id
+
+    async def test_the_archive_is_read_by_the_device(self, admin_client, seed_topology, izodrom):
+        events = await read_stream_events(admin_client, {
+            "from_date": "2026-11-01", "to_date": "2026-11-02", "period_type": "daily",
+            "deviceId": izodrom, "serNum": 1103, "chNum": 0,
+            "live": "false", "include_inactive": "true",
+        })
+        data = events[-1]["data"]
+        assert [round(r["total_volume"], 2) for r in data] == [80.0, 95.41]
+        device = data[0]["devices"][0]
+        assert (device["serNum"], device["mfDev"], device["typeDev"]) == (1103, None, None)
+
+        plain = await admin_client.get("/enterprise/volumes/", params={
+            "from_date": "2026-11-01", "to_date": "2026-11-02", "deviceId": izodrom,
+        })
+        assert plain.status_code == 200, plain.text
+        assert [round(r["total_volume"], 2) for r in plain.json()] == [80.0, 95.41]
+
+    async def test_without_a_device_or_codes_it_is_still_a_400(self, admin_client, seed_topology):
+        async with admin_client.stream("GET", "/enterprise/volumes/stream", params={
+            "from_date": "2026-11-01", "to_date": "2026-11-02", "serNum": 1103, "chNum": 0,
+        }) as resp:
+            await resp.aread()
+            assert resp.status_code == 400
+
+    async def test_it_counts_in_the_line_and_dpd_is_not_asked(
+        self, admin_client, seed_topology, izodrom, mocker
+    ):
+        mock_client = mocker.AsyncMock()
+        mock_client.get_volumes = mocker.AsyncMock(return_value=[])
+        mocker.patch(
+            "backend.services.enterprise_volume_service.DPDClient.for_branch",
+            mocker.AsyncMock(return_value=mock_client),
+        )
+        resp = await admin_client.get("/enterprise/volumes/", params={
+            "line_id": [seed_topology["line1"]], "from_date": "2026-11-01",
+            "to_date": "2026-11-02", "live": "true",
+        })
+        assert resp.status_code == 200, resp.text
+        assert [round(r["total_volume"], 2) for r in resp.json()] == [80.0, 95.41]
+        for call in mock_client.get_volumes.await_args_list:
+            asked = call.args[0] if call.args else call.kwargs.get("devices", [])
+            assert all(d.get("serNum") != 1103 for d in asked)
+
+    async def test_polling_it_through_dpd_says_why_not(self, admin_client, seed_topology, izodrom):
+        enterprise_id = (await admin_client.get("/enterprise-mappings/")).json()[0]["id"]
+        async with admin_client.stream("GET", "/enterprise/poll/stream", params={
+            "enterprise_id": enterprise_id, "from_date": "2026-11-01", "to_date": "2026-11-02",
+        }) as resp:
+            body = (await resp.aread()).decode()
+        last = json.loads([line for line in body.splitlines() if line.strip()][-1])
+        assert last["type"] == "error"
+        assert "«Ізодром ОЕ-22ЛА» через сервер Радміртех не опитується" in last["message"]
+        assert "GSM" in last["message"]

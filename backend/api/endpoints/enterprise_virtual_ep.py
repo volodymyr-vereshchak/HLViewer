@@ -65,8 +65,10 @@ async def resolve_virtual_devices(
         f"{len(all_physical_ids)} physical lines "
         f"({len(virtual_line_ids)} virtual, {len(physical_line_ids)} physical)"
     )
+    # Reports read: a corrector read by modem only belongs in the totals too.
     devices = await get_devices_for_lines_db(
         all_physical_ids, session, range_from=range_from, range_to=range_to,
+        addressable_only=False,
     )
     return devices, physical_to_original
 

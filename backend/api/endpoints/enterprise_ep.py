@@ -42,6 +42,7 @@ from backend.db.models.enterprise_models import (
 from backend.services import enterprise_excel
 from backend.services.enterprise_mappings import (
     get_assignments_for_device_db,
+    get_assignments_for_device_id_db,
     get_devices_for_lines_db,
     load_mappings,
 )
@@ -393,14 +394,45 @@ class EnterpriseRouter:
             # read: somebody is looking at it precisely because it stopped.
             include_inactive=True,
         )
+        not_on_dpd: list[str] = []
+        if not devices:
+            not_on_dpd = await self._models_not_on_dpd(session, enterprise_id, date_from, date_to)
         return StreamingResponse(
-            self._poll_events(devices, date_from, date_to),
+            self._poll_events(devices, date_from, date_to, not_on_dpd),
             media_type="application/x-ndjson",
             headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
         )
 
     @staticmethod
-    async def _poll_events(devices, date_from, date_to):
+    async def _models_not_on_dpd(session, enterprise_id, date_from, date_to) -> list[str]:
+        """The models fitted at the point in the period that ДПД has no codes
+        for — an Ізодром, read by modem only. Asking the Радміртех server
+        about such a point finds nothing to poll, and «no correctors fitted»
+        would be untrue: there is one, of a kind that server does not read."""
+        from sqlalchemy import select
+        from backend.db.models.device_catalog_model import CorectorType, Manufacturer
+        from backend.db.models.enterprise_model import Enterprise
+        from backend.services.enterprise_mappings import _query_assignments_db
+
+        fitted = await _query_assignments_db(
+            session, Enterprise.id == enterprise_id, range_from=date_from, range_to=date_to,
+            include_inactive=True, addressable_only=False,
+        )
+        device_ids = {a["device_id"] for a in fitted if a["mfDev"] is None or a["typeDev"] is None}
+        if not device_ids:
+            return []
+        from backend.db.models.enterprise_model import DpdDevice
+        rows = (await session.execute(
+            select(Manufacturer.short_name, CorectorType.model_name)
+            .select_from(DpdDevice)
+            .join(CorectorType, CorectorType.id == DpdDevice.corector_type_id)
+            .join(Manufacturer, Manufacturer.id == CorectorType.manufacturer_id)
+            .where(DpdDevice.id.in_(device_ids))
+        )).all()
+        return sorted({f"{maker} {model}".strip() for maker, model in rows}) or ["без кодів ДПД"]
+
+    @staticmethod
+    async def _poll_events(devices, date_from, date_to, not_on_dpd=()):
         """Progress for each granularity, then what was stored.
 
         Same NDJSON shape the volumes stream uses, so the browser reads both
@@ -415,10 +447,13 @@ class EnterpriseRouter:
             ) + chr(10)
 
         if not devices:
-            yield dump({
-                "type": "error",
-                "message": "Немає встановлених корректорів за цей період",
-            })
+            if not_on_dpd:
+                models = ", ".join(f"«{m}»" for m in not_on_dpd)
+                message = (f"Тип приладу {models} через сервер Радміртех не опитується — "
+                           "опитайте його через GSM-модем")
+            else:
+                message = "Немає встановлених корректорів за цей період"
+            yield dump({"type": "error", "message": message})
             return
 
         stored: dict = {}
@@ -494,6 +529,10 @@ class EnterpriseRouter:
         mfDev: Optional[int] = Query(None, description="Optional: Manufacturer code"),
         typeDev: Optional[int] = Query(None, description="Optional: Device type code"),
         chNum: Optional[int] = Query(None, description="Optional: Filter by device channel number"),
+        deviceId: Optional[int] = Query(None, description=(
+            "Optional: the corrector by its id here (dpd_device.id) — for one ДПД "
+            "has no codes for, such as an Ізодром read by modem"
+        )),
         live: bool = Query(default=False, description=(
             "Re-poll the DPD API for the whole range first (fresh data); the "
             "archive serves as fallback when the API is unreachable"
@@ -547,12 +586,19 @@ class EnterpriseRouter:
                 )
                 none_volume_as_zero = True
             elif line_id:
+                # A read: correctors read by modem only (no ДПД codes) are
+                # served too; a live poll skips them in fetch_dpd_volumes.
                 devices = await get_devices_for_lines_db(
                     line_id, session, range_from=win[0], range_to=win[1],
-                    include_inactive=include_inactive,
+                    include_inactive=include_inactive, addressable_only=False,
                 )
                 if serNum is not None and chNum is not None:
                     devices = [d for d in devices if d["serNum"] == serNum and d["chNum"] == chNum]
+            elif deviceId is not None:
+                devices = await get_assignments_for_device_id_db(
+                    deviceId, session, range_from=win[0], range_to=win[1],
+                    include_inactive=include_inactive,
+                )
             elif None not in (serNum, mfDev, typeDev, chNum):
                 devices = await get_assignments_for_device_db(
                     serNum, mfDev, typeDev, chNum, session,
@@ -562,7 +608,7 @@ class EnterpriseRouter:
             else:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Provide line_id or serNum+chNum"
+                    detail="Provide line_id, deviceId or serNum+mfDev+typeDev+chNum"
                 )
         except HTTPException:
             raise
@@ -896,6 +942,10 @@ class EnterpriseRouter:
         mfDev: Optional[int] = Query(None, description="Optional: Manufacturer code"),
         typeDev: Optional[int] = Query(None, description="Optional: Device type code"),
         chNum: Optional[int] = Query(None, description="Optional: Filter by device channel number"),
+        deviceId: Optional[int] = Query(None, description=(
+            "Optional: the corrector by its id here (dpd_device.id) — for one ДПД "
+            "has no codes for, such as an Ізодром read by modem"
+        )),
         include_devices: bool = Query(default=True, description="Set false to strip per-device breakdowns (line totals only)"),
         live: bool = Query(default=False, description=(
             "Re-poll the DPD API for the whole range first (fresh data); the "
@@ -922,21 +972,29 @@ class EnterpriseRouter:
                 detail=f"Invalid date format: {e}. Use YYYY-MM-DD format."
             )
 
-        if not line_id and (serNum is None or chNum is None or mfDev is None or typeDev is None):
+        if not line_id and deviceId is None and (
+                serNum is None or chNum is None or mfDev is None or typeDev is None):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Provide line_id or serNum+chNum"
+                detail="Provide line_id, deviceId or serNum+mfDev+typeDev+chNum"
             )
 
         win = request_window(date_from, date_to, period_type)
         try:
             if line_id:
+                # A read: correctors read by modem only (no ДПД codes) are
+                # served too; a live poll skips them in fetch_dpd_volumes.
                 devices = await get_devices_for_lines_db(
                     line_id, session, range_from=win[0], range_to=win[1],
-                    include_inactive=include_inactive,
+                    include_inactive=include_inactive, addressable_only=False,
                 )
                 if serNum is not None and chNum is not None:
                     devices = [d for d in devices if d["serNum"] == serNum and d["chNum"] == chNum]
+            elif deviceId is not None:
+                devices = await get_assignments_for_device_id_db(
+                    deviceId, session, range_from=win[0], range_to=win[1],
+                    include_inactive=include_inactive,
+                )
             else:
                 # No line_id — lookup by full device identity. A corrector that
                 # moved has one assignment per point it served, so the range

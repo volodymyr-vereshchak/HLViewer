@@ -279,7 +279,8 @@ def get_devices_for_lines(line_ids: List[int]) -> List[Dict]:
 
 
 async def _query_assignments_db(
-    session, *where, range_from=None, range_to=None, include_inactive=False
+    session, *where, range_from=None, range_to=None, include_inactive=False,
+    addressable_only=True,
 ) -> list[dict]:
     """Shared ASSIGNMENT-dict builder for the DB-backed lookups below.
 
@@ -298,6 +299,11 @@ async def _query_assignments_db(
     is deactivated to keep it out of the totals, not to make its corrector
     unreachable, and an operator checking why it was switched off still needs
     to be able to read it. Nothing that computes a volume passes this.
+
+    A corrector ДПД has no codes for — an Ізодром, read by modem only — cannot
+    be asked of the DPD API, and by default it is left out, as everything that
+    polls DPD expects. Its archive is read like any other's, though: a read
+    passes `addressable_only=False` and gets it with mfDev/typeDev None.
 
     With `range_from`/`range_to` (inclusive datetimes) only assignments that
     overlap the range are returned. Their windows are NOT rewritten: `win_to`
@@ -344,7 +350,7 @@ async def _query_assignments_db(
             eff_type = ct_type_dev if linked else device.type_dev
             # No resolvable device identity (unlinked AND no legacy codes) →
             # cannot be addressed on the DPD API at all.
-            if eff_mf is None or eff_type is None:
+            if addressable_only and (eff_mf is None or eff_type is None):
                 continue
             if range_from is not None and device_history.clip(
                 win_from, win_to, range_from, range_to
@@ -371,7 +377,7 @@ async def _query_assignments_db(
 
 async def get_devices_for_lines_db(
     line_ids: list[int], session, range_from=None, range_to=None,
-    include_inactive: bool = False,
+    include_inactive: bool = False, addressable_only: bool = True,
 ) -> list[dict]:
     """Assignments of the active enterprises on the given lines (physical or
     DPD), optionally narrowed and clipped to a datetime range.
@@ -390,6 +396,7 @@ async def get_devices_for_lines_db(
         range_from=range_from,
         range_to=range_to,
         include_inactive=include_inactive,
+        addressable_only=addressable_only,
     )
 
 
@@ -454,6 +461,41 @@ async def get_assignments_for_device_db(
         if a["serNum"] == ser_num and a["chNum"] == ch_num
         and a["mfDev"] == mf_dev and a["typeDev"] == type_dev
     ]
+
+
+async def get_assignments_for_device_id_db(
+    device_id: int, session, range_from=None, range_to=None, include_inactive: bool = False,
+) -> list[dict]:
+    """Assignments of one corrector, addressed by its row here.
+
+    The way to ask about a corrector ДПД has no codes for — an Ізодром is read
+    by modem only, and its manufacturer and model carry no mf_dev/type_dev —
+    so get_assignments_for_device_db cannot name it. Resolved the same two
+    steps: the points the device ever served, their histories whole, then the
+    entries that are this device.
+    """
+    from sqlalchemy import select
+    from backend.db.models.enterprise_model import Enterprise, EnterpriseDevice
+
+    points = (
+        select(Enterprise.id)
+        .join(EnterpriseDevice, EnterpriseDevice.enterprise_id == Enterprise.id)
+        .where(EnterpriseDevice.device_id == device_id)
+    )
+    if not include_inactive:
+        points = points.where(Enterprise.active == True)  # noqa: E712
+    point_ids = list((await session.execute(points)).scalars().all())
+    if not point_ids:
+        return []
+    assignments = await _query_assignments_db(
+        session,
+        Enterprise.id.in_(point_ids),
+        range_from=range_from,
+        range_to=range_to,
+        include_inactive=include_inactive,
+        addressable_only=False,
+    )
+    return [a for a in assignments if a["device_id"] == device_id]
 
 
 async def get_devices_for_branch_db(
