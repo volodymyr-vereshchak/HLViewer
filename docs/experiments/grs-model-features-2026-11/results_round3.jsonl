@@ -1,0 +1,7 @@
+{"variant": "baseline", "year_month": 5.72, "aut_month": 6.61, "aut_week": 9.45, "aut_common_abs": 13.07, "aut_common_bias": 8.24, "strength": 100.0, "seconds": 3}
+{"variant": "b17 -h8", "year_month": 5.34, "aut_month": 4.92, "aut_week": 7.15, "aut_common_abs": 9.25, "aut_common_bias": 3.73, "strength": 100.0, "seconds": 3}
+{"variant": "b17 -h8 sw13", "year_month": 5.59, "aut_month": 4.81, "aut_week": 6.92, "aut_common_abs": 9.06, "aut_common_bias": 3.42, "strength": 30.0, "seconds": 3}
+{"variant": "b17 -h8 sw14", "year_month": 5.41, "aut_month": 4.07, "aut_week": 6.35, "aut_common_abs": 8.65, "aut_common_bias": 2.91, "strength": 100.0, "seconds": 3}
+{"variant": "b16.5 -h8", "year_month": 5.25, "aut_month": 5.14, "aut_week": 7.45, "aut_common_abs": 9.85, "aut_common_bias": 4.71, "strength": 100.0, "seconds": 3}
+{"variant": "b16.5 -h8 sw14", "year_month": 5.52, "aut_month": 4.38, "aut_week": 6.74, "aut_common_abs": 9.12, "aut_common_bias": 3.67, "strength": 30.0, "seconds": 4}
+{"variant": "b17 -h8 sw14 sm0.3/0.5", "year_month": 5.68, "aut_month": 4.18, "aut_week": 6.33, "aut_common_abs": 8.1, "aut_common_bias": 2.79, "strength": 3.0, "seconds": 3}

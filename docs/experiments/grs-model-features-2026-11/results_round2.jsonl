@@ -1,0 +1,17 @@
+{"variant": "baseline", "year_month": 5.72, "aut_month": 6.61, "aut_week": 9.45, "aut_common_abs": 13.07, "aut_common_bias": 8.24, "strength": 100.0, "seconds": 3}
+{"variant": "base 16.0", "year_month": 5.32, "aut_month": 6.02, "aut_week": 8.48, "aut_common_abs": 11.41, "aut_common_bias": 6.14, "strength": 100.0, "seconds": 3}
+{"variant": "base 16.5", "year_month": 5.57, "aut_month": 6.05, "aut_week": 8.03, "aut_common_abs": 10.22, "aut_common_bias": 4.57, "strength": 30.0, "seconds": 3}
+{"variant": "base 17.0", "year_month": 5.67, "aut_month": 5.76, "aut_week": 7.73, "aut_common_abs": 9.59, "aut_common_bias": 3.68, "strength": 30.0, "seconds": 3}
+{"variant": "base 17.5", "year_month": 6.01, "aut_month": 5.65, "aut_week": 7.58, "aut_common_abs": 9.04, "aut_common_bias": 3.4, "strength": 10.0, "seconds": 3}
+{"variant": "base 18.0", "year_month": 6.31, "aut_month": 5.59, "aut_week": 7.46, "aut_common_abs": 8.81, "aut_common_bias": 3.63, "strength": 3.0, "seconds": 3}
+{"variant": "base 19.0", "year_month": 7.08, "aut_month": 5.27, "aut_week": 7.15, "aut_common_abs": 8.76, "aut_common_bias": 4.29, "strength": 3.0, "seconds": 5}
+{"variant": "b17 switch13", "year_month": 5.79, "aut_month": 5.45, "aut_week": 7.32, "aut_common_abs": 9.34, "aut_common_bias": 3.45, "strength": 30.0, "seconds": 3}
+{"variant": "b17 switch14", "year_month": 5.76, "aut_month": 4.83, "aut_week": 6.82, "aut_common_abs": 8.85, "aut_common_bias": 3.1, "strength": 30.0, "seconds": 3}
+{"variant": "b17 blend0.75", "year_month": 5.77, "aut_month": 7.03, "aut_week": 8.14, "aut_common_abs": 9.0, "aut_common_bias": 3.5, "strength": 30.0, "seconds": 3}
+{"variant": "b17 smooth0.3/0.5", "year_month": 5.93, "aut_month": 5.45, "aut_week": 7.64, "aut_common_abs": 9.37, "aut_common_bias": 3.7, "strength": 30.0, "seconds": 3}
+{"variant": "b17 -h8", "year_month": 5.34, "aut_month": 4.92, "aut_week": 7.15, "aut_common_abs": 9.25, "aut_common_bias": 3.73, "strength": 100.0, "seconds": 3}
+{"variant": "b17 -warm3", "year_month": 5.64, "aut_month": 6.14, "aut_week": 8.23, "aut_common_abs": 9.74, "aut_common_bias": 3.21, "strength": 30.0, "seconds": 3}
+{"variant": "b17 -Tmax22", "year_month": 5.83, "aut_month": 5.4, "aut_week": 7.49, "aut_common_abs": 9.23, "aut_common_bias": 3.3, "strength": 30.0, "seconds": 3}
+{"variant": "b17 -h8-warm3-Tmax22", "year_month": 5.6, "aut_month": 4.23, "aut_week": 7.45, "aut_common_abs": 9.27, "aut_common_bias": 2.47, "strength": 30.0, "seconds": 3}
+{"variant": "b17 +onset", "year_month": 6.16, "aut_month": 5.22, "aut_week": 7.49, "aut_common_abs": 9.23, "aut_common_bias": 3.7, "strength": 30.0, "seconds": 3}
+{"variant": "b17 sw14 sm0.3/0.5", "year_month": 5.76, "aut_month": 4.72, "aut_week": 6.63, "aut_common_abs": 8.35, "aut_common_bias": 2.92, "strength": 3.0, "seconds": 3}
