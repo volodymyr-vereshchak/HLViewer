@@ -3,7 +3,7 @@
 mocked DPDClient — no live DPD API calls."""
 
 import io
-from datetime import date
+from datetime import date, datetime
 import json
 
 import openpyxl
@@ -1124,3 +1124,65 @@ class TestACorrectorReadByModemOnly:
         assert last["type"] == "error"
         assert "«Ізодром ОЕ-22ЛА» через сервер Радміртех не опитується" in last["message"]
         assert "GSM" in last["message"]
+
+
+class TestThePointIsReadAsItsHistoryStandsNow:
+    """№0696, 20.11.2026: the channel was changed in the history after the
+    poll screen had loaded its list. Saving the history moved the point to
+    another device row; the screen kept asking about the old one and showed
+    nothing, while the polls wrote under the new one. Read by the point, the
+    server takes the corrector installed there now."""
+
+    async def test_hours_written_after_a_channel_change_are_read_by_the_point(
+        self, admin_client, seed_topology
+    ):
+        async with async_session_factory() as session:
+            mfr = Manufacturer(short_name="Ізодром", full_name="ТОВ Ізодром", mf_dev=None)
+            session.add(mfr)
+            await session.flush()
+            ct = CorectorType(manufacturer_id=mfr.id, model_name="ОЕ-22ДМ", type_dev=None)
+            session.add(ct)
+            await session.commit()
+            ct_id = ct.id
+        created = await admin_client.post("/enterprise-mappings/", json=_enterprise_payload(
+            seed_topology, enterprise_name="ТОВ Агробізнес", ser_num=696, ch_num=1,
+            corector_type_id=ct_id, mf_dev=None, type_dev=None,
+        ))
+        assert created.status_code in (200, 201), created.text
+        point = created.json()
+        old_device = point["devices"][-1]["device_id"]
+
+        moved = _enterprise_payload(seed_topology, ser_num=696, ch_num=0,
+                                    corector_type_id=ct_id, mf_dev=None, type_dev=None)
+        patched = await admin_client.patch(f"/enterprise-mappings/{point['id']}",
+                                           json={"devices": moved["devices"]})
+        assert patched.status_code == 200, patched.text
+        new_device = patched.json()["devices"][-1]["device_id"]
+        assert new_device != old_device
+
+        async with async_session_factory() as session:
+            for hour in (13, 14, 15):
+                await session.execute(sa.text(
+                    "INSERT INTO dpd_hourly_archive (device_id, stamp, dvst_alwrk, source) "
+                    "VALUES (:d, :s, 10.0, 'gsm')"),
+                    {"d": new_device, "s": datetime(2026, 11, 20, hour)})
+            await session.commit()
+
+        window = {"from_date": "2026-11-20", "to_date": "2026-11-20", "period_type": "hourly",
+                  "include_inactive": "true", "live": "false"}
+        # What a screen with the old list asked: the old channel on the line.
+        stale = await read_stream_events(admin_client, {
+            **window, "line_id": seed_topology["line1"], "serNum": 696, "chNum": 1,
+            "deviceId": old_device,
+        })
+        assert not [r for r in stale[-1]["data"] if r.get("total_volume")]
+
+        by_point = await read_stream_events(admin_client, {**window, "enterprise_id": point["id"]})
+        rows = [r for r in by_point[-1]["data"] if r.get("total_volume")]
+        assert len(rows) == 3
+        assert {d["chNum"] for r in rows for d in r["devices"]} == {0}
+
+        plain = await admin_client.get("/enterprise/volumes/", params={
+            **window, "enterprise_id": point["id"]})
+        assert plain.status_code == 200, plain.text
+        assert round(sum(r["total_volume"] for r in plain.json()), 2) == 30.0

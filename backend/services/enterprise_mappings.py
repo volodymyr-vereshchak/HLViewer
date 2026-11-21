@@ -498,6 +498,30 @@ async def get_assignments_for_device_id_db(
     return [a for a in assignments if a["device_id"] == device_id]
 
 
+async def get_assignments_for_enterprise_db(
+    enterprise_id: int, session, range_from=None, range_to=None,
+    include_inactive: bool = False,
+) -> list[dict]:
+    """The correctors of one point, as its history stands now.
+
+    How the poll screen reads a point's archive: by the point, not by the
+    corrector its browser remembers. Saving the history after a change of
+    channel or model moves the point to another device row; a screen opened
+    before that kept asking about the old one and got nothing (№0696,
+    20.11.2026). Correctors ДПД has no codes for are included.
+    """
+    from backend.db.models.enterprise_model import Enterprise
+
+    return await _query_assignments_db(
+        session,
+        Enterprise.id == enterprise_id,
+        range_from=range_from,
+        range_to=range_to,
+        include_inactive=include_inactive,
+        addressable_only=False,
+    )
+
+
 async def get_devices_for_branch_db(
     branch_id: int, session, range_from=None, range_to=None
 ) -> list[dict]:

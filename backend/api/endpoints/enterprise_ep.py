@@ -43,6 +43,7 @@ from backend.services import enterprise_excel
 from backend.services.enterprise_mappings import (
     get_assignments_for_device_db,
     get_assignments_for_device_id_db,
+    get_assignments_for_enterprise_db,
     get_devices_for_lines_db,
     load_mappings,
 )
@@ -533,6 +534,10 @@ class EnterpriseRouter:
             "Optional: the corrector by its id here (dpd_device.id) — for one ДПД "
             "has no codes for, such as an Ізодром read by modem"
         )),
+        enterprise_id: Optional[int] = Query(None, description=(
+            "Optional: one point, its correctors as its history stands now. "
+            "Takes precedence over every other way of naming devices"
+        )),
         live: bool = Query(default=False, description=(
             "Re-poll the DPD API for the whole range first (fresh data); the "
             "archive serves as fallback when the API is unreachable"
@@ -585,6 +590,14 @@ class EnterpriseRouter:
                     line_id, session, *win,
                 )
                 none_volume_as_zero = True
+            elif enterprise_id is not None:
+                # The point itself: what is installed there is looked up here,
+                # not taken from a list the browser may have kept since before
+                # the history changed.
+                devices = await get_assignments_for_enterprise_db(
+                    enterprise_id, session, range_from=win[0], range_to=win[1],
+                    include_inactive=include_inactive,
+                )
             elif line_id:
                 # A read: correctors read by modem only (no ДПД codes) are
                 # served too; a live poll skips them in fetch_dpd_volumes.
@@ -608,7 +621,7 @@ class EnterpriseRouter:
             else:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Provide line_id, deviceId or serNum+mfDev+typeDev+chNum"
+                    detail="Provide enterprise_id, line_id, deviceId or serNum+mfDev+typeDev+chNum"
                 )
         except HTTPException:
             raise
@@ -946,6 +959,10 @@ class EnterpriseRouter:
             "Optional: the corrector by its id here (dpd_device.id) — for one ДПД "
             "has no codes for, such as an Ізодром read by modem"
         )),
+        enterprise_id: Optional[int] = Query(None, description=(
+            "Optional: one point, its correctors as its history stands now. "
+            "Takes precedence over every other way of naming devices"
+        )),
         include_devices: bool = Query(default=True, description="Set false to strip per-device breakdowns (line totals only)"),
         live: bool = Query(default=False, description=(
             "Re-poll the DPD API for the whole range first (fresh data); the "
@@ -972,16 +989,21 @@ class EnterpriseRouter:
                 detail=f"Invalid date format: {e}. Use YYYY-MM-DD format."
             )
 
-        if not line_id and deviceId is None and (
+        if enterprise_id is None and not line_id and deviceId is None and (
                 serNum is None or chNum is None or mfDev is None or typeDev is None):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Provide line_id, deviceId or serNum+mfDev+typeDev+chNum"
+                detail="Provide enterprise_id, line_id, deviceId or serNum+mfDev+typeDev+chNum"
             )
 
         win = request_window(date_from, date_to, period_type)
         try:
-            if line_id:
+            if enterprise_id is not None:
+                devices = await get_assignments_for_enterprise_db(
+                    enterprise_id, session, range_from=win[0], range_to=win[1],
+                    include_inactive=include_inactive,
+                )
+            elif line_id:
                 # A read: correctors read by modem only (no ДПД codes) are
                 # served too; a live poll skips them in fetch_dpd_volumes.
                 devices = await get_devices_for_lines_db(
